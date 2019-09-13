@@ -1,5 +1,6 @@
 use failure::{Error};
 use futures::future::Future;
+use futures::future;
 
 #[derive(PartialEq, Clone)]
 pub enum PropertyType {
@@ -13,7 +14,7 @@ pub enum PropertyType {
 
 #[derive(Default)]
 pub struct Signal<T> {
-    slots: Vec<Box<dyn Fn(T)>>
+    slots: Vec<Box<dyn Future<Item=Fn(T), Error=()>>>
 }
 
 impl<T: Clone> Signal<T> {
@@ -24,14 +25,15 @@ impl<T: Clone> Signal<T> {
     }
 
     pub fn connect(&mut self, slot: impl Fn(T) + 'static) {
-        self.slots.push(Box::new(slot));
+        let fut = future::ok(slot);
+        self.slots.push(Box::new(fut));
     }
 
-    pub fn new() -> Self {
-        Signal::<T>{
-            slots: Vec::<Box<dyn Fn(T)>>::new()
-        }
-    }
+//    pub fn new() -> Self {
+//        Signal::<T>{
+//            slots: Vec::<Box<dyn Fn(T)>>::new()
+//        }
+//    }
 }
 
 
@@ -47,14 +49,14 @@ pub struct Property<PropertyType>
     pub on_changed: Signal<PropertyType>,
 }
 
-impl From<i32> for Property<i32> {
-    fn from(v: i32) -> Self {
-        Property{
-            value: Default::default(),
-            on_changed: Signal::<i32>::new(),
-        }
-    }
-}
+//impl From<i32> for Property<i32> {
+//    fn from(v: i32) -> Self {
+//        Property{
+//            value: Default::default(),
+//            on_changed: Signal::<i32>::new(),
+//        }
+//    }
+//}
 
 impl<PropertyType: Clone> Property<PropertyType> {
     pub fn set_value(&mut self, v: PropertyType)
