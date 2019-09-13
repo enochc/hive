@@ -1,6 +1,8 @@
-use failure::{Error};
-use futures::future::Future;
+use failure::Error;
+use futures::future::{Future, ok};
 use futures::future;
+use futures::future::lazy;
+
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum PropertyType {
@@ -8,25 +10,34 @@ pub enum PropertyType {
     INT(u32),
     SHORT(u8),
     BOOL(bool),
-    STRING(Box<str>),
+    //STRING(Box<str>),
 }
-
 
 #[derive(Default)]
 pub struct Signal<T> {
-    slots: Vec<Box<dyn Future<Item=Fn(T), Error=()>>>
+    slots: Vec<Box<dyn Fn(T) + Send + 'static>>
 }
 
-impl<T: Clone> Signal<T> {
-    pub fn emit(&mut self, val: &T) {
-        for s in &mut self.slots {
-            s(val.clone());
-        }
+impl<T> Signal<T> {
+    pub fn emit(&'static mut self, val: &T)
+    where T: Clone + Send + 'static,
+    {
+        tokio::run(lazy(move  || {
+            for s in &mut self.slots {
+                tokio::spawn(lazy(move || {
+                    //s(val.clone());
+                    println!("something");
+                    ok(())
+                }));
+            }
+            ok(())
+        }));
     }
 
-    pub fn connect(&mut self, slot: impl Fn(T) + 'static) {
-        let fut = future::ok(slot);
-        self.slots.push(Box::new(fut));
+    pub fn connect(&mut self, slot: impl Fn(T) + Send + 'static) {
+//        let fut = future::ok(slot);
+//        self.slots.push(Box::new(fut));
+        self.slots.push(Box::new(slot));
     }
 
 //    pub fn new() -> Self {
@@ -59,8 +70,8 @@ pub struct Property<PropertyType>
 //}
 
 impl<PropertyType: Clone> Property<PropertyType> {
-    pub fn set_value(&mut self, v: PropertyType)
-    where PropertyType: std::fmt::Debug + PartialEq,
+    pub fn set_value(&'static mut self, v: PropertyType)
+        where PropertyType: std::fmt::Debug + PartialEq + Send + 'static,
     {
         let op_v = Some(v);
 
