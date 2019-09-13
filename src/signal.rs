@@ -1,7 +1,7 @@
 use failure::{Error};
 use futures::future::Future;
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum PropertyType {
     REAL(i64),
     INT(u32),
@@ -44,29 +44,30 @@ impl<T: Clone> Signal<T> {
 pub struct Property<PropertyType>
 {
     pub value: Option<PropertyType>,
-    pub on_changed: Signal<PropertyType>,
+    pub on_changed: Signal<Option<PropertyType>>,
 }
 
 impl From<i32> for Property<i32> {
     fn from(v: i32) -> Self {
         Property{
             value: Default::default(),
-            on_changed: Signal::<i32>::new(),
+            on_changed: Signal::<Option<i32>>::new(),
         }
     }
 }
 
 impl<PropertyType: Clone> Property<PropertyType> {
     pub fn set_value(&mut self, v: PropertyType)
+    where PropertyType: std::fmt::Debug + PartialEq,
     {
-        match &self.value {
-            Some(v) => println!("do nothing"),
-            _ => {
-                let v2 = v.clone();
-                self.value = Some(v);
-                self.on_changed.emit(&v2);
+        let op_v = Some(v);
 
-            }
+        if !self.value.eq(&op_v) {
+            let v2 = op_v.clone();
+            self.value = op_v;
+            self.on_changed.emit(&v2);
+        } else {
+            println!("do nothing ")
         }
     }
 }
