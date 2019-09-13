@@ -1,0 +1,13 @@
+[package]
+name = "hive"
+version = "0.1.0"
+authors = ["Enoch Carter <enoch@dwelo.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+futures = { version = "0.1"}
+tokio = "0.1.22"
+failure = "0.1"
+config = "0.9"

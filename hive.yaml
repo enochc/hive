@@ -1,0 +1,6 @@
+Objects:
+  - name: "light"
+  - properties:
+      - on: "bool"
+
+#listen: 3000
