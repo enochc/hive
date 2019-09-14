@@ -92,6 +92,7 @@ fn main() {
     });
 
     p.set_value(3);
+    p.set_value(4);
 
     //println!("{}", b.read().expect("failed to get read").value());
     println!("Done: {:?}", p.value);
