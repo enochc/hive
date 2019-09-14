@@ -2,6 +2,7 @@ use failure::Error;
 use futures::future::{Future, ok};
 use futures::future;
 use futures::future::lazy;
+use std::sync::{Arc, Mutex, RwLock};
 
 
 #[derive(PartialEq, Clone, Debug)]
@@ -15,17 +16,20 @@ pub enum PropertyType {
 
 #[derive(Default)]
 pub struct Signal<T> {
-    slots: Vec<Box<dyn FnMut(T) + Send + 'static>>
+    slots: Arc<RwLock<Vec<Box<dyn Fn(T) + Send + Sync + 'static>>>>
 }
 
 impl<T> Signal<T> {
     pub fn emit(&mut self, val: T)
     where T: Clone + Send + 'static,
     {
-        tokio::run(lazy(move  || {
-            for s in &mut self.slots {
+        let slots_clone = self.slots.clone();
+        tokio::run(lazy(move || {
+            //let mut s_vec = slots_clone.read().expect("failed to read slots");
+            for s in slots_clone.read().unwrap().iter() {// s_vec.iter_mut() {
+                //let s_clone = s.clone();
                 tokio::spawn(lazy(move || {
-                    //s(val.clone());
+                    //s_clone(val.clone());
                     println!("something");
                     ok(())
                 }));
@@ -34,10 +38,10 @@ impl<T> Signal<T> {
         }));
     }
 
-    pub fn connect(&mut self, slot: impl FnMut(T) + Send + 'static) {
+    pub fn connect(&mut self, slot: impl Fn(T) + Send + Sync + 'static) {
 //        let fut = future::ok(slot);
 //        self.slots.push(Box::new(fut));
-        self.slots.push(Box::new(slot));
+        self.slots.write().expect("Failed to get write lock on slots").push(Box::new(slot));
     }
 
 //    pub fn new() -> Self {
@@ -71,14 +75,15 @@ pub struct Property<PropertyType>
 
 impl<PropertyType: Clone> Property<PropertyType> {
     pub fn set_value(&mut self, v: PropertyType)
-        where PropertyType: std::fmt::Debug + PartialEq + Send + 'static,
+        where PropertyType: std::fmt::Debug + PartialEq + Send + Clone + 'static,
     {
+        let v_clone = v.clone();
         let op_v = Some(v);
 
         if !self.value.eq(&op_v) {
             self.value = op_v;
-            let v2 = op_v.clone();
-            self.on_changed.emit(v2);
+            //let v2 = op_v.clone();
+            self.on_changed.emit(Some(v_clone));
         } else {
             println!("do nothing ")
         }
