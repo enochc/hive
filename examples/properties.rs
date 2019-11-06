@@ -11,19 +11,19 @@ fn main() {
 
     hive::run(&config);
 
-    let mut p: signal::Property<i32> = Default::default();
-
-    p.on_changed.connect(|v|{
-        println!("Inside signal: {:?}", v);
-        sleep(Duration::from_secs(2))
-    });
-
-    p.on_changed.connect(|v|{
-        println!("also Inside signal: {:?}", v);
-    });
-
-    p.set(3);
-    p.set(4);
-
-    println!("Done: {:?}", p.get());
+//    let mut p: signal::Property<i32> = Default::default();
+//
+//    p.on_changed.connect(|v|{
+//        println!("Inside signal: {:?}", v);
+//        sleep(Duration::from_secs(2))
+//    });
+//
+//    p.on_changed.connect(|v|{
+//        println!("also Inside signal: {:?}", v);
+//    });
+//
+//    p.set(3);
+//    p.set(4);
+//
+//    println!("Done: {:?}", p.get());
 }

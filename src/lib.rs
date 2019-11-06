@@ -13,6 +13,7 @@ use {
 };
 use std::thread::sleep;
 use failure::_core::time::Duration;
+use crate::models::PropertyType;
 
 
 fn client_requests(addr: &SocketAddr) -> Box<dyn Future<Item=(), Error=()> + Send> {
@@ -40,11 +41,57 @@ fn client_requests(addr: &SocketAddr) -> Box<dyn Future<Item=(), Error=()> + Sen
 
 #[macro_use]
 mod hive_macros;
+mod models;
+use core::fmt::Debug;
+use std::fmt::Formatter;
+use std::fmt::Error;
+use std::collections::HashMap;
+use failure::_core::hash::Hash;
+use std::borrow::Cow;
+use serde_derive::Deserialize;
+
 pub mod signal;
 
+#[derive(Default)]
+pub struct Hive {
+    properties: HashMap<String, models::Property<PropertyType>>
+}
 
+#[derive(Deserialize)]
+struct ConfigProperty{
+    name: String,
+    object_type: String,
+    default_value: PropertyType,
+}
 
-pub fn run(config: &Config) {
+impl Hive {
+    fn parse_properties(config: &Config) -> Self {
+        let p = HashMap::<String, models::Property<PropertyType>>::new();
+        match config.get_array("Properties") {
+            Ok(props) => {
+                for prop in props {
+
+//                    match prop {
+//                        Ok(ValueKind::Table) => {
+//                            println!("<<< Values: {:?}", p_values);
+//                        },
+//                        _ => println!("Unrecognized Property syntax"),
+//                    }
+                    println!("<<<< {:?}",prop);
+                }
+            }
+            _ => println!("No Properties found")
+        }
+        //let p: model::Property<i32> = Default::default();
+        //let props = Default::default();
+        Hive{
+            properties: Default::default(),
+        }
+    }
+
+}
+
+pub fn run(config: &Config) -> Hive {
 
     match config.get_int("listen") {
         Ok(port) => {
@@ -56,5 +103,6 @@ pub fn run(config: &Config) {
         }
         _ => println!("No listen port specified, not listening")
     }
+    Hive::parse_properties(&config)
 }
 
