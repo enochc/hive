@@ -1,6 +1,16 @@
-Objects:
-  - name: "light"
-  - properties:
-      - on: "bool"
+
+Properties:
+  - is_active:
+      type: "bool"
+      default: true
+  - light.value:
+      type: "int"
+  - thermostat.name:
+      type: "string"
+      default: "thermostat"
+  - thermostat.temperature:
+      type: "int"
+  - thermostat.target_temp:
+      type: "int"
 
 #listen: 3000
