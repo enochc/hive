@@ -41,7 +41,7 @@ fn client_requests(addr: &SocketAddr) -> Box<dyn Future<Item=(), Error=()> + Sen
 
 #[macro_use]
 mod hive_macros;
-mod models;
+pub mod models;
 use core::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Error;

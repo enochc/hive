@@ -1,4 +1,5 @@
 use crate::signal::Signal;
+use serde_derive::Deserialize;
 
 #[derive(PartialEq, Clone, Debug, Deserialize)]
 pub enum PropertyType {
