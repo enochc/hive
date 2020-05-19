@@ -5,7 +5,6 @@ use serde_derive::Deserialize;
 pub enum PropertyType {
     REAL(i64),
     INT(u32),
-    SHORT(u8),
     BOOL(bool),
     STRING(Box<str>),
 }

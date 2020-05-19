@@ -8,6 +8,7 @@ use {
     futures::future::lazy,
     //failure::{format_err, Error},
     config::Config,
+    config::Value,
     std::net::{IpAddr, Ipv4Addr, SocketAddr},
     //std::sync::{Arc, Mutex, RwLock},
 };
@@ -49,6 +50,8 @@ use std::collections::HashMap;
 use failure::_core::hash::Hash;
 use std::borrow::Cow;
 use serde_derive::Deserialize;
+use failure::_core::any::Any;
+use failure::_core::ptr::null;
 
 pub mod signal;
 
@@ -60,24 +63,35 @@ pub struct Hive {
 #[derive(Deserialize)]
 struct ConfigProperty{
     name: String,
-    object_type: String,
-    default_value: PropertyType,
+    // object_type: &'static str,
+    property_type: PropertyType,
+    default_value: Value,
 }
 
 impl Hive {
     fn parse_properties(config: &Config) -> Self {
-        let p = HashMap::<String, models::Property<PropertyType>>::new();
+        // let p = HashMap::<String, models::Property<PropertyType>>::new();
         match config.get_array("Properties") {
             Ok(props) => {
                 for prop in props {
+                    let ref table = prop.into_table().unwrap();
+                    for key in table.keys(){
+                        let val = table[key].clone();
+                        println!("<<< value kind {:?}", val.into_bool());
 
-//                    match prop {
-//                        Ok(ValueKind::Table) => {
-//                            println!("<<< Values: {:?}", p_values);
-//                        },
-//                        _ => println!("Unrecognized Property syntax"),
-//                    }
-                    println!("<<<< {:?}",prop);
+                        // match val.kind.to_string(){
+                        //     Value::ValueKind::Integer => {
+                        //         let cp = ConfigProperty{
+                        //             name: key.clone(),
+                        //             default_value: val.clone(),
+                        //             property_type: PropertyType::INT(3)
+                        //         };
+                        //         println!("<< t2 {:?} {:?}", cp.name, cp.default_value);
+                        //     }
+                        // }
+
+
+                    }
                 }
             }
             _ => println!("No Properties found")

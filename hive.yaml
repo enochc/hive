@@ -1,16 +1,9 @@
 
 Properties:
-  - is_active:
-      type: "bool"
-      default: true
-  - light.value:
-      type: "int"
-  - thermostat.name:
-      type: "string"
-      default: "thermostat"
-  - thermostat.temperature:
-      type: "int"
-  - thermostat.target_temp:
-      type: "int"
-
+  - thing: "yeppers"
+  - is_active: true
+  - light.value: 0
+  - thermostat.name: "thermostat"
+  - thermostat.temperature: 0
+  - thermostat.target_temp: 0
 #listen: 3000

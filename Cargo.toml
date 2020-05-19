@@ -1,15 +1,16 @@
 [package]
 name = "hive"
 version = "0.1.0"
-authors = ["Enoch Carter <enoch@dwelo.com>"]
+authors = ["Enoch Carter <mrenoch@gmail.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-futures = { version = "0.1"}
+futures = "0.1"
 tokio = "0.1.22"
-failure = "0.1"
-config = "0.9"
+failure = "0.1.8"
+#https://docs.rs/config/0.10.1/config/
+config = "0.10.1"
 serde = "1.0"
 serde_derive = "1.0"
