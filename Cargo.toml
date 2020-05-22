@@ -7,8 +7,9 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-futures = "0.1"
-tokio = "0.1.22"
+futures = "0.3.5"
+#tokio = "0.1.22"
+tokio = {version = "0.2.21", features = ["macros", "rt-core", "sync", "tcp"]}
 failure = "0.1.8"
 #https://docs.rs/config/0.10.1/config/
 config = "0.10.1"

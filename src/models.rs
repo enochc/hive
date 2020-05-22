@@ -18,7 +18,7 @@ pub struct Property<PropertyType>
 
 impl<PropertyType: Clone> Property<PropertyType> {
     pub fn set(&mut self, v: PropertyType)
-        where PropertyType: std::fmt::Debug + PartialEq + Send + Clone + 'static,
+        where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Copy + 'static,
     {
 
         let v_clone = v.clone();
