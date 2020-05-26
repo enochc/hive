@@ -49,7 +49,7 @@ impl<T> Signal<T> {
         }
     }
 
-    pub fn connect(&mut self, slot: impl Fn(T) + Send + Sync + 'static) {
+    pub fn connect(&self, slot: impl Fn(T) + Send + Sync + 'static) {
         self.slots.write().expect("Failed to get write lock on slots").push(Arc::new(slot));
     }
 }

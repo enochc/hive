@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
 use tokio::net::TcpListener;
 use tokio::prelude::*;
 use toml;
@@ -24,27 +23,60 @@ pub struct Hive {
 //     property_type: PropertyType,
 //     default_value: Value,
 // }
-
+// impl Index<&str> for Hive {
+//     type Output = Property;
+//
+//     fn index(&self, index: &str) -> &Self::Output {
+//
+//         &self.properties[index]
+//     }
+// }
+// impl IndexMut<&str> for Hive {
+//
+//     fn index_mut(&mut self, index: &str) -> &mut self::Output {
+//         // match index {
+//         //     Side::Left => &self.left,
+//         //     Side::Right => &self.right,
+//         // }
+//         &mut self.properties[index]
+//     }
+//
+// }
 impl Hive {
+    pub fn get_mut_property(&mut self, key: &str) -> Option<&mut Property> {
+        println!("properties: {:?}", self.properties.keys());
+        let op = self.properties.get_mut(key);
+
+        return op
+    }
+
     pub fn parse_properties(toml: &toml::Value) -> Hive {
 
         let mut props:HashMap::<String, models::Property> = HashMap::new();
         let pp = toml.get("Properties").unwrap().as_table().unwrap();
 
         for key in pp.keys() {
-
+            println!("<<<< key: {:?}",key);
             let val = pp.get(key);
             match val {
                 Some(v) if v.is_str() => {
                     props.insert(String::from(key), Property::from_str(v.as_str().unwrap()));
                     // props[key] = ;
                 },
-                _ => {}
+                Some(v) if v.is_integer() => {
+                    props.insert(String::from(key), Property::from_int(v.as_integer().unwrap()));
+                },
+                Some(v) if v.is_bool() => {
+                    props.insert(String::from(key), Property::from_bool(v.as_bool().unwrap()));
+                },
+                _ => {
+                    println!("<<Failed to Set Property: {:?}", key)
+                }
             };
             println!("||{:?} == {:?}",key, val);
         }
 
-        let props:HashMap<String, Property> = HashMap::new();
+        println!("properties (loaded): {:?}", props.keys());
         Hive {
             // properties:Default::default(),
             properties: props,

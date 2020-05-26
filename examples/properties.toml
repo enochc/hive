@@ -6,6 +6,6 @@ thingvalue= 1
 is_active = true
 lightValue = 0
 thermostatName = "thermostat"
-thermostatTemperature= 0
+thermostatTemperature= "too cold"
 thermostatTarget_temp = 1.45
 

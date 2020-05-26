@@ -24,6 +24,12 @@ impl Property {
             on_changed: Default::default(),
         };
     }
+    pub fn from_bool(val: bool) -> Property {
+        return Property{
+            value: Some(PropertyType::BOOL(val)),
+            on_changed: Default::default(),
+        };
+    }
     pub fn from_int(val: i64) -> Property {
         let small_int = u32::try_from(val);
         return match small_int {
