@@ -10,17 +10,9 @@ use hive::signal;
 
 fn main() {
 
-    // let ran = block_on(hive::run(&config));
-    //hive::run(&String::from("examples/properties.toml"));
+    // let h = Block_on(hive::run(&String::from("examples/properties.toml")));
 
-    // let mut p: Property<i32> = Default::default();
-
-    //  let mut p: Property<PropertyType> = Property{
-    //     // value: Some(PropertyType::STRING(String::from("none"))),
-    //      value: Some(PropertyType::new("none")),
-    //     on_changed: Default::default(),
-    // }; //Default::default();
-    let mut p = Property::new("none");
+    let mut p = Property::from_int(4);
 
     p.on_changed.connect(|v|{
         println!("Inside signal: {:?}", v);
@@ -30,11 +22,11 @@ fn main() {
     p.on_changed.connect(|v|{
         println!("also Inside signal: {:?}", v);
     });
-    let v = PropertyType::STRING(String::from("two").into_boxed_str());
 
-
-    p.set(v);
-    // p.set("its".to_string());
+    p.setStr("What");
+    p.setStr("now");
+    p.setInt(6);
+    p.setBool(true);
 
     println!("Done: {:?}", p.get());
 }

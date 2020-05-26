@@ -1,11 +1,11 @@
 
-listen = 3000
+#listen = 3000
 
 [Properties]
 thingvalue= 1
 is_active = true
-light.value = 0
-thermostat.name = "thermostat"
-thermostat.temperature= 0
-thermostat.target_temp = 1.45
+lightValue = 0
+thermostatName = "thermostat"
+thermostatTemperature= 0
+thermostatTarget_temp = 1.45
 

@@ -1,7 +1,9 @@
 use crate::signal::Signal;
 use serde_derive::Deserialize;
+use std::convert::TryFrom;
 
 #[derive(PartialEq, Clone, Debug, Deserialize)]
+
 pub enum PropertyType {
     REAL(i64),
     INT(u32),
@@ -10,20 +12,50 @@ pub enum PropertyType {
 }
 
 #[derive(Default)]
-pub struct Property<PropertyType>
+pub struct Property
 {
     value: Option<PropertyType>,
     pub on_changed: Signal<Option<PropertyType>>,
 }
 
-impl Property<PropertyType> {
-    pub fn new(val: &str) -> Property<PropertyType> {
+impl Property {
+    pub fn from_str(val: &str) -> Property {
             return Property{
             value: Some(PropertyType::STRING(String::from(val).into_boxed_str())),
             on_changed: Default::default(),
         };
     }
-    pub fn set(&mut self, v: PropertyType)
+    pub fn from_int(val: i64) -> Property {
+        let smallInt = u32::try_from(val);
+        return match smallInt {
+            Ok(si) => {
+                Property {
+                    value: Some(PropertyType::INT(si)),
+                    on_changed: Default::default(),
+                }
+            },
+            _ => {
+                Property {
+                    value: Some(PropertyType::REAL(val)),
+                    on_changed: Default::default(),
+                }
+            }
+        };
+    }
+    pub fn setStr(&mut self, s: &str){
+        let p = PropertyType::STRING(String::from(s).into_boxed_str());
+        self.set(p);
+    }
+    pub fn setBool(&mut self, b: bool){
+        let p = PropertyType::BOOL(b);
+        self.set(p);
+    }
+    pub fn setInt(&mut self, s: u32){
+        let p = PropertyType::INT(s);
+        self.set(p);
+    }
+
+    fn set(&mut self, v: PropertyType)
         where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
 
