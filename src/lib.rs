@@ -1,53 +1,18 @@
-use core::fmt::Debug;
-use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fmt::Error;
-use std::fmt::Formatter;
-use std::thread::sleep;
-use std::io::prelude::*;
-use std::io::{self, Read};
-
-use failure::_core::any::Any;
-use failure::_core::hash::Hash;
-use failure::_core::ptr::null;
-use failure::_core::time::Duration;
-use futures::executor::block_on;
-use serde_derive::Deserialize;
-use tokio::prelude::*;
-
-use {
-    config::Config,
-    //tokio::net::tcp::Incoming,
-    //tokio::codec::{Framed, LinesCodec},
-    config::Value,
-    futures::future,
-    futures::future::Future,
-    futures::future::lazy,
-    //failure::{format_err, Error},
-    futures::stream::Stream,
-    std::net::{IpAddr, Ipv4Addr, SocketAddr},
-    tokio::net::{TcpListener, TcpStream},
-    //std::sync::{Arc, Mutex, RwLock},
-};
-
-use crate::models::{Property};
-use std::thread;
-use futures::TryFutureExt;
-
-use toml;
 use std::fs;
-use toml::value::Value::Table;
-// use tokio::sync::mpsc::block::Read::Value;
-// use futures::io::Result;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-// use tokio::future::ok;
+use tokio::net::TcpListener;
+use tokio::prelude::*;
+use toml;
 
-// #[macro_use]
+use crate::models::Property;
+
 mod hive_macros;
 pub mod models;
 pub mod signal;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Hive {
     pub properties: HashMap<String, models::Property>
 }
@@ -61,7 +26,7 @@ pub struct Hive {
 // }
 
 impl Hive {
-    async fn parse_properties(toml: &toml::Value) -> Self {
+    pub fn parse_properties(toml: &toml::Value) -> Hive {
 
         let mut props:HashMap::<String, models::Property> = HashMap::new();
         let pp = toml.get("Properties").unwrap().as_table().unwrap();
@@ -90,11 +55,11 @@ impl Hive {
 }
 
 #[tokio::main]
-pub async fn run(tomlPath: &String) -> Result<bool, std::io::Error> {
-    let foo: String = fs::read_to_string(tomlPath).unwrap().parse().unwrap();
+pub async fn run(toml_path: &String) -> Result<bool, std::io::Error> {
+    let foo: String = fs::read_to_string(toml_path).unwrap().parse().unwrap();
     let config: toml::Value = toml::from_str(&foo).unwrap();
 
-    Hive::parse_properties(&config).await;
+    Hive::parse_properties(&config);
     let port = config.get("listen");
     if !port.is_none() {
         // listen on port

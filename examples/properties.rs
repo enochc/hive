@@ -1,16 +1,10 @@
 use std::thread::sleep;
 
-use config::Config;
 use failure::_core::time::Duration;
-use futures::executor::block_on;
 
-use hive;
-use hive::models::{Property, PropertyType};
-use hive::signal;
+use hive::models::Property;
 
 fn main() {
-
-    // let h = Block_on(hive::run(&String::from("examples/properties.toml")));
 
     let mut p = Property::from_int(4);
 
@@ -23,10 +17,11 @@ fn main() {
         println!("also Inside signal: {:?}", v);
     });
 
-    p.setStr("What");
-    p.setStr("now");
-    p.setInt(6);
-    p.setBool(true);
+    p.set_str("What");
+    p.set_str("now");
+    p.set_int(6);
+    p.set_int(6);
+    p.set_bool(true);
 
     println!("Done: {:?}", p.get());
 }

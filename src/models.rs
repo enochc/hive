@@ -3,7 +3,6 @@ use serde_derive::Deserialize;
 use std::convert::TryFrom;
 
 #[derive(PartialEq, Clone, Debug, Deserialize)]
-
 pub enum PropertyType {
     REAL(i64),
     INT(u32),
@@ -11,7 +10,7 @@ pub enum PropertyType {
     STRING(Box<str>),
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Property
 {
     value: Option<PropertyType>,
@@ -26,8 +25,8 @@ impl Property {
         };
     }
     pub fn from_int(val: i64) -> Property {
-        let smallInt = u32::try_from(val);
-        return match smallInt {
+        let small_int = u32::try_from(val);
+        return match small_int {
             Ok(si) => {
                 Property {
                     value: Some(PropertyType::INT(si)),
@@ -42,15 +41,15 @@ impl Property {
             }
         };
     }
-    pub fn setStr(&mut self, s: &str){
+    pub fn set_str(&mut self, s: &str){
         let p = PropertyType::STRING(String::from(s).into_boxed_str());
         self.set(p);
     }
-    pub fn setBool(&mut self, b: bool){
+    pub fn set_bool(&mut self, b: bool){
         let p = PropertyType::BOOL(b);
         self.set(p);
     }
-    pub fn setInt(&mut self, s: u32){
+    pub fn set_int(&mut self, s: u32){
         let p = PropertyType::INT(s);
         self.set(p);
     }
