@@ -1,58 +1,50 @@
+use core::fmt::Debug;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::fmt::Error;
+use std::fmt::Formatter;
+use std::thread::sleep;
+use std::io::prelude::*;
+use std::io::{self, Read};
+
+use failure::_core::any::Any;
+use failure::_core::hash::Hash;
+use failure::_core::ptr::null;
+use failure::_core::time::Duration;
+use futures::executor::block_on;
+use serde_derive::Deserialize;
+use tokio::prelude::*;
+
 use {
-    tokio::net::{TcpListener},
+    config::Config,
     //tokio::net::tcp::Incoming,
     //tokio::codec::{Framed, LinesCodec},
-    futures::stream::Stream,
+    config::Value,
     futures::future,
     futures::future::Future,
     futures::future::lazy,
     //failure::{format_err, Error},
-    config::Config,
-    config::Value,
+    futures::stream::Stream,
     std::net::{IpAddr, Ipv4Addr, SocketAddr},
+    tokio::net::{TcpListener, TcpStream},
     //std::sync::{Arc, Mutex, RwLock},
 };
-use std::thread::sleep;
-use failure::_core::time::Duration;
-use crate::models::PropertyType;
 
-// |||||||| rewrite this with latest async await
-// fn client_requests(addr: &SocketAddr) -> Box<dyn Future<Item=(), Error=()> + Send> {
-//     println!("<<<< Listening on: {:?}", addr);
-//     let listener = TcpListener::bind(&addr).expect("Failed to bind address");
-//     let listener = listener.incoming()
-//         .map_err(|e| eprintln!("failed to accept socket; error = {:?}", e))
-//         .for_each(|socket| {
-//             println!("<<< for_each");
-//             //process_socket(socket);
-//             let (sink, stream) = Framed::new(socket, LinesCodec::new()).split();
-//             let frame_read = stream
-//                 .for_each(move |frame| {
-//                     println!("{:?}", frame);
-//                     Ok(())
-//                 }).map_err(|_| ());
-//             tokio::spawn(frame_read);
-//             future::ok(())
-//         });
-//
-//     // Spawn tcplistener
-//     tokio::spawn(listener);
-//     Box::new(future::ok(()))
-// }
+use crate::models::{Property, PropertyType};
+use std::thread;
+use futures::TryFutureExt;
 
-#[macro_use]
+use toml;
+use std::fs;
+use toml::value::Value::Table;
+// use tokio::sync::mpsc::block::Read::Value;
+// use futures::io::Result;
+
+// use tokio::future::ok;
+
+// #[macro_use]
 mod hive_macros;
 pub mod models;
-use core::fmt::Debug;
-use std::fmt::Formatter;
-use std::fmt::Error;
-use std::collections::HashMap;
-use failure::_core::hash::Hash;
-use std::borrow::Cow;
-use serde_derive::Deserialize;
-use failure::_core::any::Any;
-use failure::_core::ptr::null;
-
 pub mod signal;
 
 #[derive(Default)]
@@ -69,55 +61,74 @@ struct ConfigProperty{
 }
 
 impl Hive {
-    fn parse_properties(config: &Config) -> Self {
-        // let p = HashMap::<String, models::Property<PropertyType>>::new();
-        match config.get_array("Properties") {
-            Ok(props) => {
-                for prop in props {
-                    let ref table = prop.into_table().unwrap();
-                    for key in table.keys(){
-                        let val = table[key].clone();
-                        println!("<<< value kind {:?}", val.into_bool());
+    async fn parse_properties(toml: &toml::Value) -> Self {
 
-                        // match val.kind.to_string(){
-                        //     Value::ValueKind::Integer => {
-                        //         let cp = ConfigProperty{
-                        //             name: key.clone(),
-                        //             default_value: val.clone(),
-                        //             property_type: PropertyType::INT(3)
-                        //         };
-                        //         println!("<< t2 {:?} {:?}", cp.name, cp.default_value);
-                        //     }
-                        // }
-
-
-
-                    }
-                }
-            }
-            _ => println!("No Properties found")
+        // let pros:HashMap::<String, models::Property<PropertyType>> = Default::default();
+        //
+        // let pp = toml.get("Properties").unwrap().as_table().unwrap();
+        //
+        // let mut properties: HashMap<String, models::Property<PropertyType>> = Default::default();
+        // for key in pp.keys() {
+        //
+        //     let val = pp.get(key);
+        //     let p = match val {
+        //         Some(v) if v.is_str() => {
+        //             properties[key] = Property::new(v.as_str().unwrap());
+        //         },
+        //         //_ => Default::default(),
+        //     };
+        //     println!("||{:?} == {:?}, Property: {:?}",key, val, p);
+        // }
+        let props:HashMap<String, Property<PropertyType>> = HashMap::new();
+        Hive {
+            // properties:Default::default(),
+            properties: props,
         }
-        //let p: model::Property<i32> = Default::default();
-        //let props = Default::default();
-        Hive{
-            properties: Default::default(),
-        }
+
     }
 
 }
 
-pub fn run(config: &Config) -> Hive {
+#[tokio::main]
+pub async fn run(tomlPath: &String) -> Result<bool, std::io::Error> {
+    let foo: String = fs::read_to_string(tomlPath).unwrap().parse().unwrap();
+    let config: toml::Value = toml::from_str(&foo).unwrap();
 
-    match config.get_int("listen") {
-        Ok(port) => {
+    Hive::parse_properties(&config).await;
+    let port = config.get("listen").unwrap().as_integer();
+
+    // start listening for incomming connections
+    match port {
+        Some(port) => {
             let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port as u16);
-            // accept connections and process them
-            // tokio::run(lazy(move || {
-            //     client_requests(&addr)
-            // }));
+            println!("Listening for connections on {:?}", addr);
+            let mut listener = TcpListener::bind(addr).await?;
+
+            loop {
+                let (mut socket, _) = listener.accept().await?;
+                tokio::spawn(async move {
+                    let mut buf = [0; 1024];
+                    // In a loop, read data from the socket and write the data back.
+                    loop {
+                        let n = match socket.read(&mut buf).await {
+                            // socket closed
+                            Ok(n) if n == 0 => return,
+                            Ok(n) => n,
+                            Err(e) => {
+                                eprintln!("failed to read from socket; err = {:?}", e);
+                                return;
+                            }
+                        };
+                        println!("RECEIVED: {:?}", &buf[0..n]);
+                    }
+                });
+            }
         }
-        _ => println!("No listen port specified, not listening")
+        _ => {
+            println!("No listen port specified, not listening");
+        }
     }
-    Hive::parse_properties(&config)
+    return Result::Ok(true)
+
 }
 

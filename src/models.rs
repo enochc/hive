@@ -16,9 +16,15 @@ pub struct Property<PropertyType>
     pub on_changed: Signal<Option<PropertyType>>,
 }
 
-impl<PropertyType: Clone> Property<PropertyType> {
+impl Property<PropertyType> {
+    pub fn new(val: &str) -> Property<PropertyType> {
+            return Property{
+            value: Some(PropertyType::STRING(String::from(val).into_boxed_str())),
+            on_changed: Default::default(),
+        };
+    }
     pub fn set(&mut self, v: PropertyType)
-        where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Copy + 'static,
+        where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
 
         let v_clone = v.clone();

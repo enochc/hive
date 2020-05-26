@@ -6,4 +6,5 @@ Properties:
   - thermostat.name: "thermostat"
   - thermostat.temperature: 0
   - thermostat.target_temp: 0
-#listen: 3000
+
+listen: 3000

@@ -21,7 +21,7 @@ impl<T> Signal<T> {
     #[tokio::main]
     pub async fn emit(&mut self, val: T)
     // where T: Clone + Send + Copy + 'static, // How about this?
-        where T: Sync +Copy + Send +'static,
+        where T: Sync + Clone + Send +'static,
     {
         let slots_clone= self.slots.clone();
         let (tx, rx): (Sender<bool>, Receiver<bool>) = mpsc::channel();
@@ -31,9 +31,10 @@ impl<T> Signal<T> {
         for s in slots_clone.read().unwrap().iter() {
             let thread_tx = tx.clone();
             let s_clone = s.clone();
+            let val_clone = val.clone();
             numThreads +=1;
             thread::spawn(  move|| {
-                block_on(sendEmit(s_clone, val));
+                block_on(sendEmit(s_clone, val_clone));
                 thread_tx.send(true)
             });
 
