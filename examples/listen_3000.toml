@@ -1,0 +1,10 @@
+
+listen = 3000
+
+[Properties]
+thingvalue= 1
+is_active = true
+lightValue = 0
+thermostatName = "thermostat"
+thermostatTemperature= "too cold"
+thermostatTarget_temp = 1.45

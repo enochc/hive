@@ -5,6 +5,7 @@ use std::convert::TryFrom;
 #[derive(PartialEq, Clone, Debug, Deserialize)]
 pub enum PropertyType {
     REAL(i64),
+    FLOAT(f64),
     INT(u32),
     BOOL(bool),
     STRING(Box<str>),
@@ -27,6 +28,12 @@ impl Property {
     pub fn from_bool(val: bool) -> Property {
         return Property{
             value: Some(PropertyType::BOOL(val)),
+            on_changed: Default::default(),
+        };
+    }
+    pub fn from_float(val: f64) -> Property {
+        return Property{
+            value: Some(PropertyType::FLOAT(val)),
             on_changed: Default::default(),
         };
     }
