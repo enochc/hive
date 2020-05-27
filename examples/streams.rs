@@ -5,7 +5,7 @@ use std::thread::sleep;
 use std::thread;
 use failure::_core::time::Duration;
 use std::fs;
-use hive::Hive;
+use hive::hive::Hive;
 use futures::executor::block_on;
 
 fn main() {

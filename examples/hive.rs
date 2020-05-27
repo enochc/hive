@@ -1,7 +1,7 @@
 use std::thread::sleep;
 use failure::_core::time::Duration;
 use std::fs;
-use hive::Hive;
+use hive::hive::Hive;
 
 fn main() {
     let mut h = Hive::new("examples/properties.toml");//Hive::parse_properties(&config);

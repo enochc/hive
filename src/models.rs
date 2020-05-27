@@ -1,6 +1,10 @@
 use crate::signal::Signal;
 use serde_derive::Deserialize;
 use std::convert::TryFrom;
+use std::collections::HashMap;
+use std::sync::mpsc::{Sender, Receiver};
+
+
 
 #[derive(PartialEq, Clone, Debug, Deserialize)]
 pub enum PropertyType {
