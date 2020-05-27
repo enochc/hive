@@ -6,6 +6,7 @@ use std::thread;
 use failure::_core::time::Duration;
 use std::fs;
 use hive::Hive;
+use futures::executor::block_on;
 
 fn main() {
 
@@ -14,7 +15,8 @@ fn main() {
     let (tx, rx): (Sender<i32>, Receiver<i32>) = mpsc::channel();
     let tc = tx.clone();
     thread::spawn(move ||{
-        let mut h = Hive::run("examples/listen_3000.toml");
+        let mut h = Hive::new("examples/listen_3000.toml");
+        h.run();
         tc.send(1);
     });
 
@@ -22,7 +24,8 @@ fn main() {
     sleep(Duration::from_secs(1));
     let tx = tx.clone();
     thread::spawn(move ||{
-        let mut h = Hive::run("examples/connect_3000.toml");
+        let mut h = Hive::new("examples/connect_3000.toml");
+        h.run();
         tx.send(2);
     });
 

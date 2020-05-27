@@ -4,11 +4,7 @@ use std::fs;
 use hive::Hive;
 
 fn main() {
-
-    let foo: String = fs::read_to_string("examples/properties.toml").unwrap().parse().unwrap();
-    let config: toml::Value = toml::from_str(&foo).unwrap();
-
-    let mut h = Hive::parse_properties(&config);
+    let mut h = Hive::new("examples/properties.toml");//Hive::parse_properties(&config);
 
     // the set functions require a mutable reference to the property
     let p = h.get_mut_property("thingvalue");
