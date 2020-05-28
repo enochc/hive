@@ -3,7 +3,7 @@ use serde_derive::Deserialize;
 use std::convert::TryFrom;
 use std::collections::HashMap;
 use std::sync::mpsc::{Sender, Receiver};
-
+use futures::executor::block_on;
 
 
 #[derive(PartialEq, Clone, Debug, Deserialize)]
@@ -80,7 +80,7 @@ impl Property {
 
         if !self.value.eq(&op_v) {
             self.value = op_v;
-            self.on_changed.emit(Some(v_clone));
+            block_on(self.on_changed.emit(Some(v_clone)));
         } else {
             println!("do nothing ")
         }

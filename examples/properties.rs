@@ -15,6 +15,7 @@ fn main() {
 
     p.on_changed.connect(|v|{
         println!("also Inside signal: {:?}", v);
+        // sleep(Duration::from_secs(2))
     });
 
     p.set_str("What");

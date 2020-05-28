@@ -2,11 +2,11 @@
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
 use std::thread::sleep;
-use std::thread;
 use failure::_core::time::Duration;
 use std::fs;
 use hive::hive::Hive;
-use futures::executor::block_on;
+use async_std::task;
+use async_std::task::JoinHandle;
 
 fn main() {
 
@@ -14,18 +14,21 @@ fn main() {
     // let config: toml::Value = toml::from_str(&foo).unwrap();
     let (tx, rx): (Sender<i32>, Receiver<i32>) = mpsc::channel();
     let tc = tx.clone();
-    thread::spawn(move ||{
-        let mut h = Hive::new("examples/listen_3000.toml");
-        h.run();
+    task::spawn(  async move{
+        let h = Hive::new("examples/listen_3000.toml").run().await;
+        // h.run().await;
         tc.send(1);
     });
 
+
+
+
     // sleep for a sec so listen hive is running
-    sleep(Duration::from_secs(1));
+    // sleep(Duration::from_secs(1));
     let tx = tx.clone();
-    thread::spawn(move ||{
+    task::spawn(async move {
         let mut h = Hive::new("examples/connect_3000.toml");
-        h.run();
+       // h.run().await;
         tx.send(2);
     });
 
