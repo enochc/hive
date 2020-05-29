@@ -166,6 +166,7 @@ impl Hive {
         Ok(())
     }
 
+    #[allow(irrefutable_let_patterns)]
     pub async fn connect(address: &str) -> Result<bool> {
         if let mut socket = TcpStream::connect(address).await? {
             println!("Connected to the server!");
@@ -193,7 +194,10 @@ impl Hive {
             // let (tx,rx): (Sender<i32>, Receiver<i32>) = mpsc::unbounded();
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
             task::spawn(async move{
-                Hive::connect(&address).await;
+                match Hive::connect(&address).await {
+                    Err(e) => eprintln!("Error connecting {:?}",e),
+                    _ => (),
+                }
             }).await;
 
         }
@@ -215,7 +219,10 @@ impl Hive {
             // listen for connections loop
             let port = self.listen_port.as_ref().unwrap().to_string().clone();
             task::spawn( async move {
-                Hive::accept_loop(tx.clone(),port).await;
+                match Hive::accept_loop(tx.clone(),port).await {
+                    Err(e) => eprintln!("Failed accept loop: {:?}",e),
+                    _ => (),
+                }
 
             }).await;
 

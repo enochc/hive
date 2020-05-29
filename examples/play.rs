@@ -1,22 +1,14 @@
 use async_std::{
-    io::BufReader,
-    net::{TcpListener, TcpStream, ToSocketAddrs},
     prelude::*,
     task,
-    task::JoinHandle,
 };
-use std::thread;
-use std::num;
 use futures::channel::mpsc;
 use futures::SinkExt;
-use futures::select;
-use futures::prelude::future::Select;
-use futures::try_join;
 
 fn main(){
     task::block_on(run());
 }
-
+#[allow(unused_must_use)]
 async fn run (){
     let (tx,mut rx) = mpsc::channel(5);
     let mut  tx = tx.clone();

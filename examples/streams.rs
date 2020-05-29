@@ -1,28 +1,24 @@
 
 use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
-use std::thread::sleep;
-use failure::_core::time::Duration;
-use std::fs;
 use hive::hive::Hive;
 use async_std::task;
-use async_std::task::JoinHandle;
 
-use async_std::prelude::*;
 use futures::{SinkExt, StreamExt};
 
+#[allow(unused_must_use)]
 fn main() {
 
-    let (tx, mut rx): (UnboundedSender<i32>, UnboundedReceiver<i32>) = mpsc::unbounded();
+    let (tx, rx): (UnboundedSender<i32>, UnboundedReceiver<i32>) = mpsc::unbounded();
     let mut txc = tx.clone();
     task::spawn(  async move{
-        let h = Hive::new("examples/listen_3000.toml").run().await;
-        txc.send(1);
+        Hive::new("examples/listen_3000.toml").run().await;
+        txc.send(1).await;
     });
 
     let mut txc = tx.clone();
     task::spawn(async move {
-        let mut h = Hive::new("examples/connect_3000.toml").run().await;
-        txc.send(2);
+        Hive::new("examples/connect_3000.toml").run().await;
+        txc.send(2).await;
     });
 
 

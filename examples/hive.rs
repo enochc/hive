@@ -1,6 +1,5 @@
 use std::thread::sleep;
 use failure::_core::time::Duration;
-use std::fs;
 use hive::hive::Hive;
 
 fn main() {
