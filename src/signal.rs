@@ -1,8 +1,5 @@
 
-use std::sync::mpsc::{Sender, Receiver};
-use std::sync::mpsc;
 use std::sync::{Arc, RwLock};
-use std::thread;
 use async_std::task;
 use async_std::task::JoinHandle;
 use futures::future::join_all;
@@ -28,15 +25,11 @@ impl<T> Signal<T> {
         where T: Sync + Clone + Send +'static,
     {
         let slots_clone= self.slots.clone();
-        let mut num_threads = 0;
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
         // Spawn thread for each attached slot
         for s in slots_clone.read().unwrap().iter() {
             let s_clone = s.clone();
             let val_clone = val.clone();
-            num_threads +=1;
-
-            // TODO https://docs.rs/async-std/0.99.5/async_std/task/fn.spawn.html
 
             handles.push(task::spawn(  async move {
                 send_emit(s_clone, val_clone).await;

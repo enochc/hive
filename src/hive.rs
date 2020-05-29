@@ -1,35 +1,27 @@
+// Much code "borrowed" from> https://book.async.rs/tutorial/implementing_a_client.html
+use std::{
+    collections::HashMap,
+    fs,
+    // mem::transmute,
+    // net::{IpAddr, Ipv4Addr, SocketAddr},
+    // str::from_utf8,
+    // thread,
+    thread::sleep,
+};
 
-use std::collections::HashMap;
-use std::fs;
-use std::thread;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-// use tokio::net::{TcpListener, TcpStream};
 use async_std::{
     io::BufReader,
     net::{TcpListener, TcpStream, ToSocketAddrs},
     prelude::*,
     task,
-    task::JoinHandle,
 };
-use tokio::prelude::*;
+use failure::_core::time::Duration;
+use futures::{SinkExt, StreamExt};
+use futures::channel::mpsc;
+// use tokio::prelude::*;
 use toml;
-use std::str::from_utf8;
-use std::mem::transmute;
 
 use crate::models::Property;
-use serde::de::Error;
-// use std::sync::mpsc::{Sender, Receiver};
-// use std::sync::mpsc;
-use futures::channel::mpsc;
-use futures::executor::block_on;
-use std::borrow::Borrow;
-use std::thread::sleep;
-use failure::_core::time::Duration;
-use futures::channel::mpsc::UnboundedSender;
-use futures::SinkExt;
-
-// use async_std::task;
-// use async_std::task::JoinHandle;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
@@ -117,8 +109,6 @@ impl Hive {
             _ => None
         };
 
-        // let (tx, rx) = mpsc::channel();
-
         Hive {
             properties: props,
             // sender: tx,
@@ -141,68 +131,41 @@ impl Hive {
     async fn accept_loop(sender: Sender<String>, addr: impl ToSocketAddrs) -> Result<()> {
         let listener = TcpListener::bind(addr).await?;
 
-        // let (broker_sender, broker_receiver) = mpsc::unbounded(); // 1
-        //TODO: this: // let _broker_handle = task::spawn(broker_loop(broker_receiver));
         let mut incoming = listener.incoming();
+
         while let Some(stream) = incoming.next().await {
             let stream = stream?;
             println!("Accepting from: {}", stream.peer_addr()?);
-            // spawn_and_log_error(connection_loop(broker_sender.clone(), stream));
-            sender.clone().send(String::from("Accepted!!"));
+            let sender = sender.clone();
+            task::spawn(async move {
+
+                let mut reader = BufReader::new(&stream);
+                // Accept new client connections
+                loop {
+                    let mut sender = sender.clone();
+                    let mut size_buff = [0;4];
+                    // While next message zize is > 0 bites read messages
+                    while let Ok(read) = reader.read(&mut size_buff).await {
+                        if read > 0 {
+                            let message_size = as_u32_be(&size_buff);
+                            println!("SIZE: {:?}", message_size);
+                            let mut size_buff = vec![0u8; message_size as usize];
+                            match reader.read_exact(&mut size_buff).await {
+                                Ok(_t) => {
+                                    let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
+                                    println!("read: {:?}", msg);
+                                    sender.send(msg).await;
+                                },
+                                _ => eprintln!("Failed to read message")
+                            }
+                        }
+                    }
+                }
+            });
         }
         Ok(())
     }
 
-    pub async fn listen(sender: Sender<String>, port: u16) -> Result<bool> {
-        // let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port as u16);
-        // let mut listener = TcpListener::bind(addr).await?;
-        //
-        // // loop {
-        //     let (mut socket, _) = listener.accept().await?;
-        //     println!("<<< started socket");
-        //     task::spawn(  async move {
-        //         // In a loop, read data from the socket
-        //         let mut msg_length: u32 = 0;
-        //         loop {
-        //             println!("<<< loop");
-        //             /*
-        //                 let n = match socket.read(&mut buf).await {
-        //                 Ok(n) if n == 0 => { return; },
-        //                 Ok(n) => { n },
-        //                 Err(e) => {
-        //                     eprintln!("failed to read from socket; err = {:?}", e);
-        //                     return;
-        //              */
-        //             if msg_length == 0 {
-        //                 let mut buff = [0;4];
-        //                 let n = match  block_on(socket.read(&mut buff)){//.await {
-        //                     Ok(n) if n == 0 => { return; },
-        //                     Ok(n) => n ,
-        //                     Err(e) => return
-        //                 };
-        //
-        //                 msg_length = as_u32_be(&buff);
-        //                 println!("MSG LENGTH: {:?}", msg_length);
-        //             } else {
-        //                 // let mut buf = [0; 1024];
-        //                 let mut msg = String::new();
-        //                 let n = block_on(socket.read_to_string(&mut msg)).unwrap();//.await.unwrap();
-        //                 if n as u32 == msg_length {
-        //                 //     println!("RECEIVED: {:?}", from_utf8(&buf[0..n]));
-        //                     println!("RECEIVED: {:?} len: {:?}", msg, n);
-        //                     &sender.send(msg.clone());
-        //
-        //                     msg_length = 0;
-        //                 }
-        //             }
-        //         }
-        //         println!("<<< break loop");
-        //     });
-        // // }
-        Ok(true)
-    }
-
-    // #[tokio::main]
     pub async fn connect(address: &str) -> Result<bool> {
         if let mut socket = TcpStream::connect(address).await? {
             println!("Connected to the server!");
@@ -222,46 +185,41 @@ impl Hive {
         Result::Ok(true)
     }
 
-    // #[tokio::main]
     pub async fn run(&self) -> Result<bool> {
 
+        // I'm a client
         if !self.connect_to.is_none() {
             println!("Connect To: {:?}", self.connect_to);
-            let (tx,rx): (Sender<i32>, Receiver<i32>) = mpsc::unbounded();
-            // let sender_clone = tx.clone();
-            // let address = self.connect_to.clone();
+            // let (tx,rx): (Sender<i32>, Receiver<i32>) = mpsc::unbounded();
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
             task::spawn(async move{
                 Hive::connect(&address).await;
-                // sender_clone.send(2);
             }).await;
-            //Wait here indefinately to connection
-            // let done = rx.recv();
+
         }
 
+        // I'm a server
         if !self.listen_port.is_none() {
             println!("Listening for connections on {:?}", self.listen_port);
-            // let (tx,rx): (Sender<String>, Receiver<String>) = mpsc::unbounded();
-            let (tx,rx) = mpsc::unbounded();
-            // let sender_clone = tx.clone();
+            let (tx,mut rx) = mpsc::unbounded();
+            // receive message loop
+            task::spawn(async move{
+                println!("runniong listener");
+                while let Some(msg) = rx.next().await {
+                    println!("<<< MESSAGE RECEIVED: {:?}", msg);
+                }
+                println!("done listener");
+            });
+            // send message loop
+
+            // listen for connections loop
             let port = self.listen_port.as_ref().unwrap().to_string().clone();
             task::spawn( async move {
                 Hive::accept_loop(tx.clone(),port).await;
-                // match block_on(Hive::listen(sender_clone, port)){
-                //     Ok(r) => print!("__{:?}__", r),
-                //     Err(e) => println!("ERROR!! {:?}",e)
-                // };//.await?;
-                // sender_clone.send(1);
-            }).await;
-            //Wait here indefinately to listen
-            // loop {
-            //     let done = rx.recv();
-            //     println!("<< DONE!! {:?}", done);
-            // }
 
+            }).await;
 
         }
-
         return Result::Ok(true)
     }
 }

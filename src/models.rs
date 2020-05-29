@@ -1,8 +1,6 @@
 use crate::signal::Signal;
 use serde_derive::Deserialize;
 use std::convert::TryFrom;
-use std::collections::HashMap;
-use std::sync::mpsc::{Sender, Receiver};
 use futures::executor::block_on;
 
 
