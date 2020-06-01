@@ -14,6 +14,7 @@ use async_std::{
     net::{TcpListener, TcpStream, ToSocketAddrs},
     prelude::*,
     task,
+    sync::Arc,
 };
 use failure::_core::time::Duration;
 use futures::{SinkExt, StreamExt};
@@ -43,6 +44,21 @@ fn as_u32_be(array: &[u8; 4]) -> u32 {
         ((array[2] as u32) <<  8) +
         ((array[3] as u32) <<  0)
 }
+
+#[derive(Debug)]
+enum SocketEvent {
+    NewPeer {
+        name: String,
+        // stream: Arc<TcpStream>,
+        stream: TcpStream,
+    },
+    Message {
+        from: String,
+        // to: Vec<String>,
+        msg: String,
+    },
+}
+
 impl Hive {
 
     pub fn new(toml_path: &str) -> Hive{
@@ -128,43 +144,86 @@ impl Hive {
      */
 
 
-    async fn accept_loop(sender: Sender<String>, addr: impl ToSocketAddrs) -> Result<()> {
+
+
+    async fn accept_loop(sender: Sender<SocketEvent>, addr: impl ToSocketAddrs) -> Result<()> {
         let listener = TcpListener::bind(addr).await?;
-
         let mut incoming = listener.incoming();
-
         while let Some(stream) = incoming.next().await {
             let stream = stream?;
             println!("Accepting from: {}", stream.peer_addr()?);
-            let sender = sender.clone();
-            task::spawn(async move {
-
-                let mut reader = BufReader::new(&stream);
-                // Accept new client connections
-                loop {
-                    let mut sender = sender.clone();
-                    let mut size_buff = [0;4];
-                    // While next message zize is > 0 bites read messages
-                    while let Ok(read) = reader.read(&mut size_buff).await {
-                        if read > 0 {
-                            let message_size = as_u32_be(&size_buff);
-                            println!("SIZE: {:?}", message_size);
-                            let mut size_buff = vec![0u8; message_size as usize];
-                            match reader.read_exact(&mut size_buff).await {
-                                Ok(_t) => {
-                                    let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
-                                    println!("read: {:?}", msg);
-                                    sender.send(msg).await;
-                                },
-                                _ => eprintln!("Failed to read message")
-                            }
-                        }
-                    }
-                }
-            });
+            match stream.peer_addr() {
+                Ok(peer) => {
+                    let se = SocketEvent::NewPeer {
+                        name: peer.to_string(),
+                        stream,
+                    };
+                    sender.clone().send(se).await;
+                },
+                Err(e) => eprintln!("No peer address: {:?}", e),
+            }
         }
         Ok(())
     }
+    async fn read_loop(sender: Sender<SocketEvent>, stream: TcpStream){
+        let mut reader = BufReader::new(stream);
+        loop {
+            let mut sender = sender.clone();
+            let mut size_buff = [0; 4];
+            // While next message zize is > 0 bites read messages
+            while let Ok(read) = reader.read(&mut size_buff).await {
+                if read > 0 {
+                    let message_size = as_u32_be(&size_buff);
+                    println!("SIZE: {:?}", message_size);
+                    let mut size_buff = vec![0u8; message_size as usize];
+                    match reader.read_exact(&mut size_buff).await {
+                        Ok(_t) => {
+                            let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
+                            println!("read: {:?}", msg);
+                            let se = SocketEvent::Message {
+                                from: stream.peer_addr()?.to_string(),
+                                msg
+                            };
+
+                            sender.send(se).await;
+                        },
+                        _ => eprintln!("Failed to read message")
+                    }
+                }
+            }
+        }
+
+    }
+
+            // let sender = sender.clone();
+            // task::spawn(async move {
+            //
+            //     let mut reader = BufReader::new(&stream);
+            //     // Accept new client connections
+            //     loop {
+            //         let mut sender = sender.clone();
+            //         let mut size_buff = [0;4];
+            //         // While next message zize is > 0 bites read messages
+            //         while let Ok(read) = reader.read(&mut size_buff).await {
+            //             if read > 0 {
+            //                 let message_size = as_u32_be(&size_buff);
+            //                 println!("SIZE: {:?}", message_size);
+            //                 let mut size_buff = vec![0u8; message_size as usize];
+            //                 match reader.read_exact(&mut size_buff).await {
+            //                     Ok(_t) => {
+            //                         let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
+            //                         println!("read: {:?}", msg);
+            //
+            //                         sender.send(msg).await;
+            //                     },
+            //                     _ => eprintln!("Failed to read message")
+            //                 }
+            //             }
+            //         }
+            //     }
+            // });
+
+
 
     #[allow(irrefutable_let_patterns)]
     pub async fn connect(address: &str) -> Result<bool> {
@@ -186,7 +245,7 @@ impl Hive {
         Result::Ok(true)
     }
 
-    pub async fn run(&self) -> Result<bool> {
+    pub async fn run(& self) -> Result<bool> {
 
         // I'm a client
         if !self.connect_to.is_none() {
@@ -204,13 +263,23 @@ impl Hive {
 
         // I'm a server
         if !self.listen_port.is_none() {
+            let mut peers: HashMap<String, TcpStream> = HashMap::new();
+
             println!("Listening for connections on {:?}", self.listen_port);
             let (tx,mut rx) = mpsc::unbounded();
-            // receive message loop
+            // receive SocketEvent loop
             task::spawn(async move{
                 println!("runniong listener");
-                while let Some(msg) = rx.next().await {
-                    println!("<<< MESSAGE RECEIVED: {:?}", msg);
+                while let Some(event) = rx.next().await {
+                    match event {
+                        SocketEvent::NewPeer{name, stream} => {
+                            println!("<<< New Peer: {:?}", name);
+                            peers.insert(name, stream);
+                        },
+                        SocketEvent::Message{from, msg} => {
+                             println!("<<<< New Message: {:?}", msg)
+                        },
+                    }
                 }
                 println!("done listener");
             });
