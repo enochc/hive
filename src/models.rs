@@ -2,6 +2,7 @@ use crate::signal::Signal;
 use serde_derive::Deserialize;
 use std::convert::TryFrom;
 use futures::executor::block_on;
+use std::fmt;
 
 
 #[derive(PartialEq, Clone, Debug, Deserialize)]
@@ -19,7 +20,12 @@ pub struct Property
     value: Option<PropertyType>,
     pub on_changed: Signal<Option<PropertyType>>,
 }
-
+impl fmt::Debug for Property {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // let inner = ?????;
+        fmt::Debug::fmt(&self.value, f)
+    }
+}
 impl Property {
     pub fn from_str(val: &str) -> Property {
             return Property{
