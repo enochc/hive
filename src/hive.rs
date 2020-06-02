@@ -36,6 +36,8 @@ pub struct Hive {
     // receiver: Receiver<u8>,
     connect_to: Option<Box<str>>,
     listen_port: Option<Box<str>>,
+    property_config: Option<toml::Value>,
+    // peers: HashMap<String, Arc<TcpStream>>,
 }
 
 
@@ -61,13 +63,50 @@ enum SocketEvent {
 }
 
 impl Hive {
+    // fn add_peer(&mut self, name:String, stream: Arc<TcpStream>){
+    //     self.peers.insert(name, stream);
+    // }
 
     pub fn new(toml_path: &str) -> Hive{
         let foo: String = fs::read_to_string(toml_path).unwrap().parse().unwrap();
         let config: toml::Value = toml::from_str(&foo).unwrap();
 
-        Hive::parse_properties(&config)
+        // Hive::parse_properties(&config)
+        let connect_to = match config.get("connect") {
+            Some(v) => {
+                Some(String::from(v.as_str().unwrap()).into_boxed_str())
+            },
+            _ => None
+        };
+        let listen_port = match config.get("listen") {
+            Some(v) => {
+                Some(String::from(v.as_str().unwrap()).into_boxed_str())
+            },
+            _ => None
+        };
+
+        let mut props:HashMap::<String, Property> = HashMap::new();
+
+        let mut hive = Hive {
+            properties: props,
+            // sender: tx,
+            // receiver: rx,
+            connect_to,
+            listen_port,
+            property_config: None,
+            // peers: HashMap::new()
+        };
+
+        let properties = config.get("Properties");
+        if !properties.is_none() {
+            match properties {
+                Some(p) => hive.parse_properties(p),
+                _ => ()
+            }
+        };
+        return hive;
     }
+
     pub fn get_mut_property(&mut self, key: &str) -> Option<&mut Property> {
         println!("properties: {:?}", self.properties.keys());
         let op = self.properties.get_mut(key);
@@ -75,63 +114,33 @@ impl Hive {
         return op
     }
 
-    fn parse_properties(toml: &toml::Value) -> Hive {
 
-        let mut props:HashMap::<String, Property> = HashMap::new();
 
-        let properties = toml.get("Properties");
-        if !properties.is_none() {
-            match properties{
-                Some(p_val) => {
-                    let p_val = p_val.as_table().unwrap();
-                    for key in p_val.keys() {
-                        let val = p_val.get(key);
-                        match val {
-                            Some(v) if v.is_str() => {
-                                props.insert(String::from(key), Property::from_str(v.as_str().unwrap()));
-                                // props[key] = ;
-                            },
-                            Some(v) if v.is_integer() => {
-                                props.insert(String::from(key), Property::from_int(v.as_integer().unwrap()));
-                            },
-                            Some(v) if v.is_bool() => {
-                                props.insert(String::from(key), Property::from_bool(v.as_bool().unwrap()));
-                            },
-                            Some(v) if v.is_float() => {
-                                props.insert(String::from(key), Property::from_float(v.as_float().unwrap()));
-                            },
-                            _ => {
-                                println!("<<Failed to Set Property: {:?}", key)
-                            }
-                        };
-                        println!("||{:?} == {:?}",key, val);
-                    }
+    fn parse_properties(&mut self, properties: &toml::Value) {
+        let p_val = properties.as_table().unwrap();
+        self.property_config = Some(properties.clone());
+        let mut props = &mut self.properties;
+        for key in p_val.keys() {
+            let val = p_val.get(key);
+            match val {
+                Some(v) if v.is_str() => {
+                    props.insert(String::from(key), Property::from_str(v.as_str().unwrap()));
+                    // props[key] = ;
+                },
+                Some(v) if v.is_integer() => {
+                    props.insert(String::from(key), Property::from_int(v.as_integer().unwrap()));
+                },
+                Some(v) if v.is_bool() => {
+                    props.insert(String::from(key), Property::from_bool(v.as_bool().unwrap()));
+                },
+                Some(v) if v.is_float() => {
+                    props.insert(String::from(key), Property::from_float(v.as_float().unwrap()));
                 },
                 _ => {
-                    println!("Failed to unwrap connect address");
+                    println!("<<Failed to Set Property: {:?}", key)
                 }
-            }
-        }
-
-        let connect_port = match toml.get("connect") {
-            Some(v) => {
-                Some(String::from(v.as_str().unwrap()).into_boxed_str())
-            },
-            _ => None
-        };
-        let listen_port = match toml.get("listen") {
-            Some(v) => {
-                Some(String::from(v.as_str().unwrap()).into_boxed_str())
-            },
-            _ => None
-        };
-
-        Hive {
-            properties: props,
-            // sender: tx,
-            // receiver: rx,
-            connect_to: connect_port,
-            listen_port
+            };
+            println!("||{:?} == {:?}",key, val);
         }
     }
 
@@ -240,19 +249,22 @@ impl Hive {
         // I'm a server
         if !self.listen_port.is_none() {
             let mut peers: HashMap<String, Arc<TcpStream>> = HashMap::new();
+            let port = self.listen_port.as_ref().unwrap().to_string().clone();
 
             println!("Listening for connections on {:?}", self.listen_port);
             let (tx,mut rx) = mpsc::unbounded();
             let tx_clone = tx.clone();
+            // let mut peers = &self.peers;
             // receive SocketEvent loop
             task::spawn(async move{
-                println!("runniong listener");
+                println!("running listener");
                 while let Some(event) = rx.next().await {
                     match event {
                         SocketEvent::NewPeer{name, stream} => {
                             let stream = Arc::new(stream);
                             println!("<<< New Peer: {:?}", name);
-                            peers.insert(name, Arc::clone(&stream));
+                            // self.add_peer(name, Arc::clone(&stream));
+                            // peers.insert(name, Arc::clone(&stream));
                             // sync properties to client (transfer config)
 
                             // Start read loop
@@ -271,9 +283,9 @@ impl Hive {
             // send message loop
 
             // listen for connections loop
-            let port = self.listen_port.as_ref().unwrap().to_string().clone();
+            let p = port.clone();
             task::spawn( async move {
-                match Hive::accept_loop(tx.clone(),port).await {
+                match Hive::accept_loop(tx.clone(),p).await {
                     Err(e) => eprintln!("Failed accept loop: {:?}",e),
                     _ => (),
                 }
