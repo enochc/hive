@@ -43,6 +43,7 @@ pub struct Hive {
     // peers: HashMap<String, Arc<TcpStream>>,
 }
 
+static mut peers: Vec<Peer> = Vec::new();
 
 
 impl Hive {
@@ -200,21 +201,23 @@ impl Hive {
 
         // I'm a server
         if !self.listen_port.is_none() {
-            let mut peers: HashMap<String, Arc<TcpStream>> = HashMap::new();
+            // let mut peers: HashMap<String, Arc<TcpStream>> = HashMap::new();
             let port = self.listen_port.as_ref().unwrap().to_string().clone();
 
             println!("Listening for connections on {:?}", self.listen_port);
-            let (tx,mut rx) = mpsc::unbounded();
-            let tx_clone = tx.clone();
+            let (sendChan,mut receiveChan) = mpsc::unbounded();
+            let sendChanClone = sendChan.clone();
             // let mut peers = &self.peers;
             // receive SocketEvent loop
             task::spawn(async move{
                 println!("running listener");
-                while let Some(event) = rx.next().await {
-                    let tx_clone = tx_clone.clone();
+                while let Some(event) = receiveChan.next().await {
+                    let sendChan = sendChanClone.clone();
                     match event {
                         SocketEvent::NewPeer{name, stream} => {
-                            let p = Peer::new(name, stream, tx_clone);
+                            let mut p = Peer::new(name, stream, sendChan);
+                            p.send(String::from("what now?")).await;
+                            unsafe {peers.push(p);}
 
                         },
                         SocketEvent::Message{from, msg} => {
@@ -229,7 +232,7 @@ impl Hive {
             // listen for connections loop
             let p = port.clone();
             task::spawn( async move {
-                match Hive::accept_loop(tx.clone(),p).await {
+                match Hive::accept_loop(sendChan.clone(),p).await {
                     Err(e) => eprintln!("Failed accept loop: {:?}",e),
                     _ => (),
                 }

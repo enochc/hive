@@ -8,6 +8,7 @@ use async_std::{
     task,
     sync::Arc,
 };
+use std::borrow::BorrowMut;
 
 #[derive(Debug)]
 pub enum SocketEvent {
@@ -25,7 +26,7 @@ pub enum SocketEvent {
 
 pub struct Peer{
     pub name:String,
-    pub streem: Arc<TcpStream>,
+    pub stream: Arc<TcpStream>,
 }
 
 fn as_u32_be(array: &[u8; 4]) -> u32 {
@@ -41,7 +42,7 @@ impl Peer {
         println!("<<< New Peer: {:?}", &name);
         let peer = Peer{
             name,
-            streem: arcStr.clone(),
+            stream: arcStr.clone(),
         };
 
         // Start read loop
@@ -50,10 +51,27 @@ impl Peer {
         task::spawn(async move{
             read_loop(send_clone, arcStr2).await;
         });
+       // task::spawn(async move{
+       //     write_loop(send_clone, arcStr2.clone()).await;
+       // });
         
         return peer;
     }
+
+    pub async fn send(& mut self, message: String) -> Result<bool, std::io::Error> {
+        println!("<<< wrighting to peer: {:?}", message);
+        let mut bytes = Vec::new();
+        let msg_length: u32 = message.len() as u32;
+        bytes.append(&mut msg_length.to_be_bytes().to_vec());
+        bytes.append(&mut message.as_bytes().to_vec());
+        // let mut stream = self.streem;
+        let mut stream = &*self.stream;
+        let n = stream.write(&bytes).await?;
+        println!("<<< written to peer: {:?}", n);
+        Result::Ok(true)
+    }
 }
+
 
 async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>){
     let mut reader = BufReader::new(&*stream);
