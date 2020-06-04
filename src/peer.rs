@@ -1,6 +1,6 @@
 use futures::channel::mpsc;
 use futures::channel::mpsc::{UnboundedSender, UnboundedReceiver};
-use futures::SinkExt;
+use futures::{SinkExt, StreamExt};
 use async_std::{
     io::BufReader,
     net::{TcpListener, TcpStream, ToSocketAddrs},
@@ -9,6 +9,7 @@ use async_std::{
     sync::Arc,
 };
 use std::borrow::BorrowMut;
+use futures::executor::block_on;
 
 #[derive(Debug)]
 pub enum SocketEvent {
@@ -37,10 +38,13 @@ fn as_u32_be(array: &[u8; 4]) -> u32 {
 }
 
 impl Peer {
-   pub fn new(name:String, stream:TcpStream, sender: UnboundedSender<SocketEvent>) -> Peer {
+   pub fn new(name:String,
+              stream:TcpStream,
+              sender: UnboundedSender<SocketEvent>,
+              receiver: Option<UnboundedReceiver<SocketEvent>>) -> Peer {
         let arcStr = Arc::new(stream);
         println!("<<< New Peer: {:?}", &name);
-        let peer = Peer{
+        let mut peer = Peer{
             name,
             stream: arcStr.clone(),
         };
@@ -51,28 +55,58 @@ impl Peer {
         task::spawn(async move{
             read_loop(send_clone, arcStr2).await;
         });
-       // task::spawn(async move{
-       //     write_loop(send_clone, arcStr2.clone()).await;
-       // });
+
+       //write loop
+       let arcStr3 = arcStr.clone();
+       task::spawn(async move{
+           write_loop(receiver, arcStr3).await;
+       });
         
         return peer;
     }
+    pub async fn send(&mut self, msg: String){
+        block_on(send(self.stream.clone(), msg));
+    }
 
-    pub async fn send(& mut self, message: String) -> Result<bool, std::io::Error> {
-        println!("<<< wrighting to peer: {:?}", message);
-        let mut bytes = Vec::new();
-        let msg_length: u32 = message.len() as u32;
-        bytes.append(&mut msg_length.to_be_bytes().to_vec());
-        bytes.append(&mut message.as_bytes().to_vec());
-        // let mut stream = self.streem;
-        let mut stream = &*self.stream;
-        let n = stream.write(&bytes).await?;
-        println!("<<< written to peer: {:?}", n);
-        Result::Ok(true)
+}
+async fn send(stream: Arc<TcpStream>, message: String) -> Result<bool, std::io::Error> {
+    println!("<<< wrighting to peer: {:?}", message);
+    let mut bytes = Vec::new();
+    let msg_length: u32 = message.len() as u32;
+    bytes.append(&mut msg_length.to_be_bytes().to_vec());
+    bytes.append(&mut message.as_bytes().to_vec());
+    // let mut stream = self.streem;
+    let mut stream = &*stream;
+    let n = stream.write(&bytes).await?;
+    println!("<<< written to peer: {:?}", n);
+    Result::Ok(true)
+}
+/*
+ Messages are transferred between services in the following protocol:
+ message - 4 bytes consisting of message size, then the following x bytes are the message
+ so when reading, the first 4 bytes are read to determine the message size, then we read that many
+ more bytes to complete the message
+ */
+async fn write_loop(receiver: Option<UnboundedReceiver<SocketEvent>>, stream: Arc<TcpStream>){
+    match receiver {
+        Some(mut r) => {
+            task::spawn(async move{
+                while let Some(event) = r.next().await {
+                    match event {
+                        SocketEvent::Message{from, msg} => {
+                            send(stream.clone(),msg).await;
+                        },
+                        _ => {
+                            println!("<<<< WHY AM I HERE?: {:?}", event);
+                        }
+                    }
+
+                }
+            });
+        },
+        _ => {}
     }
 }
-
-
 async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>){
     let mut reader = BufReader::new(&*stream);
     loop {

@@ -190,10 +190,27 @@ impl Hive {
             println!("Connect To: {:?}", self.connect_to);
             // let (tx,rx): (Sender<i32>, Receiver<i32>) = mpsc::unbounded();
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
+            let (mut sendChan,mut receiveChan) = mpsc::unbounded();
             task::spawn(async move{
-                match Hive::connect(&address).await {
-                    Err(e) => eprintln!("Error connecting {:?}",e),
-                    _ => (),
+                if let mut stream = TcpStream::connect(address).await {
+                    match stream {
+                        Ok(s) => {
+                            match s.peer_addr() {
+                                Ok(peer) => {
+                                    let mut sc2 = sendChan.clone();
+                                    let mut p = Peer::new(peer.to_string(), s, sendChan, Some(receiveChan));
+                                    // p.send(String::from("all That")).await;
+                                    sc2.send(SocketEvent::Message {
+                                        from: String::from("mr tight"),
+                                        msg: String::from("CHANNNEL SEND")
+                                    }).await;
+                                },
+                                Err(e) => eprintln!("No peer address: {:?}", e),
+                            }
+                        },
+                        _ => {eprintln!("Nope")}
+                    }
+
                 }
             }).await;
 
@@ -215,8 +232,8 @@ impl Hive {
                     let sendChan = sendChanClone.clone();
                     match event {
                         SocketEvent::NewPeer{name, stream} => {
-                            let mut p = Peer::new(name, stream, sendChan);
-                            p.send(String::from("what now?")).await;
+                            let mut p = Peer::new(name, stream, sendChan, None);
+                            p.send(String::from("what now? ")).await;
                             unsafe {peers.push(p);}
 
                         },
