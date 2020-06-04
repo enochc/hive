@@ -22,7 +22,6 @@ pub struct Property
 }
 impl fmt::Debug for Property {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // let inner = ?????;
         fmt::Debug::fmt(&self.value, f)
     }
 }

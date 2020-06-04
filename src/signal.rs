@@ -8,7 +8,6 @@ use futures::future::join_all;
 
 #[derive(Default, Clone)]
 pub struct Signal<T> {
-    //TODO verify if all the Arc's are neccessary, maybe I can get by with just a Rc?
     slots: Arc<RwLock<Vec<Arc<dyn Fn(T) + Send + Sync + 'static>>>>
 }
 

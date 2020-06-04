@@ -2,7 +2,7 @@ use std::thread::sleep;
 
 use failure::_core::time::Duration;
 
-use hive::models::Property;
+use hive::property::Property;
 
 fn main() {
 

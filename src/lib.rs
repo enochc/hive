@@ -1,9 +1,11 @@
 // use std::fs;
 
 mod hive_macros;
-pub mod models;
+pub mod property;
 pub mod signal;
 pub mod hive;
+pub mod peer;
+
 
 
 // fn get_toml_config(file_path: &str) -> toml::Value{

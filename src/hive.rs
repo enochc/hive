@@ -13,17 +13,20 @@ use async_std::{
     io::BufReader,
     net::{TcpListener, TcpStream, ToSocketAddrs},
     prelude::*,
-    task,
     sync::Arc,
+    task,
 };
+use failure::_core::fmt::Debug;
 use failure::_core::time::Duration;
 use futures::{SinkExt, StreamExt};
 use futures::channel::mpsc;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use spmc;
 // use tokio::prelude::*;
 use toml;
 
-use crate::models::Property;
-use failure::_core::fmt::Debug;
+use crate::peer::{SocketEvent, Peer};
+use crate::property::Property;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
@@ -32,8 +35,8 @@ type Receiver<T> = mpsc::UnboundedReceiver<T>;
 #[derive(Debug)]
 pub struct Hive {
     pub properties: HashMap<String, Property>,
-    // sender: Sender<u8>,
-    // receiver: Receiver<u8>,
+    sender: Sender<String>,
+    receiver: Receiver<String>,
     connect_to: Option<Box<str>>,
     listen_port: Option<Box<str>>,
     property_config: Option<toml::Value>,
@@ -41,26 +44,6 @@ pub struct Hive {
 }
 
 
-fn as_u32_be(array: &[u8; 4]) -> u32 {
-    ((array[0] as u32) << 24) +
-        ((array[1] as u32) << 16) +
-        ((array[2] as u32) <<  8) +
-        ((array[3] as u32) <<  0)
-}
-
-#[derive(Debug)]
-enum SocketEvent {
-    NewPeer {
-        name: String,
-        // stream: Arc<TcpStream>,
-        stream: TcpStream,
-    },
-    Message {
-        from: String,
-        // to: Vec<String>,
-        msg: String,
-    },
-}
 
 impl Hive {
     // fn add_peer(&mut self, name:String, stream: Arc<TcpStream>){
@@ -87,10 +70,11 @@ impl Hive {
 
         let mut props:HashMap::<String, Property> = HashMap::new();
 
+        let (tx,mut rx) = mpsc::unbounded();
         let mut hive = Hive {
             properties: props,
-            // sender: tx,
-            // receiver: rx,
+            sender: tx,
+            receiver: rx,
             connect_to,
             listen_port,
             property_config: None,
@@ -175,38 +159,7 @@ impl Hive {
         }
         Ok(())
     }
-    async fn read_loop(sender: Sender<SocketEvent>, stream: Arc<TcpStream>){
-        let mut reader = BufReader::new(&*stream);
-        loop {
-            let mut sender = sender.clone();
-            let mut size_buff = [0; 4];
-            // While next message zize is > 0 bites read messages
-            while let Ok(read) = reader.read(&mut size_buff).await {
-                if read > 0 {
-                    let message_size = as_u32_be(&size_buff);
-                    println!("SIZE: {:?}", message_size);
-                    let mut size_buff = vec![0u8; message_size as usize];
-                    match reader.read_exact(&mut size_buff).await {
-                        Ok(_t) => {
-                            let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
-                            let from = match stream.peer_addr() {
-                                Ok(addr) => addr.to_string(),
-                                _ => String::from("no peer address"),
-                            };
-                            println!("read: {:?}", msg);
-                            let se = SocketEvent::Message {
-                                from,
-                                msg
-                            };
 
-                            sender.send(se).await;
-                        },
-                        _ => eprintln!("Failed to read message")
-                    }
-                }
-            }
-        }
-    }
 
 
 
@@ -225,7 +178,6 @@ impl Hive {
 
         } else {
             println!("Couldn't connect to server...");
-            // return std::io::Error::new("Nope");
         }
         Result::Ok(true)
     }
@@ -259,19 +211,11 @@ impl Hive {
             task::spawn(async move{
                 println!("running listener");
                 while let Some(event) = rx.next().await {
+                    let tx_clone = tx_clone.clone();
                     match event {
                         SocketEvent::NewPeer{name, stream} => {
-                            let stream = Arc::new(stream);
-                            println!("<<< New Peer: {:?}", name);
-                            // self.add_peer(name, Arc::clone(&stream));
-                            // peers.insert(name, Arc::clone(&stream));
-                            // sync properties to client (transfer config)
+                            let p = Peer::new(name, stream, tx_clone);
 
-                            // Start read loop
-                            let tx_clone = tx_clone.clone();
-                            task::spawn(async move{
-                                Hive::read_loop(tx_clone, Arc::clone(&stream)).await;
-                            });
                         },
                         SocketEvent::Message{from, msg} => {
                              println!("<<<< New Message: {:?}", msg)
