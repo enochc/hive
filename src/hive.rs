@@ -177,7 +177,7 @@ impl Hive {
         Ok(())
     }
 
-    pub async fn run(& self) -> Result<bool> {
+    pub async fn run(&mut self) -> Result<bool> {
 
         // I'm a client
         if !self.connect_to.is_none() {
@@ -203,16 +203,14 @@ impl Hive {
                 }
             });
             // listen for messages from server
-            task::spawn(async move {
-                while let Some(event) = receive_chan.next().await {
-                    match event {
-                        SocketEvent::NewPeer{name, stream} => {},
-                        SocketEvent::Message{from, msg} => {
-                            println!("{:?} <<<< New Message from server: {:?}",&hive_name, msg);
-                        },
-                    }
+            while let Some(event) = receive_chan.next().await {
+                match event {
+                    SocketEvent::NewPeer{name, stream} => {},
+                    SocketEvent::Message{from, msg} => {
+                        self.gotMessage(msg);
+                    },
                 }
-            }).await;
+            }
         }
 
         // I'm a server
@@ -233,7 +231,7 @@ impl Hive {
 
             });
 
-            let props = self.property_config.as_ref().unwrap().to_string();
+
             let hive_name = self.name.clone();
 
             while let Some(event) = receive_chan.next().await {
@@ -242,9 +240,7 @@ impl Hive {
                     SocketEvent::NewPeer{name, stream} => {
                         let pname = format!("CLIENT PEER {:?}", name);
                         let mut p = Peer::new(pname, stream, send_chan, None);
-                        let mesage = props.as_str();
-                        println!("{:?} SEND PROPS: {:?}", &hive_name, mesage);
-                        p.send(mesage).await;
+                        self.sendProperties(&p).await;
 
                     },
                     SocketEvent::Message{from, msg} => {
@@ -257,7 +253,23 @@ impl Hive {
         }
         return Result::Ok(true)
     }
-    fn gotMessage(&self, msg:String){
-        println!("process message: {:?} = {:?}",self.name,  msg)
+    async fn sendProperties(&self, peer:&Peer){
+        let str = toml::to_string(self.property_config.as_ref().unwrap()).unwrap();
+        let mut message = String::from("|P|");
+        message.push_str(&str);
+        peer.send(message.as_str()).await;
+    }
+    fn gotMessage(&mut self, msg:String){
+        println!("process message: {:?} = {:?}",self.name,  msg);
+        match &msg[0..3]{
+            "|P|" => {
+                // got properties
+                let (_,rest) = msg.split_at(3);
+                let value:toml::Value = toml::from_str(rest).unwrap();
+                self.parse_properties(&value);
+
+            },
+            _ => println!("got message {:?}", msg)
+        }
     }
 }
