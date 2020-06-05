@@ -222,31 +222,6 @@ impl Hive {
             println!("{:?} Listening for connections on {:?}",self.name, self.listen_port);
             let (send_chan,mut receive_chan) = mpsc::unbounded();
             let send_chan_clone = send_chan.clone();
-            let props = self.property_config.as_ref().unwrap().to_string();
-            let hive_name = self.name.clone();
-            let me = Arc::new(self);
-
-            task::spawn(async move{
-                while let Some(event) = receive_chan.next().await {
-                    let send_chan = send_chan_clone.clone();
-                    match event {
-                        SocketEvent::NewPeer{name, stream} => {
-                            let pname = format!("CLIENT PEER {:?}", name);
-                            let mut p = Peer::new(pname, stream, send_chan, None);
-                            let mesage = props.as_str();
-                            println!("{:?} SEND PROPS: {:?}", &hive_name, mesage);
-                            p.send(mesage).await;
-
-                        },
-                        SocketEvent::Message{from, msg} => {
-                             println!("{:?} <<<< New Message: {:?}",&hive_name, msg);
-                            // gotMessage(msg, *me);
-                        },
-                    }
-                }
-                println!("done listener");
-            });
-            // send message loop
 
             // listen for connections loop
             let p = port.clone();
@@ -256,12 +231,33 @@ impl Hive {
                     _ => (),
                 }
 
-            }).await;
+            });
+
+            let props = self.property_config.as_ref().unwrap().to_string();
+            let hive_name = self.name.clone();
+
+            while let Some(event) = receive_chan.next().await {
+                let send_chan = send_chan_clone.clone();
+                match event {
+                    SocketEvent::NewPeer{name, stream} => {
+                        let pname = format!("CLIENT PEER {:?}", name);
+                        let mut p = Peer::new(pname, stream, send_chan, None);
+                        let mesage = props.as_str();
+                        println!("{:?} SEND PROPS: {:?}", &hive_name, mesage);
+                        p.send(mesage).await;
+
+                    },
+                    SocketEvent::Message{from, msg} => {
+                        println!("{:?} <<<< New Message: {:?}",&hive_name, msg);
+                        self.gotMessage(msg);
+                    },
+                }
+            }
 
         }
         return Result::Ok(true)
     }
-}
-fn gotMessage(msg:String, hive:&Hive){
-    println!("process message: {:?} = {:?}",hive.name,  msg)
+    fn gotMessage(&self, msg:String){
+        println!("process message: {:?} = {:?}",self.name,  msg)
+    }
 }
