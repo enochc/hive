@@ -10,7 +10,7 @@ fn main() {
 
     let (tx, rx): (UnboundedSender<i32>, UnboundedReceiver<i32>) = mpsc::unbounded();
     let mut txc = tx.clone();
-    let mut hive = Hive::new("examples/listen_3000.toml");
+    let mut hive = Hive::new("SERVE", "examples/listen_3000.toml");
     println!("PROPERTIES 1 {:?}", hive.properties);
     task::spawn(  async move{
         hive.run().await;
@@ -19,7 +19,7 @@ fn main() {
 
     let mut txc = tx.clone();
     task::spawn(async move {
-        let mut hive = Hive::new("examples/connect_3000.toml");
+        let mut hive = Hive::new("CLI","examples/connect_3000.toml");
         hive.run().await;
         println!("PROPERTIES 2 {:?}", hive.properties);
         txc.send(2).await;

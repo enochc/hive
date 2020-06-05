@@ -42,35 +42,38 @@ impl Peer {
               stream:TcpStream,
               sender: UnboundedSender<SocketEvent>,
               receiver: Option<UnboundedReceiver<SocketEvent>>) -> Peer {
-        let arcStr = Arc::new(stream);
+        let arc_str = Arc::new(stream);
         println!("<<< New Peer: {:?}", &name);
         let mut peer = Peer{
             name,
-            stream: arcStr.clone(),
+            stream: arc_str.clone(),
         };
 
         // Start read loop
         let send_clone = sender.clone();
-        let arcStr2 = arcStr.clone();
+        let arc_str2 = arc_str.clone();
         task::spawn(async move{
-            read_loop(send_clone, arcStr2).await;
+            read_loop(send_clone, arc_str2).await;
         });
 
        //write loop
-       let arcStr3 = arcStr.clone();
-       task::spawn(async move{
-           write_loop(receiver, arcStr3).await;
-       });
+       // let arc_str3 = arc_str.clone();
+       // task::spawn(async move{
+       //     write_loop(receiver, arc_str3).await;
+       // });
         
         return peer;
     }
-    pub async fn send(&mut self, msg: String){
-        block_on(send(self.stream.clone(), msg));
+    pub async fn send(& self, msg: &str){
+        let stream = self.stream.clone();
+        println!("<<< send to streem 1: {:?}, {:?}", stream.peer_addr().unwrap().to_string(), msg);
+        block_on(send(stream, msg));
     }
 
 }
-async fn send(stream: Arc<TcpStream>, message: String) -> Result<bool, std::io::Error> {
-    println!("<<< wrighting to peer: {:?}", message);
+async fn send(stream: Arc<TcpStream>, message: &str) -> Result<bool, std::io::Error> {
+    let peer_name = stream.peer_addr().unwrap().to_string();
+    println!("<<< send to streem 2: {:?}, {:?}", peer_name, message);
     let mut bytes = Vec::new();
     let msg_length: u32 = message.len() as u32;
     bytes.append(&mut msg_length.to_be_bytes().to_vec());
@@ -78,7 +81,7 @@ async fn send(stream: Arc<TcpStream>, message: String) -> Result<bool, std::io::
     // let mut stream = self.streem;
     let mut stream = &*stream;
     let n = stream.write(&bytes).await?;
-    println!("<<< written to peer: {:?}", n);
+    println!("<<< written to peer: {:?}, {:?}", peer_name, n);
     Result::Ok(true)
 }
 /*
@@ -86,27 +89,31 @@ async fn send(stream: Arc<TcpStream>, message: String) -> Result<bool, std::io::
  message - 4 bytes consisting of message size, then the following x bytes are the message
  so when reading, the first 4 bytes are read to determine the message size, then we read that many
  more bytes to complete the message
- */
-async fn write_loop(receiver: Option<UnboundedReceiver<SocketEvent>>, stream: Arc<TcpStream>){
-    match receiver {
-        Some(mut r) => {
-            task::spawn(async move{
-                while let Some(event) = r.next().await {
-                    match event {
-                        SocketEvent::Message{from, msg} => {
-                            send(stream.clone(),msg).await;
-                        },
-                        _ => {
-                            println!("<<<< WHY AM I HERE?: {:?}", event);
-                        }
-                    }
 
-                }
-            });
-        },
-        _ => {}
-    }
-}
+ properties: |p|=(properties)
+ */
+// TODO, why do I not need this? why is writing to the stream
+// async fn write_loop(receiver: Option<UnboundedReceiver<SocketEvent>>, stream: Arc<TcpStream>){
+//     match receiver {
+//         Some(mut r) => {
+//             task::spawn(async move{
+//                 while let Some(event) = r.next().await {
+//                     match event {
+//                         SocketEvent::Message{from, msg} => {
+//                             println!("<<< send to streem 3: {:?}, {:?}", stream.peer_addr().unwrap().to_string(), msg);
+//                             send(stream.clone(),msg.as_ref()).await;
+//                         },
+//                         _ => {
+//                             println!("<<<< WHY AM I HERE?: {:?}", event);
+//                         }
+//                     }
+//
+//                 }
+//             });
+//         },
+//         _ => {}
+//     }
+// }
 async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>){
     let mut reader = BufReader::new(&*stream);
     loop {
@@ -125,7 +132,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
                             Ok(addr) => addr.to_string(),
                             _ => String::from("no peer address"),
                         };
-                        println!("read: {:?}", msg);
+                        println!("sending from {:?}: {:?}", from, msg);
                         let se = SocketEvent::Message {
                             from,
                             msg

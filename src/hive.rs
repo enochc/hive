@@ -27,6 +27,7 @@ use toml;
 
 use crate::peer::{SocketEvent, Peer};
 use crate::property::Property;
+use std::error::Error;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
@@ -40,10 +41,21 @@ pub struct Hive {
     connect_to: Option<Box<str>>,
     listen_port: Option<Box<str>>,
     property_config: Option<toml::Value>,
+    pub name: Box<str>,
     // peers: HashMap<String, Arc<TcpStream>>,
 }
 
 static mut peers: Vec<Peer> = Vec::new();
+
+unsafe fn addPeer(peer:Peer) -> bool{
+    for p in &peers {
+        if p.name == peer.name {
+            return false;
+        }
+    }
+    peers.push(peer);
+    true
+}
 
 
 impl Hive {
@@ -51,7 +63,7 @@ impl Hive {
     //     self.peers.insert(name, stream);
     // }
 
-    pub fn new(toml_path: &str) -> Hive{
+    pub fn new(name: &str, toml_path: &str) -> Hive{
         let foo: String = fs::read_to_string(toml_path).unwrap().parse().unwrap();
         let config: toml::Value = toml::from_str(&foo).unwrap();
 
@@ -79,6 +91,7 @@ impl Hive {
             connect_to,
             listen_port,
             property_config: None,
+            name: String::from(name).into_boxed_str(),
             // peers: HashMap::new()
         };
 
@@ -125,7 +138,7 @@ impl Hive {
                     println!("<<Failed to Set Property: {:?}", key)
                 }
             };
-            println!("||{:?} == {:?}",key, val);
+            // println!("||{:?} == {:?}",key, val);
         }
     }
 
@@ -153,34 +166,15 @@ impl Hive {
                         name: peer.to_string(),
                         stream,
                     };
+                    println!("********* SOCKET EVENT: {:?}", se);
                     sender.clone().send(se).await;
                 },
                 Err(e) => eprintln!("No peer address: {:?}", e),
             }
         }
+
+        print!("**************************************** HANGUP");
         Ok(())
-    }
-
-
-
-
-    #[allow(irrefutable_let_patterns)]
-    pub async fn connect(address: &str) -> Result<bool> {
-        if let mut socket = TcpStream::connect(address).await? {
-            println!("Connected to the server!");
-            let msg = "all That";
-            let mut bytes = Vec::new();
-            let msg_length: u32 = msg.len() as u32;
-            bytes.append(&mut msg_length.to_be_bytes().to_vec());
-            bytes.append(&mut msg.as_bytes().to_vec());
-            let n = socket.write(&bytes).await?;
-            println!("<<< written {:?}", n);
-            sleep(Duration::from_secs(1));
-
-        } else {
-            println!("Couldn't connect to server...");
-        }
-        Result::Ok(true)
     }
 
     pub async fn run(& self) -> Result<bool> {
@@ -188,57 +182,65 @@ impl Hive {
         // I'm a client
         if !self.connect_to.is_none() {
             println!("Connect To: {:?}", self.connect_to);
-            // let (tx,rx): (Sender<i32>, Receiver<i32>) = mpsc::unbounded();
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
-            let (mut sendChan,mut receiveChan) = mpsc::unbounded();
+            let (mut send_chan,mut receive_chan) = mpsc::unbounded();
+            let hive_name = self.name.clone();
             task::spawn(async move{
                 if let mut stream = TcpStream::connect(address).await {
                     match stream {
-                        Ok(s) => {
+                        Ok(mut s) => {
                             match s.peer_addr() {
                                 Ok(peer) => {
-                                    let mut sc2 = sendChan.clone();
-                                    let mut p = Peer::new(peer.to_string(), s, sendChan, Some(receiveChan));
-                                    // p.send(String::from("all That")).await;
-                                    sc2.send(SocketEvent::Message {
-                                        from: String::from("mr tight"),
-                                        msg: String::from("CHANNNEL SEND")
-                                    }).await;
+                                    let name = format!("SERVER PEER {:?}", peer.to_string());
+                                    let mut p = Peer::new(name, s, send_chan, None);
+                                    p.send("Hi from client").await;
                                 },
                                 Err(e) => eprintln!("No peer address: {:?}", e),
                             }
                         },
                         _ => {eprintln!("Nope")}
                     }
-
+                }
+            });
+            // listen for messages from server
+            task::spawn(async move {
+                while let Some(event) = receive_chan.next().await {
+                    match event {
+                        SocketEvent::NewPeer{name, stream} => {},
+                        SocketEvent::Message{from, msg} => {
+                            println!("{:?} <<<< New Message from server: {:?}",&hive_name, msg);
+                        },
+                    }
                 }
             }).await;
-
         }
 
         // I'm a server
         if !self.listen_port.is_none() {
-            // let mut peers: HashMap<String, Arc<TcpStream>> = HashMap::new();
             let port = self.listen_port.as_ref().unwrap().to_string().clone();
 
-            println!("Listening for connections on {:?}", self.listen_port);
-            let (sendChan,mut receiveChan) = mpsc::unbounded();
-            let sendChanClone = sendChan.clone();
-            // let mut peers = &self.peers;
-            // receive SocketEvent loop
+            println!("{:?} Listening for connections on {:?}",self.name, self.listen_port);
+            let (send_chan,mut receive_chan) = mpsc::unbounded();
+            let send_chan_clone = send_chan.clone();
+            let props = self.property_config.as_ref().unwrap().to_string();
+            let hive_name = self.name.clone();
+            let me = Arc::new(self);
+
             task::spawn(async move{
-                println!("running listener");
-                while let Some(event) = receiveChan.next().await {
-                    let sendChan = sendChanClone.clone();
+                while let Some(event) = receive_chan.next().await {
+                    let send_chan = send_chan_clone.clone();
                     match event {
                         SocketEvent::NewPeer{name, stream} => {
-                            let mut p = Peer::new(name, stream, sendChan, None);
-                            p.send(String::from("what now? ")).await;
-                            unsafe {peers.push(p);}
+                            let pname = format!("CLIENT PEER {:?}", name);
+                            let mut p = Peer::new(pname, stream, send_chan, None);
+                            let mesage = props.as_str();
+                            println!("{:?} SEND PROPS: {:?}", &hive_name, mesage);
+                            p.send(mesage).await;
 
                         },
                         SocketEvent::Message{from, msg} => {
-                             println!("<<<< New Message: {:?}", msg)
+                             println!("{:?} <<<< New Message: {:?}",&hive_name, msg);
+                            // gotMessage(msg, *me);
                         },
                     }
                 }
@@ -249,7 +251,7 @@ impl Hive {
             // listen for connections loop
             let p = port.clone();
             task::spawn( async move {
-                match Hive::accept_loop(sendChan.clone(),p).await {
+                match Hive::accept_loop(send_chan.clone(), p).await {
                     Err(e) => eprintln!("Failed accept loop: {:?}",e),
                     _ => (),
                 }
@@ -259,4 +261,7 @@ impl Hive {
         }
         return Result::Ok(true)
     }
+}
+fn gotMessage(msg:String, hive:&Hive){
+    println!("process message: {:?} = {:?}",hive.name,  msg)
 }
