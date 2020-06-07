@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use async_std::{
     io::BufReader,
     net::{TcpListener, TcpStream, ToSocketAddrs},
@@ -8,6 +9,7 @@ use async_std::{
 use futures::executor::block_on;
 use failure::_core::time::Duration;
 use std::thread::sleep;
+
 
 fn main(){
     let five = 5;

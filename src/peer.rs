@@ -1,14 +1,13 @@
-use futures::channel::mpsc;
+// use futures::channel::mpsc;
 use futures::channel::mpsc::{UnboundedSender, UnboundedReceiver};
-use futures::{SinkExt, StreamExt};
+use futures::{SinkExt};
 use async_std::{
     io::BufReader,
-    net::{TcpListener, TcpStream, ToSocketAddrs},
+    net::{TcpListener, TcpStream},
     prelude::*,
     task,
     sync::Arc,
 };
-use std::borrow::BorrowMut;
 use futures::executor::block_on;
 
 #[derive(Debug)]
@@ -41,10 +40,10 @@ impl Peer {
    pub fn new(name:String,
               stream:TcpStream,
               sender: UnboundedSender<SocketEvent>,
-              receiver: Option<UnboundedReceiver<SocketEvent>>) -> Peer {
+              _receiver: Option<UnboundedReceiver<SocketEvent>>) -> Peer {
         let arc_str = Arc::new(stream);
         println!("<<< New Peer: {:?}", &name);
-        let mut peer = Peer{
+        let peer = Peer{
             name,
             stream: arc_str.clone(),
         };
@@ -67,7 +66,7 @@ impl Peer {
     pub async fn send(& self, msg: &str){
         let stream = self.stream.clone();
         println!("<<< send to streem 1: {:?}, {:?}", stream.peer_addr().unwrap().to_string(), msg);
-        block_on(send(stream, msg));
+        block_on(send(stream, msg)).expect("failed to send msg on stream");
     }
 
 }
@@ -138,7 +137,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
                             msg
                         };
 
-                        sender.send(se).await;
+                        sender.send(se).await.expect("Failed to send message");
                     },
                     _ => eprintln!("Failed to read message")
                 }

@@ -22,7 +22,7 @@ fn main() {
     "#;
     print!("{:?}",props_str);
 
-    let mut hive = Hive::newFromStr("SERVE", props_str);
+    let mut hive = Hive::new_from_str("SERVE", props_str);
     println!("PROPERTIES 1 {:?}", hive.properties);
     task::spawn(  async move{
         hive.run().await;
@@ -31,7 +31,7 @@ fn main() {
 
     let mut txc = tx.clone();
     task::spawn(async move {
-        let mut hive = Hive::newFromStr("CLI", "connect = \"127.0.0.1:3000\"");
+        let mut hive = Hive::new_from_str("CLI", "connect = \"127.0.0.1:3000\"");
         hive.run().await;
         println!("PROPERTIES 2 {:?}", hive.properties);
         txc.send(2).await;

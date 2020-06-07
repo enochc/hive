@@ -45,15 +45,15 @@ pub struct Hive {
     // peers: HashMap<String, Arc<TcpStream>>,
 }
 
-static mut peers: Vec<Peer> = Vec::new();
+static mut PEERS: Vec<Peer> = Vec::new();
 
-unsafe fn addPeer(peer:Peer) -> bool{
-    for p in &peers {
+unsafe fn add_peer(peer:Peer) -> bool{
+    for p in &PEERS {
         if p.name == peer.name {
             return false;
         }
     }
-    peers.push(peer);
+    PEERS.push(peer);
     true
 }
 
@@ -63,7 +63,7 @@ impl Hive {
     //     self.peers.insert(name, stream);
     // }
 
-    pub fn newFromStr(name: &str, properties: &str) -> Hive{
+    pub fn new_from_str(name: &str, properties: &str) -> Hive{
         let config: toml::Value = toml::from_str(properties).unwrap();
         // Hive::parse_properties(&config)
         let connect_to = match config.get("connect") {
@@ -79,9 +79,9 @@ impl Hive {
             _ => None
         };
 
-        let mut props:HashMap::<String, Property> = HashMap::new();
+        let props:HashMap::<String, Property> = HashMap::new();
 
-        let (tx,mut rx) = mpsc::unbounded();
+        let (tx, rx) = mpsc::unbounded();
         let mut hive = Hive {
             properties: props,
             sender: tx,
@@ -105,7 +105,7 @@ impl Hive {
 
     pub fn new(name: &str, toml_path: &str) -> Hive{
         let foo: String = fs::read_to_string(toml_path).unwrap().parse().unwrap();
-        Hive::newFromStr(name, foo.as_str())
+        Hive::new_from_str(name, foo.as_str())
     }
 
     pub fn get_mut_property(&mut self, key: &str) -> Option<&mut Property> {
@@ -120,7 +120,7 @@ impl Hive {
     fn parse_properties(&mut self, properties: &toml::Value) {
         let p_val = properties.as_table().unwrap();
         self.property_config = Some(properties.clone());
-        let mut props = &mut self.properties;
+        let props = &mut self.properties;
         for key in p_val.keys() {
             let val = p_val.get(key);
             match val {
@@ -170,7 +170,7 @@ impl Hive {
                         stream,
                     };
                     println!("********* SOCKET EVENT: {:?}", se);
-                    sender.clone().send(se).await;
+                    sender.clone().send(se).await.expect("failed to send message");
                 },
                 Err(e) => eprintln!("No peer address: {:?}", e),
             }
@@ -186,16 +186,16 @@ impl Hive {
         if !self.connect_to.is_none() {
             println!("Connect To: {:?}", self.connect_to);
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
-            let (mut send_chan,mut receive_chan) = mpsc::unbounded();
-            let hive_name = self.name.clone();
+            let (send_chan,mut receive_chan) = mpsc::unbounded();
+            // let hive_name = self.name.clone();
             task::spawn(async move{
-                if let mut stream = TcpStream::connect(address).await {
+                if let stream = TcpStream::connect(address).await {
                     match stream {
-                        Ok(mut s) => {
+                        Ok( s) => {
                             match s.peer_addr() {
                                 Ok(peer) => {
                                     let name = format!("SERVER PEER {:?}", peer.to_string());
-                                    let mut p = Peer::new(name, s, send_chan, None);
+                                    let p = Peer::new(name, s, send_chan, None);
                                     p.send("Hi from client").await;
                                 },
                                 Err(e) => eprintln!("No peer address: {:?}", e),
@@ -210,7 +210,7 @@ impl Hive {
                 match event {
                     SocketEvent::NewPeer{name, stream} => {},
                     SocketEvent::Message{from, msg} => {
-                        self.gotMessage(msg);
+                        self.got_message(msg);
                     },
                 }
             }
@@ -242,13 +242,13 @@ impl Hive {
                 match event {
                     SocketEvent::NewPeer{name, stream} => {
                         let pname = format!("CLIENT PEER {:?}", name);
-                        let mut p = Peer::new(pname, stream, send_chan, None);
-                        self.sendProperties(&p).await;
+                        let p = Peer::new(pname, stream, send_chan, None);
+                        self.send_properties(&p).await;
 
                     },
                     SocketEvent::Message{from, msg} => {
                         println!("{:?} <<<< New Message: {:?}",&hive_name, msg);
-                        self.gotMessage(msg);
+                        self.got_message(msg);
                     },
                 }
             }
@@ -256,17 +256,17 @@ impl Hive {
         }
         return Result::Ok(true)
     }
-    fn propertiesStr(&self) -> String {
+    fn properties_str(&self) -> String {
         format!("{:?}", self.properties)
     }
 
-    async fn sendProperties(&self, peer:&Peer){
+    async fn send_properties(&self, peer:&Peer){
         let str = toml::to_string(self.property_config.as_ref().unwrap()).unwrap();
         let mut message = String::from("|P|");
         message.push_str(&str);
         peer.send(message.as_str()).await;
     }
-    fn gotMessage(&mut self, msg:String){
+    fn got_message(&mut self, msg:String){
         println!("process message: {:?} = {:?}",self.name,  msg);
         match &msg[0..3]{
             "|P|" => {
@@ -274,7 +274,7 @@ impl Hive {
                 let (_,rest) = msg.split_at(3);
                 let value:toml::Value = toml::from_str(rest).unwrap();
                 self.parse_properties(&value);
-                println!("properties: {:?}", self.propertiesStr());
+                println!("properties: {:?}", self.properties_str());
 
             },
             _ => println!("got message {:?}", msg)
