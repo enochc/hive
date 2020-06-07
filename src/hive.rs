@@ -63,10 +63,8 @@ impl Hive {
     //     self.peers.insert(name, stream);
     // }
 
-    pub fn new(name: &str, toml_path: &str) -> Hive{
-        let foo: String = fs::read_to_string(toml_path).unwrap().parse().unwrap();
-        let config: toml::Value = toml::from_str(&foo).unwrap();
-
+    pub fn newFromStr(name: &str, properties: &str) -> Hive{
+        let config: toml::Value = toml::from_str(properties).unwrap();
         // Hive::parse_properties(&config)
         let connect_to = match config.get("connect") {
             Some(v) => {
@@ -103,6 +101,11 @@ impl Hive {
             }
         };
         return hive;
+    }
+
+    pub fn new(name: &str, toml_path: &str) -> Hive{
+        let foo: String = fs::read_to_string(toml_path).unwrap().parse().unwrap();
+        Hive::newFromStr(name, foo.as_str())
     }
 
     pub fn get_mut_property(&mut self, key: &str) -> Option<&mut Property> {
@@ -253,6 +256,10 @@ impl Hive {
         }
         return Result::Ok(true)
     }
+    fn propertiesStr(&self) -> String {
+        format!("{:?}", self.properties)
+    }
+
     async fn sendProperties(&self, peer:&Peer){
         let str = toml::to_string(self.property_config.as_ref().unwrap()).unwrap();
         let mut message = String::from("|P|");
@@ -267,6 +274,7 @@ impl Hive {
                 let (_,rest) = msg.split_at(3);
                 let value:toml::Value = toml::from_str(rest).unwrap();
                 self.parse_properties(&value);
+                println!("properties: {:?}", self.propertiesStr());
 
             },
             _ => println!("got message {:?}", msg)

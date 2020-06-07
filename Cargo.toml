@@ -19,3 +19,13 @@ serde_derive = "1.0"
 spmc = "0.3.0"
 #async-std = "1.6.0"
 async-std = { git = 'https://github.com/stjepang/async-std', branch = 'new-scheduler' }
+
+
+[lib]
+name = "hive"
+# this is needed to build for iOS and Android.
+crate-type = ["staticlib", "cdylib", "lib"]
+
+# this dependency is only needed for Android.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.13.1", default-features = false }
