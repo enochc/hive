@@ -42,7 +42,6 @@ impl Peer {
               sender: UnboundedSender<SocketEvent>,
               _receiver: Option<UnboundedReceiver<SocketEvent>>) -> Peer {
         let arc_str = Arc::new(stream);
-        println!("<<< New Peer: {:?}", &name);
         let peer = Peer{
             name,
             stream: arc_str.clone(),
@@ -65,14 +64,12 @@ impl Peer {
     }
     pub async fn send(& self, msg: &str){
         let stream = self.stream.clone();
-        println!("<<< send to streem 1: {:?}, {:?}", stream.peer_addr().unwrap().to_string(), msg);
         block_on(send(stream, msg)).expect("failed to send msg on stream");
     }
 
 }
 async fn send(stream: Arc<TcpStream>, message: &str) -> Result<bool, std::io::Error> {
     let peer_name = stream.peer_addr().unwrap().to_string();
-    println!("<<< send to streem 2: {:?}, {:?}", peer_name, message);
     let mut bytes = Vec::new();
     let msg_length: u32 = message.len() as u32;
     bytes.append(&mut msg_length.to_be_bytes().to_vec());
@@ -80,7 +77,6 @@ async fn send(stream: Arc<TcpStream>, message: &str) -> Result<bool, std::io::Er
     // let mut stream = self.streem;
     let mut stream = &*stream;
     let n = stream.write(&bytes).await?;
-    println!("<<< written to peer: {:?}, {:?}", peer_name, n);
     Result::Ok(true)
 }
 /*
@@ -122,7 +118,6 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
         while let Ok(read) = reader.read(&mut size_buff).await {
             if read > 0 {
                 let message_size = as_u32_be(&size_buff);
-                println!("SIZE: {:?}", message_size);
                 let mut size_buff = vec![0u8; message_size as usize];
                 match reader.read_exact(&mut size_buff).await {
                     Ok(_t) => {
@@ -131,7 +126,6 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
                             Ok(addr) => addr.to_string(),
                             _ => String::from("no peer address"),
                         };
-                        println!("sending from {:?}: {:?}", from, msg);
                         let se = SocketEvent::Message {
                             from,
                             msg

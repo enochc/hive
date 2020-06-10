@@ -83,7 +83,6 @@ impl Hive {
 
     pub fn new_from_str(name: &str, properties: &str) -> Hive{
         let config: toml::Value = toml::from_str(properties).unwrap();
-        // Hive::parse_properties(&config)
         let connect_to = match config.get("connect") {
             Some(v) => {
                 Some(String::from(v.as_str().unwrap()).into_boxed_str())
@@ -157,7 +156,6 @@ impl Hive {
     fn parse_properties(&mut self, properties: &toml::Value) {
         let p_val = properties.as_table().unwrap();
         self.property_config = Some(properties.clone());
-        // let props = &mut self.properties;
         for key in p_val.keys() {
             let val = p_val.get(key);
             match val {
@@ -177,7 +175,6 @@ impl Hive {
                     println!("<<Failed to Set Property: {:?}", key)
                 }
             };
-            // println!("||{:?} == {:?}",key, val);
         }
     }
 
@@ -189,9 +186,6 @@ impl Hive {
             message [message size, message]
                 message size = u32 unsigned 32 bite number, 4 bytes in length
      */
-
-
-
 
     async fn accept_loop(sender: Sender<SocketEvent>, addr: impl ToSocketAddrs) -> Result<()> {
         let listener = TcpListener::bind(addr).await?;
@@ -306,7 +300,6 @@ impl Hive {
                 let (_,rest) = msg.split_at(3);
                 let value:toml::Value = toml::from_str(rest).unwrap();
                 self.parse_properties(&value);
-                println!("properties: {:?}", self.properties_str());
 
             },
             _ => println!("got message {:?}", msg)

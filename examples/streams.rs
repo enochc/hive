@@ -1,5 +1,5 @@
 
-// use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
+use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
 use hive::hive::Hive;
 use async_std::task;
 
@@ -40,10 +40,5 @@ fn main() {
 
     server_hand.send_property("THE OTHER THING");
     task::block_on(client_hive.run());
-
-
-
-
-
 
 }
