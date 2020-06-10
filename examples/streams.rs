@@ -30,12 +30,18 @@ fn main() {
     });
 
     let mut txc = tx.clone();
+    let mut client_hive = Hive::new_from_str("CLI", "connect = \"127.0.0.1:3000\"");
+
+    client_hive.get_mut_property("thermostatTarget_temp").unwrap().on_changed.connect(|value|{
+        println!("|||| <<<< |||| target_temp: {:?}", value);
+    });
+
     task::spawn(async move {
-        let mut hive = Hive::new_from_str("CLI", "connect = \"127.0.0.1:3000\"");
-        hive.run().await;
-        println!("PROPERTIES 2 {:?}", hive.properties);
+        client_hive.run().await;
+        println!("PROPERTIES 2 {:?}", client_hive.properties);
         txc.send(2).await;
     });
+
 
 
     async fn doit(mut receiver: UnboundedReceiver<i32>) {
@@ -44,6 +50,6 @@ fn main() {
         }
     };
     task::block_on(doit(rx));
-    println!("Process Done");
+
 
 }

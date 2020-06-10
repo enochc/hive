@@ -26,6 +26,12 @@ impl fmt::Debug for Property {
     }
 }
 impl Property {
+    pub fn new() -> Property{
+        return Property{
+            value: None,
+            on_changed: Default::default()
+        }
+    }
     pub fn from_str(val: &str) -> Property {
             return Property{
             value: Some(PropertyType::STRING(String::from(val).into_boxed_str())),
@@ -72,6 +78,10 @@ impl Property {
     pub fn set_int(&mut self, s: u32){
         let p = PropertyType::INT(s);
         self.set(p);
+    }
+
+    pub fn set_from_prop(&mut self, v:&Property){
+        self.set(v.value.as_ref().unwrap().clone())
     }
 
     fn set(&mut self, v: PropertyType)

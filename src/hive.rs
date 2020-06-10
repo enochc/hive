@@ -28,6 +28,7 @@ use toml;
 use crate::peer::{SocketEvent, Peer};
 use crate::property::Property;
 use std::error::Error;
+use std::borrow::BorrowMut;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
@@ -109,33 +110,44 @@ impl Hive {
     }
 
     pub fn get_mut_property(&mut self, key: &str) -> Option<&mut Property> {
-        println!("properties: {:?}", self.properties.keys());
-        let op = self.properties.get_mut(key);
+        if !self.properties.contains_key(key){
+            let mut p = Property::new();
+            self.add_property(key, p);
+        }
 
+        let op = self.properties.get_mut(key);
         return op
     }
+    fn has_property(&self, key:&str)->bool{
+        return self.properties.contains_key(key)
+    }
 
-
+    fn add_property(&mut self, p_name: &str, property:Property ){
+        if self.has_property(p_name) {
+            self.get_mut_property(p_name).unwrap().set_from_prop(&property);
+        }else {
+            self.properties.borrow_mut().insert(String::from(p_name), property);
+        }
+    }
 
     fn parse_properties(&mut self, properties: &toml::Value) {
         let p_val = properties.as_table().unwrap();
         self.property_config = Some(properties.clone());
-        let props = &mut self.properties;
+        // let props = &mut self.properties;
         for key in p_val.keys() {
             let val = p_val.get(key);
             match val {
                 Some(v) if v.is_str() => {
-                    props.insert(String::from(key), Property::from_str(v.as_str().unwrap()));
-                    // props[key] = ;
+                    self.add_property(key, Property::from_str(v.as_str().unwrap()))
                 },
                 Some(v) if v.is_integer() => {
-                    props.insert(String::from(key), Property::from_int(v.as_integer().unwrap()));
+                    self.add_property(key, Property::from_int(v.as_integer().unwrap()))
                 },
                 Some(v) if v.is_bool() => {
-                    props.insert(String::from(key), Property::from_bool(v.as_bool().unwrap()));
+                    self.add_property(key, Property::from_bool(v.as_bool().unwrap()));
                 },
                 Some(v) if v.is_float() => {
-                    props.insert(String::from(key), Property::from_float(v.as_float().unwrap()));
+                    self.add_property(key, Property::from_float(v.as_float().unwrap()));
                 },
                 _ => {
                     println!("<<Failed to Set Property: {:?}", key)
