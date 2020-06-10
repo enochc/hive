@@ -3,7 +3,7 @@ use futures::channel::mpsc::{UnboundedSender, UnboundedReceiver};
 use futures::{SinkExt};
 use async_std::{
     io::BufReader,
-    net::{TcpListener, TcpStream},
+    net::{ TcpStream},
     prelude::*,
     task,
     sync::Arc,

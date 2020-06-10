@@ -3,8 +3,10 @@ use serde_derive::Deserialize;
 use std::convert::TryFrom;
 use futures::executor::block_on;
 use std::fmt;
+use std::borrow::Borrow;
 
-
+//TODO I may not need Property at all, but just PropertyType renamed to propert,
+// instead of all the from methods, I could have as methods and/or just use serde
 #[derive(PartialEq, Clone, Debug, Deserialize)]
 pub enum PropertyType {
     REAL(i64),
@@ -14,56 +16,46 @@ pub enum PropertyType {
     STRING(Box<str>),
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct Property
 {
-    value: Option<PropertyType>,
+    name: Box<str>,
+    pub value: Option<PropertyType>,
     pub on_changed: Signal<Option<PropertyType>>,
 }
 impl fmt::Debug for Property {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(&self.value, f)
+        write!(f, "({:?}, {:?})", self.name, self.value)
     }
 }
 impl Property {
-    pub fn new() -> Property{
+    pub fn get_name(&self) -> &str {
+        self.name.borrow()
+    }
+    pub fn new(name: &str, val: Option<PropertyType>) -> Property{
         return Property{
-            value: None,
+            name:Box::from(name),
+            value: val,
             on_changed: Default::default()
         }
     }
-    pub fn from_str(val: &str) -> Property {
-            return Property{
-            value: Some(PropertyType::STRING(String::from(val).into_boxed_str())),
-            on_changed: Default::default(),
-        };
+    pub fn from_str(name: &str, val: &str) -> Property {
+        Property::new(name, Some(PropertyType::STRING(String::from(val).into_boxed_str())))
     }
-    pub fn from_bool(val: bool) -> Property {
-        return Property{
-            value: Some(PropertyType::BOOL(val)),
-            on_changed: Default::default(),
-        };
+    pub fn from_bool(name: &str, val: bool) -> Property {
+        Property::new(name, Some(PropertyType::BOOL(val)))
     }
-    pub fn from_float(val: f64) -> Property {
-        return Property{
-            value: Some(PropertyType::FLOAT(val)),
-            on_changed: Default::default(),
-        };
+    pub fn from_float(name: &str, val: f64) -> Property {
+        Property::new(name, Some(PropertyType::FLOAT(val)))
     }
-    pub fn from_int(val: i64) -> Property {
+    pub fn from_int(name: &str, val: i64) -> Property {
         let small_int = u32::try_from(val);
         return match small_int {
             Ok(si) => {
-                Property {
-                    value: Some(PropertyType::INT(si)),
-                    on_changed: Default::default(),
-                }
+                Property::new(name, Some(PropertyType::INT(si)))
             },
             _ => {
-                Property {
-                    value: Some(PropertyType::REAL(val)),
-                    on_changed: Default::default(),
-                }
+                Property::new(name, Some(PropertyType::REAL(val)))
             }
         };
     }
@@ -79,12 +71,16 @@ impl Property {
         let p = PropertyType::INT(s);
         self.set(p);
     }
+    pub fn set_float(&mut self, s: f64){
+        let p = PropertyType::FLOAT(s);
+        self.set(p);
+    }
 
     pub fn set_from_prop(&mut self, v:&Property){
         self.set(v.value.as_ref().unwrap().clone())
     }
 
-    fn set(&mut self, v: PropertyType)
+    pub fn set(&mut self, v: PropertyType)
         where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
 

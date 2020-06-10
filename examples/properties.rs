@@ -6,7 +6,7 @@ use hive::property::Property;
 
 fn main() {
 
-    let mut p = Property::from_int(4);
+    let mut p = Property::from_int("test",4);
 
     p.on_changed.connect(|v|{
         println!("Inside signal: {:?}", v);

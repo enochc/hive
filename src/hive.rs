@@ -28,22 +28,38 @@ use toml;
 use crate::peer::{SocketEvent, Peer};
 use crate::property::Property;
 use std::error::Error;
-use std::borrow::BorrowMut;
+use std::borrow::{BorrowMut};
+use futures::executor::block_on;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
-#[derive(Debug)]
+// #[derive(Debug)]
 pub struct Hive {
     pub properties: HashMap<String, Property>,
-    sender: Sender<String>,
-    receiver: Receiver<String>,
+    sender: Sender<SocketEvent>,
+    receiver: Receiver<SocketEvent>,
     connect_to: Option<Box<str>>,
     listen_port: Option<Box<str>>,
     property_config: Option<toml::Value>,
     pub name: Box<str>,
     // peers: HashMap<String, Arc<TcpStream>>,
+}
+
+#[derive(Clone)]
+pub struct Handler {
+    sender: Sender<SocketEvent>
+}
+
+//TODO instead of returning a Hive object, I should make that private and only return a handler
+impl Handler {
+    pub fn send_property(&mut self, msg:&str) {
+        block_on(self.sender.send(SocketEvent::Message {
+            from: String::from("blah blah blah"),
+            msg: String::from(msg),
+        })).expect("failed to send property");
+    }
 }
 
 static mut PEERS: Vec<Peer> = Vec::new();
@@ -60,6 +76,7 @@ unsafe fn add_peer(peer:Peer) -> bool{
 
 
 impl Hive {
+
     // fn add_peer(&mut self, name:String, stream: Arc<TcpStream>){
     //     self.peers.insert(name, stream);
     // }
@@ -82,11 +99,11 @@ impl Hive {
 
         let props:HashMap::<String, Property> = HashMap::new();
 
-        let (tx, rx) = mpsc::unbounded();
+        let (send_chan,mut receive_chan) = mpsc::unbounded();
         let mut hive = Hive {
             properties: props,
-            sender: tx,
-            receiver: rx,
+            sender: send_chan,
+            receiver: receive_chan,
             connect_to,
             listen_port,
             property_config: None,
@@ -104,6 +121,12 @@ impl Hive {
         return hive;
     }
 
+    pub fn get_handler(&self) -> Handler {
+        return Handler {
+            sender: self.sender.clone(),
+        }
+    }
+
     pub fn new(name: &str, toml_path: &str) -> Hive{
         let foo: String = fs::read_to_string(toml_path).unwrap().parse().unwrap();
         Hive::new_from_str(name, foo.as_str())
@@ -111,8 +134,8 @@ impl Hive {
 
     pub fn get_mut_property(&mut self, key: &str) -> Option<&mut Property> {
         if !self.properties.contains_key(key){
-            let mut p = Property::new();
-            self.add_property(key, p);
+            let mut p = Property::new(key, None);
+            self.add_property(p);
         }
 
         let op = self.properties.get_mut(key);
@@ -122,11 +145,12 @@ impl Hive {
         return self.properties.contains_key(key)
     }
 
-    fn add_property(&mut self, p_name: &str, property:Property ){
-        if self.has_property(p_name) {
-            self.get_mut_property(p_name).unwrap().set_from_prop(&property);
+    fn add_property(&mut self, property:Property ){
+        let name = property.get_name();
+        if self.has_property(name) {
+            self.get_mut_property(name).unwrap().set_from_prop(&property);
         }else {
-            self.properties.borrow_mut().insert(String::from(p_name), property);
+            self.properties.borrow_mut().insert(String::from(name), property);
         }
     }
 
@@ -138,16 +162,16 @@ impl Hive {
             let val = p_val.get(key);
             match val {
                 Some(v) if v.is_str() => {
-                    self.add_property(key, Property::from_str(v.as_str().unwrap()))
+                    self.add_property(Property::from_str(key,v.as_str().unwrap()))
                 },
                 Some(v) if v.is_integer() => {
-                    self.add_property(key, Property::from_int(v.as_integer().unwrap()))
+                    self.add_property(Property::from_int(key,v.as_integer().unwrap()))
                 },
                 Some(v) if v.is_bool() => {
-                    self.add_property(key, Property::from_bool(v.as_bool().unwrap()));
+                    self.add_property(Property::from_bool(key,v.as_bool().unwrap()));
                 },
                 Some(v) if v.is_float() => {
-                    self.add_property(key, Property::from_float(v.as_float().unwrap()));
+                    self.add_property(Property::from_float(key,v.as_float().unwrap()));
                 },
                 _ => {
                     println!("<<Failed to Set Property: {:?}", key)
@@ -192,14 +216,13 @@ impl Hive {
         Ok(())
     }
 
-    pub async fn run(&mut self) -> Result<bool> {
-
+    pub async fn run(& mut self) -> Result<bool> {
         // I'm a client
         if !self.connect_to.is_none() {
             println!("Connect To: {:?}", self.connect_to);
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
-            let (send_chan,mut receive_chan) = mpsc::unbounded();
-            // let hive_name = self.name.clone();
+
+            let send_chan = self.sender.clone();
             task::spawn(async move{
                 if let stream = TcpStream::connect(address).await {
                     match stream {
@@ -218,12 +241,14 @@ impl Hive {
                 }
             });
             // listen for messages from server
-            while let Some(event) = receive_chan.next().await {
+            while let Some(event) = self.receiver.next().await {
                 match event {
-                    SocketEvent::NewPeer{name, stream} => {},
+                    // Clients should never receive a new peer message
+                    // SocketEvent::NewPeer{name, stream} => {},
                     SocketEvent::Message{from, msg} => {
                         self.got_message(msg);
                     },
+                    _ => {}
                 }
             }
         }
@@ -231,11 +256,8 @@ impl Hive {
         // I'm a server
         if !self.listen_port.is_none() {
             let port = self.listen_port.as_ref().unwrap().to_string().clone();
-
             println!("{:?} Listening for connections on {:?}",self.name, self.listen_port);
-            let (send_chan,mut receive_chan) = mpsc::unbounded();
-            let send_chan_clone = send_chan.clone();
-
+            let send_chan = self.sender.clone();
             // listen for connections loop
             let p = port.clone();
             task::spawn( async move {
@@ -243,14 +265,12 @@ impl Hive {
                     Err(e) => eprintln!("Failed accept loop: {:?}",e),
                     _ => (),
                 }
-
             });
-
 
             let hive_name = self.name.clone();
 
-            while let Some(event) = receive_chan.next().await {
-                let send_chan = send_chan_clone.clone();
+            while let Some(event) = self.receiver.next().await {
+                let send_chan = self.sender.clone();
                 match event {
                     SocketEvent::NewPeer{name, stream} => {
                         let pname = format!("CLIENT PEER {:?}", name);
