@@ -1,19 +1,19 @@
 use crate::signal::Signal;
-use serde_derive::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use futures::executor::block_on;
 use std::fmt;
 use std::borrow::Borrow;
-use serde::{Serialize, Serializer};
 
-#[derive(PartialEq, Clone, Debug, Deserialize, Serialize)]
-pub enum PropertyType {
-    REAL(i64),
-    FLOAT(f64),
-    INT(u32),
-    BOOL(bool),
-    STRING(Box<str>),
-}
+// #[derive(PartialEq, Clone, Debug, Deserialize, Serialize)]
+// pub enum PropertyType {
+//     REAL(i64),
+//     FLOAT(f64),
+//     INT(u32),
+//     BOOL(bool),
+//     STRING(Box<str>),
+// }
+
+pub type PropertyType = toml::Value;
 
 #[derive(Default)]
 pub struct Property
@@ -30,9 +30,20 @@ impl fmt::Debug for Property {
 impl Property {
     pub fn to_string(&self) -> String {
         return match &self.value {
-            Some(t) => format!("{}={:?}", self.name, toml::to_string(t)),
+            Some(t) => format!("{}={}", self.name, t.to_string()),
             None => format!("{}=None", self.name),
         }
+    }
+    pub fn from_table(table: &toml::value::Table) -> Option<Property>{
+        if table.keys().len() != 1 {
+            // return None
+        }
+        // for key in table.keys(){
+        let key = table.keys().nth(0).unwrap();
+        let val = table.get(key);
+        let p = Property::from_toml(key.as_str(), val);
+        return Some(p);
+
 
     }
     pub fn get_name(&self) -> &str {
@@ -46,44 +57,69 @@ impl Property {
         }
     }
     pub fn from_str(name: &str, val: &str) -> Property {
-        Property::new(name, Some(PropertyType::STRING(String::from(val).into_boxed_str())))
+        Property::new(name, Some(PropertyType::from(val)))
     }
     pub fn from_bool(name: &str, val: bool) -> Property {
-        Property::new(name, Some(PropertyType::BOOL(val)))
+        Property::new(name, Some(PropertyType::from(val)))
     }
     pub fn from_float(name: &str, val: f64) -> Property {
-        Property::new(name, Some(PropertyType::FLOAT(val)))
+        Property::new(name, Some(PropertyType::from(val)))
+    }
+    pub fn from_toml(name: &str, val:Option<&toml::Value>) -> Property{
+        //Property::new(name, Some(PropertyType::from(val.to_string())))
+        let p = match val {
+            Some(v) if v.is_str() => {
+                Property::from_str(name, v.as_str().unwrap())
+            },
+            Some(v) if v.is_integer() => {
+                Property::from_int(name, v.as_integer().unwrap())
+            },
+            Some(v) if v.is_bool() => {
+                Property::from_bool(name, v.as_bool().unwrap())
+            },
+            Some(v) if v.is_float() => {
+                Property::from_float(name, v.as_float().unwrap())
+            },
+            _ => {
+                println ! ("<<Failed to convert Property: {:?}", name);
+                Property::new(name, None)
+            }
+        };
+        return p;
     }
     pub fn from_int(name: &str, val: i64) -> Property {
         let small_int = u32::try_from(val);
         return match small_int {
             Ok(si) => {
-                Property::new(name, Some(PropertyType::INT(si)))
+                Property::new(name, Some(PropertyType::from(si)))
             },
             _ => {
-                Property::new(name, Some(PropertyType::REAL(val)))
+                Property::new(name, Some(PropertyType::from(val)))
             }
         };
     }
     pub fn set_str(&mut self, s: &str){
-        let p = PropertyType::STRING(String::from(s).into_boxed_str());
+        let p = PropertyType::from(s);
         self.set(p);
     }
     pub fn set_bool(&mut self, b: bool){
-        let p = PropertyType::BOOL(b);
+        let p = PropertyType::from(b);
         self.set(p);
     }
     pub fn set_int(&mut self, s: u32){
-        let p = PropertyType::INT(s);
+        let p = PropertyType::from(s);
         self.set(p);
     }
     pub fn set_float(&mut self, s: f64){
-        let p = PropertyType::FLOAT(s);
+        let p = PropertyType::from(s);
         self.set(p);
     }
 
-    pub fn set_from_prop(&mut self, v:&Property){
-        self.set(v.value.as_ref().unwrap().clone())
+    pub fn set_from_prop(&mut self, v:Property) {
+        self.set(v.value.as_ref().unwrap().clone());
+    }
+    pub fn emit(&mut self){
+        block_on(self.on_changed.emit(None));
     }
 
     pub fn set(&mut self, v: PropertyType)

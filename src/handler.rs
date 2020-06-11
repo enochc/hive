@@ -1,32 +1,23 @@
-use futures::channel::mpsc;
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use crate::peer::{SocketEvent, Peer};
+
+use futures::channel::mpsc::UnboundedSender;
+use crate::peer::{SocketEvent};
 use crate::property::Property;
 use crate::hive::PROPERTY;
 use futures::SinkExt;
-use futures::executor::block_on;
 
-type Sender<T> = mpsc::UnboundedSender<T>;
-type Receiver<T> = mpsc::UnboundedReceiver<T>;
+
 
 #[derive(Clone)]
 pub struct Handler {
-    pub (crate) sender: Sender<SocketEvent>
+    pub (crate) sender: UnboundedSender<SocketEvent>
 }
 
 impl Handler {
     pub fn set_str(&self, name:&str, value:&str){
-        let prop = Property::from_str(name, value);
+        let _prop = Property::from_str(name, value);
 
 
     }
-    // pub fn send_property(&mut self, msg:&str) {
-    //     // comvert property into a string message for deconstruction
-    //     block_on(self.sender.send(SocketEvent::Message {
-    //         from: String::from("blah blah blah"),
-    //         msg: String::from(msg),
-    //     })).expect("failed to send property");
-    // }
 
     pub async fn send_property_string(&mut self, prop_name:&str, prop_value:&str){
         let p = Property::from_str(prop_name, prop_value);
@@ -41,6 +32,18 @@ impl Handler {
             from: String::from(""),
             msg: message.to_string()
         };
-        self.sender.send(socket_event).await;
+        self.sender.send(socket_event).await.expect("Failed to send property");
     }
+}
+
+pub(crate) fn property_to_sock_str(property:Option<&Property>) -> Option<String> {
+    match property {
+        Some(p) =>{
+            let mut message = PROPERTY.to_string();
+            message.push_str(p.to_string().as_str());
+            return Some(message);
+        },
+        _ => None
+    }
+
 }

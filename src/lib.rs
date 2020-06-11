@@ -2,7 +2,7 @@
 
 use crate::hive::Hive;
 use std::os::raw::c_char;
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr};
 
 mod hive_macros;
 pub mod property;

@@ -8,7 +8,6 @@ use async_std::{
     task,
     sync::Arc,
 };
-use futures::executor::block_on;
 
 #[derive(Debug)]
 pub enum SocketEvent {
@@ -53,30 +52,22 @@ impl Peer {
         task::spawn(async move{
             read_loop(send_clone, arc_str2).await;
         });
-
-       //write loop
-       // let arc_str3 = arc_str.clone();
-       // task::spawn(async move{
-       //     write_loop(receiver, arc_str3).await;
-       // });
         
         return peer;
     }
     pub async fn send(& self, msg: &str){
         let stream = self.stream.clone();
-        block_on(send(stream, msg)).expect("failed to send msg on stream");
+        send(stream, msg).await.expect("failed to send to Peer");
     }
 
 }
 async fn send(stream: Arc<TcpStream>, message: &str) -> Result<bool, std::io::Error> {
-    let peer_name = stream.peer_addr().unwrap().to_string();
     let mut bytes = Vec::new();
     let msg_length: u32 = message.len() as u32;
     bytes.append(&mut msg_length.to_be_bytes().to_vec());
     bytes.append(&mut message.as_bytes().to_vec());
-    // let mut stream = self.streem;
     let mut stream = &*stream;
-    let n = stream.write(&bytes).await?;
+    stream.write(&bytes).await?;
     Result::Ok(true)
 }
 /*
