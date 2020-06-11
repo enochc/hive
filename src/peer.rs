@@ -1,5 +1,5 @@
 // use futures::channel::mpsc;
-use futures::channel::mpsc::{UnboundedSender, UnboundedReceiver};
+use futures::channel::mpsc::{UnboundedSender};
 use futures::{SinkExt};
 use async_std::{
     io::BufReader,
@@ -13,12 +13,10 @@ use async_std::{
 pub enum SocketEvent {
     NewPeer {
         name: String,
-        // stream: Arc<TcpStream>,
         stream: TcpStream,
     },
     Message {
         from: String,
-        // to: Vec<String>,
         msg: String,
     },
 }
@@ -38,8 +36,7 @@ fn as_u32_be(array: &[u8; 4]) -> u32 {
 impl Peer {
    pub fn new(name:String,
               stream:TcpStream,
-              sender: UnboundedSender<SocketEvent>,
-              _receiver: Option<UnboundedReceiver<SocketEvent>>) -> Peer {
+              sender: UnboundedSender<SocketEvent>) -> Peer {
         let arc_str = Arc::new(stream);
         let peer = Peer{
             name,

@@ -51,8 +51,9 @@ fn main() {
     sleep(Duration::from_secs(1));
 
     //TODO this works for the server hand, make it work for the client hand
-    block_on(server_hand.send_property_string("thermostatName", "dumb thermostat"));
-
+    block_on(client_hand.send_property_string("thermostatName", "dumb thermostat"));
+    sleep(Duration::from_secs(1));
+    block_on( server_hand.send_property_string("thermostatName", "hip hip"));
     // sleep a few seconds then call it quits
     sleep(Duration::from_secs(4));
 

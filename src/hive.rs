@@ -181,23 +181,26 @@ impl Hive {
     }
 
     pub async fn run(& mut self) -> Result<bool> {
+
         // I'm a client
         if !self.connect_to.is_none() {
             println!("Connect To: {:?}", self.connect_to);
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
-
             let send_chan = self.sender.clone();
-
             task::spawn(async move{
                 let stream = TcpStream::connect(address).await;
                 match stream {
                     Ok( s) => {
                         match s.peer_addr() {
                             Ok(peer) => {
-                                let name = format!("SERVER PEER {:?}", peer.to_string());
-                                let p = Peer::new(name, s, send_chan, None);
+                                let name = peer.to_string();
 
-                                p.send("Hi from client").await;
+                                let se = SocketEvent::NewPeer {
+                                    name,
+                                    stream: s,
+                                };
+                                send_chan.clone().send(se).await.expect("failed to send pear");
+                                // p.send("Hi from client").await;
                             },
                             Err(e) => eprintln!("No peer address: {:?}", e),
                         }
@@ -210,11 +213,16 @@ impl Hive {
             while let Some(event) = self.receiver.next().await {
                 match event {
                     // Clients should never receive a new peer message
-                    // SocketEvent::NewPeer{name, stream} => {},
+                    SocketEvent::NewPeer{name, stream} => {
+                        let p = Peer::new(
+                            name,
+                            stream,
+                            self.sender.clone());
+                        self.peers.push(p);
+                    },
                     SocketEvent::Message{from, msg} => {
                         self.got_message(from.as_str(), msg);
                     },
-                    _ => {}
                 }
             }
         }
@@ -236,17 +244,19 @@ impl Hive {
             let hive_name = self.name.clone();
 
             while let Some(event) = self.receiver.next().await {
-                let send_chan = self.sender.clone();
                 match event {
                     SocketEvent::NewPeer{name, stream} => {
-                        let pname = format!("CLIENT PEER {:?}", name);
-                        let p = Peer::new(pname, stream, send_chan, None);
+                        let pname = name;
+                        let p = Peer::new(
+                            pname,
+                            stream,
+                            self.sender.clone());
                         self.send_properties(&p).await;
                         self.peers.push(p);
 
                     },
                     SocketEvent::Message{from, msg} => {
-                        println!("{:?} New Message: {:?}",&hive_name, msg);
+                        println!("{:?} New Message from {:?}: {:?}",&hive_name,from, msg);
                         self.got_message(from.as_str(), msg);
                     },
                 }
@@ -269,6 +279,7 @@ impl Hive {
                 for p in &self.peers {
                     // println!("{:?}",p.name);
                     if p.name != except {
+                        println!("<<<<<<< Send to peer{:?}, from{:?}", p.name, except);
                         p.send(m.as_str()).await;
                     }
                 }
