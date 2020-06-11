@@ -11,8 +11,6 @@ use failure::_core::time::Duration;
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 fn main() {
 
-    // let (tx, rx) = spmc::channel();// ch::unbounded();
-    // let mut txc = tx.clone();
     let props_str = r#"
     listen = "127.0.0.1:3000"
     [Properties]
@@ -23,7 +21,6 @@ fn main() {
     thermostatTemperature= "too cold"
     thermostatTarget_temp = 1.45
     "#;
-    print!("{:?}",props_str);
     let mut server_hive = Hive::new_from_str("SERVE", props_str);
     server_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(|value|{
         println!("<<<< SERV|| THERMOSTAT NAME CHANGED: {:?}", value);

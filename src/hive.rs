@@ -170,7 +170,6 @@ impl Hive {
                         name: peer.to_string(),
                         stream,
                     };
-                    println!("********* SOCKET EVENT: {:?}", se);
                     sender.send(se).await.expect("failed to send message");
                 },
                 Err(e) => eprintln!("No peer address: {:?}", e),
@@ -240,9 +239,7 @@ impl Hive {
                     _ => (),
                 }
             });
-
-            let hive_name = self.name.clone();
-
+            
             while let Some(event) = self.receiver.next().await {
                 match event {
                     SocketEvent::NewPeer{name, stream} => {
@@ -256,7 +253,6 @@ impl Hive {
 
                     },
                     SocketEvent::Message{from, msg} => {
-                        println!("{:?} New Message from {:?}: {:?}",&hive_name,from, msg);
                         self.got_message(from.as_str(), msg);
                     },
                 }
@@ -274,12 +270,15 @@ impl Hive {
     }
 
     async fn broadcast(&self, msg: Option<String>, except:&str){
+        /*
+        Dont broadcast to the same Peer that the original change came from
+        to prevent an infinite re-broadcast loop
+         */
         match msg {
             Some(m) => {
                 for p in &self.peers {
                     // println!("{:?}",p.name);
                     if p.name != except {
-                        println!("<<<<<<< Send to peer{:?}, from{:?}", p.name, except);
                         p.send(m.as_str()).await;
                     }
                 }
@@ -290,7 +289,6 @@ impl Hive {
     }
 
     fn got_message(&mut self, from:&str, msg:String){
-        println!("process message: {:?} = {:?}",self.name,  msg);
         let (msg_type,message) = msg.split_at(3);
         match msg_type{
             PROPERTIES => {
