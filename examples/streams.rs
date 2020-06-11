@@ -5,6 +5,7 @@ use async_std::task;
 
 use futures::{SinkExt, StreamExt};
 use hive::property::Property;
+use futures::executor::block_on;
 
 #[allow(unused_must_use)]
 fn main() {
@@ -38,7 +39,15 @@ fn main() {
     });
 
 
-    server_hand.send_property("THE OTHER THING");
-    task::block_on(client_hive.run());
+    // TODO make this legit!! send an actual propety value that gets propogated through the Hive!
+
+    task::spawn(async move {
+        client_hive.run().await;
+    });
+
+    block_on(server_hand.send_property_string("thermostatName", "dumb thermostat"));
+    loop {
+        // loop
+    }
 
 }

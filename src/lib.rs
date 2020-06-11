@@ -9,6 +9,7 @@ pub mod property;
 pub mod signal;
 pub mod hive;
 pub mod peer;
+pub mod handler;
 
 #[cfg(target_os = "android")]
 mod android;

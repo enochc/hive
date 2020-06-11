@@ -1,13 +1,12 @@
 use crate::signal::Signal;
-use serde_derive::Deserialize;
+use serde_derive::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use futures::executor::block_on;
 use std::fmt;
 use std::borrow::Borrow;
+use serde::{Serialize, Serializer};
 
-//TODO I may not need Property at all, but just PropertyType renamed to propert,
-// instead of all the from methods, I could have as methods and/or just use serde
-#[derive(PartialEq, Clone, Debug, Deserialize)]
+#[derive(PartialEq, Clone, Debug, Deserialize, Serialize)]
 pub enum PropertyType {
     REAL(i64),
     FLOAT(f64),
@@ -25,10 +24,17 @@ pub struct Property
 }
 impl fmt::Debug for Property {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "({:?}, {:?})", self.name, self.value)
+        write!(f, "{}={:?}", self.name, self.value)
     }
 }
 impl Property {
+    pub fn to_string(&self) -> String {
+        return match &self.value {
+            Some(t) => format!("{}={:?}", self.name, toml::to_string(t)),
+            None => format!("{}=None", self.name),
+        }
+
+    }
     pub fn get_name(&self) -> &str {
         self.name.borrow()
     }
@@ -83,7 +89,6 @@ impl Property {
     pub fn set(&mut self, v: PropertyType)
         where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
-
         let v_clone = v.clone();
         let op_v = Some(v);
 

@@ -27,6 +27,7 @@ use toml;
 
 use crate::peer::{SocketEvent, Peer};
 use crate::property::Property;
+use crate::handler::Handler;
 use std::error::Error;
 use std::borrow::{BorrowMut};
 use futures::executor::block_on;
@@ -47,20 +48,9 @@ pub struct Hive {
     // peers: HashMap<String, Arc<TcpStream>>,
 }
 
-#[derive(Clone)]
-pub struct Handler {
-    sender: Sender<SocketEvent>
-}
 
-//TODO instead of returning a Hive object, I should make that private and only return a handler
-impl Handler {
-    pub fn send_property(&mut self, msg:&str) {
-        block_on(self.sender.send(SocketEvent::Message {
-            from: String::from("blah blah blah"),
-            msg: String::from(msg),
-        })).expect("failed to send property");
-    }
-}
+pub (crate) const PROPERTIES:&str = "|P|";
+pub (crate) const PROPERTY:&str = "|p|";
 
 static mut PEERS: Vec<Peer> = Vec::new();
 
@@ -153,28 +143,32 @@ impl Hive {
         }
     }
 
+    fn parse_property(&mut self, key:&str, property: Option<&toml::Value>) {
+        match property {
+            Some(v) if v.is_str() => {
+                self.add_property(Property::from_str(key, v.as_str().unwrap()))
+            },
+            Some(v) if v.is_integer() => {
+                self.add_property(Property::from_int(key, v.as_integer().unwrap()))
+            },
+            Some(v) if v.is_bool() => {
+                self.add_property(Property::from_bool(key, v.as_bool().unwrap()));
+            },
+            Some(v) if v.is_float() => {
+                self.add_property(Property::from_float(key, v.as_float().unwrap()));
+            },
+            _ => {
+                println ! ("<<Failed to Set Property: {:?}", key)
+            }
+        }
+    }
+
     fn parse_properties(&mut self, properties: &toml::Value) {
         let p_val = properties.as_table().unwrap();
         self.property_config = Some(properties.clone());
         for key in p_val.keys() {
             let val = p_val.get(key);
-            match val {
-                Some(v) if v.is_str() => {
-                    self.add_property(Property::from_str(key,v.as_str().unwrap()))
-                },
-                Some(v) if v.is_integer() => {
-                    self.add_property(Property::from_int(key,v.as_integer().unwrap()))
-                },
-                Some(v) if v.is_bool() => {
-                    self.add_property(Property::from_bool(key,v.as_bool().unwrap()));
-                },
-                Some(v) if v.is_float() => {
-                    self.add_property(Property::from_float(key,v.as_float().unwrap()));
-                },
-                _ => {
-                    println!("<<Failed to Set Property: {:?}", key)
-                }
-            };
+            self.parse_property(key,val)
         }
     }
 
@@ -288,20 +282,29 @@ impl Hive {
 
     async fn send_properties(&self, peer:&Peer){
         let str = toml::to_string(self.property_config.as_ref().unwrap()).unwrap();
-        let mut message = String::from("|P|");
+        let mut message = String::from(PROPERTIES);
         message.push_str(&str);
         peer.send(message.as_str()).await;
     }
+
     fn got_message(&mut self, msg:String){
         println!("process message: {:?} = {:?}",self.name,  msg);
-        match &msg[0..3]{
-            "|P|" => {
+        let (msg_type,message) = msg.split_at(3);
+        match msg_type{
+            PROPERTIES => {
                 // got properties
-                let (_,rest) = msg.split_at(3);
-                let value:toml::Value = toml::from_str(rest).unwrap();
+                // let (_,rest) = msg.split_at(3);
+                let value:toml::Value = toml::from_str(message).unwrap();
                 self.parse_properties(&value);
 
             },
+            PROPERTY => {
+                println!("<<<<<<<<<<<< PROPERTY MESSAGE: {:?}",message);
+                let prop: toml::Value = toml::from_str(message).unwrap();
+                // prop.keys[0];
+                println!("<<<<<<<<<<<< {:?}",prop)
+                //self.add_property(Property::from_bool(,v.as_bool().unwrap()));
+            }
             _ => println!("got message {:?}", msg)
         }
     }
