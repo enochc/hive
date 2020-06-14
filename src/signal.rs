@@ -3,12 +3,11 @@ use std::sync::{Arc, RwLock};
 use async_std::task;
 use async_std::task::JoinHandle;
 use futures::future::join_all;
-// use futures::executor::block_on;
 
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct Signal<T> {
-    slots: Arc<RwLock<Vec<Arc<dyn Fn(T) + Send + Sync + 'static>>>>
+    slots: RwLock<Vec<Arc<dyn Fn(T) + Send + Sync + 'static>>>
 }
 
 async fn send_emit<T>(func: Arc<dyn Fn(T) + Send + Sync + 'static>, val: T)
@@ -23,10 +22,9 @@ impl<T> Signal<T> {
     // where T: Clone + Send + Copy + 'static, // How about this?
         where T: Sync + Clone + Send +'static,
     {
-        let slots_clone= self.slots.clone();
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
         // Spawn thread for each attached slot
-        for s in slots_clone.read().unwrap().iter() {
+        for s in self.slots.read().unwrap().iter() {
             let s_clone = s.clone();
             let val_clone = val.clone();
 
