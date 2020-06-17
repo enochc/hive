@@ -198,7 +198,7 @@ impl Hive {
                                     name,
                                     stream: s,
                                 };
-                                send_chan.clone().send(se).await.expect("failed to send pear");
+                                send_chan.clone().send(se).await.expect("failed to send peer");
                                 // p.send("Hi from client").await;
                             },
                             Err(e) => eprintln!("No peer address: {:?}", e),
@@ -209,21 +209,8 @@ impl Hive {
 
             });
             // listen for messages from server
-            while let Some(event) = self.receiver.next().await {
-                match event {
-                    // Clients should never receive a new peer message
-                    SocketEvent::NewPeer{name, stream} => {
-                        let p = Peer::new(
-                            name,
-                            stream,
-                            self.sender.clone());
-                        self.peers.push(p);
-                    },
-                    SocketEvent::Message{from, msg} => {
-                        self.got_message(from.as_str(), msg);
-                    },
-                }
-            }
+            self.receive_events(false).await;
+            println!("<<<<<<<<<<< CLIENT DONE");
         }
 
         // I'm a server
@@ -239,27 +226,40 @@ impl Hive {
                     _ => (),
                 }
             });
-            
-            while let Some(event) = self.receiver.next().await {
-                match event {
-                    SocketEvent::NewPeer{name, stream} => {
-                        let pname = name;
-                        let p = Peer::new(
-                            pname,
-                            stream,
-                            self.sender.clone());
-                        self.send_properties(&p).await;
-                        self.peers.push(p);
 
-                    },
-                    SocketEvent::Message{from, msg} => {
-                        self.got_message(from.as_str(), msg);
-                    },
-                }
-            }
+            self.receive_events(true).await;
+            println!("<<<<<<<<<<< SERVER DONE");
 
         }
         return Result::Ok(true)
+    }
+
+    async fn receive_events(&mut self, is_server:bool){
+        while !self.sender.is_closed() {
+            // let Some(event) = ;
+            match self.receiver.next().await.unwrap() {
+                SocketEvent::NewPeer { name, stream } => {
+                    let p = Peer::new(
+                        name,
+                        stream,
+                        self.sender.clone());
+                    if is_server {
+                        self.send_properties(&p).await;
+                    }
+                    self.peers.push(p);
+                },
+                SocketEvent::Message { from, msg } => {
+                    self.got_message(from.as_str(), msg);
+                },
+                SocketEvent::Hangup {from} => {
+                    for x in 0..self.peers.len(){
+                        if self.peers[x].name == from {
+                            self.peers.remove(x);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     async fn send_properties(&self, peer:&Peer){

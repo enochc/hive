@@ -52,7 +52,17 @@ fn main() {
     sleep(Duration::from_secs(1));
     block_on( server_hand.send_property_string("thermostatName", "hip hip"));
     // sleep a few seconds then call it quits
-    sleep(Duration::from_secs(4));
+    sleep(Duration::from_secs(1));
+    client_hand.hangup();
+    println!("done with stuff");
+    // server_hand.hangup();
+    // block_on(server_hand.send_property_string("thermostatName", "late"));
+
+    //sleep(Duration::from_secs(20));
+    // let (tx, mut rx) = mpsc::unbounded();
+    //
+    // let result:i32 = block_on(rx.next()).unwrap();
+    // println!("<<<< this wasn't supposed to happen");
 
 
 

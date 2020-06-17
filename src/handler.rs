@@ -4,7 +4,7 @@ use crate::peer::{SocketEvent};
 use crate::property::Property;
 use crate::hive::PROPERTY;
 use futures::SinkExt;
-
+use futures::executor::block_on;
 
 
 #[derive(Clone)]
@@ -34,6 +34,12 @@ impl Handler {
         };
         self.sender.send(socket_event).await.expect("Failed to send property");
     }
+
+    pub fn hangup(&mut self) {
+        block_on(self.sender.send(SocketEvent::Hangup{from:String::from("")}))
+            .expect("failed to hangup");
+    }
+
 }
 
 pub(crate) fn property_to_sock_str(property:Option<&Property>) -> Option<String> {

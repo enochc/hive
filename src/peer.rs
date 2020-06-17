@@ -19,11 +19,14 @@ pub enum SocketEvent {
         from: String,
         msg: String,
     },
+    Hangup {
+        from:String,
+    },
 }
 
 pub struct Peer{
     pub name:String,
-    pub stream: Arc<TcpStream>,
+    pub stream: Arc<TcpStream>
 }
 
 fn as_u32_be(array: &[u8; 4]) -> u32 {
@@ -40,16 +43,16 @@ impl Peer {
         let arc_str = Arc::new(stream);
         let peer = Peer{
             name,
-            stream: arc_str.clone(),
+            stream: arc_str.clone()
         };
 
         // Start read loop
         let send_clone = sender.clone();
         let arc_str2 = arc_str.clone();
+
         task::spawn(async move{
             read_loop(send_clone, arc_str2).await;
         });
-        
         return peer;
     }
     pub async fn send(& self, msg: &str){
@@ -99,31 +102,54 @@ async fn send(stream: Arc<TcpStream>, message: &str) -> Result<bool, std::io::Er
 // }
 async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>){
     let mut reader = BufReader::new(&*stream);
-    loop {
+    let from = match stream.peer_addr() {
+        Ok(addr) => addr.to_string(),
+        _ => String::from("no peer address"),
+    };
+    let mut is_running = true;
+    while is_running{
         let mut sender = sender.clone();
         let mut size_buff = [0; 4];
-        // While next message zize is > 0 bites read messages
-        while let Ok(read) = reader.read(&mut size_buff).await {
-            if read > 0 {
-                let message_size = as_u32_be(&size_buff);
-                let mut size_buff = vec![0u8; message_size as usize];
-                match reader.read_exact(&mut size_buff).await {
-                    Ok(_t) => {
-                        let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
-                        let from = match stream.peer_addr() {
-                            Ok(addr) => addr.to_string(),
-                            _ => String::from("no peer address"),
-                        };
-                        let se = SocketEvent::Message {
-                            from,
-                            msg
-                        };
+        let r = reader.read(&mut size_buff).await;
+        let from = String::from(&from);
+        match r {
+            Ok(read) => {
 
-                        sender.send(se).await.expect("Failed to send message");
-                    },
-                    _ => eprintln!("Failed to read message")
+                if read == 0 {
+                    // end connection, something bad happened, or the client just disconnected.
+                    sender.send(SocketEvent::Hangup{from}).await.expect("Failed to send Hangup");
+                    is_running = false;
+                } else {
+                    let message_size = as_u32_be(&size_buff);
+                    let mut size_buff = vec![0u8; message_size as usize];
+                    let red = reader.read_exact(&mut size_buff).await;
+                    match red {
+                        Ok(_t) => {
+                            let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
+                            let se = SocketEvent::Message {
+                                from,
+                                msg
+                            };
+                            if !sender.is_closed(){
+                                sender.send(se).await.expect("Failed to send message");
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("Failed to read message {:?}", e);
+                            sender.send(SocketEvent::Hangup{
+                                from
+                            }).await.expect("Failed to send Hangup");
+                        }
+                    }
                 }
+            },
+            Err(e) => {
+                eprintln!("ERROR: {:?}",e);
+                sender.send(SocketEvent::Hangup{from}).await
+                    .expect("Failed to send hangup");
+                is_running = false;
             }
         }
     }
+    println!("<< Peer run done");
 }
