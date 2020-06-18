@@ -1,6 +1,6 @@
 // use futures::channel::mpsc;
 use futures::channel::mpsc::{UnboundedSender};
-use futures::{SinkExt};
+use futures::SinkExt;
 use async_std::{
     io::BufReader,
     net::{ TcpStream},
@@ -57,6 +57,7 @@ impl Peer {
     }
     pub async fn send(& self, msg: &str){
         let stream = self.stream.clone();
+        println!("Send to peer {:?}: {:?}",self.name ,msg);
         send(stream, msg).await.expect("failed to send to Peer");
     }
 
@@ -68,6 +69,7 @@ async fn send(stream: Arc<TcpStream>, message: &str) -> Result<bool, std::io::Er
     bytes.append(&mut message.as_bytes().to_vec());
     let mut stream = &*stream;
     stream.write(&bytes).await?;
+    // stream.flush().await;
     Result::Ok(true)
 }
 /*
@@ -117,6 +119,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
 
                 if read == 0 {
                     // end connection, something bad happened, or the client just disconnected.
+                    println!("Read zero bytes");
                     sender.send(SocketEvent::Hangup{from}).await.expect("Failed to send Hangup");
                     is_running = false;
                 } else {
