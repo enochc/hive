@@ -249,7 +249,7 @@ impl Hive {
                     self.peers.push(p);
                 },
                 SocketEvent::Message { from, msg } => {
-                    self.got_message(from.as_str(), msg);
+                    self.got_message(from.as_str(), msg).await;
                 },
                 SocketEvent::Hangup {from} => {
                     for x in 0..self.peers.len(){
@@ -290,6 +290,7 @@ impl Hive {
 
     async fn got_message(&mut self, from:&str, msg:String){
         let (msg_type,message) = msg.split_at(3);
+        println!("____ PRE MESSAGE: {:?}, {:?}", from, msg);
         match msg_type{
             PROPERTIES => {
                 let value:toml::Value = toml::from_str(message).unwrap();
