@@ -288,7 +288,7 @@ impl Hive {
 
     }
 
-    fn got_message(&mut self, from:&str, msg:String){
+    async fn got_message(&mut self, from:&str, msg:String){
         let (msg_type,message) = msg.split_at(3);
         match msg_type{
             PROPERTIES => {
@@ -301,7 +301,7 @@ impl Hive {
                 let broadcast_message = property_to_sock_str(property.as_ref());
                 self.set_property(property.unwrap());
 
-                block_on(self.broadcast(broadcast_message, from ));
+                self.broadcast(broadcast_message, from ).await;
 
             }
             _ => println!("got message {:?}", msg)
