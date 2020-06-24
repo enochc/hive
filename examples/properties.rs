@@ -3,19 +3,30 @@ use std::thread::sleep;
 use failure::_core::time::Duration;
 
 use hive::property::Property;
+use std::sync::RwLock;
+use async_std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::convert::TryFrom;
+
 
 fn main() {
 
     let mut p = Property::from_int("test",4);
+    // let mut counter = Arc::new(RwLock::new(0));
+    let counter = Arc::new(AtomicUsize::new(0));
+    let c1 = Arc::clone(&counter);
+    let c2 = Arc::clone(&counter);
 
-    p.on_changed.connect(|v|{
+    p.on_changed.connect(move |v|{
         println!("Inside signal: {:?}", v);
-        sleep(Duration::from_secs(2))
+        sleep(Duration::from_millis(500));
+        let v = c1.fetch_add(1, Ordering::SeqCst);
+
     });
 
-    p.on_changed.connect(|v|{
+    p.on_changed.connect(move |v|{
         println!("also Inside signal: {:?}", v);
-        // sleep(Duration::from_secs(2))
+        let v = c2.fetch_add(1, Ordering::SeqCst);
     });
 
     p.set_str("What");
@@ -24,5 +35,8 @@ fn main() {
     p.set_int(6);
     p.set_bool(true);
 
-    println!("Done: {:?}", p.get());
+    let ret = counter.load(Ordering::Relaxed);
+    assert_eq!(ret, 8);
+    println!("Done: {:?} ran {:?} times", p.get(), ret);
+
 }
