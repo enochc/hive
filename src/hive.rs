@@ -10,10 +10,9 @@ use async_std::{
 };
 use futures::{SinkExt, StreamExt};
 use futures::channel::mpsc;
-use futures::executor::block_on;
 use toml;
 
-use crate::handler::{Handler, property_to_sock_str};
+use crate::handler::{Handler, property_to_sock_str, properties_to_sock_str};
 use crate::peer::{Peer, SocketEvent};
 use crate::property::Property;
 
@@ -28,9 +27,10 @@ pub struct Hive {
     receiver: Receiver<SocketEvent>,
     connect_to: Option<Box<str>>,
     listen_port: Option<Box<str>>,
-    property_config: Option<toml::Value>,
+    //property_config: Option<toml::Value>,
     pub name: Box<str>,
     peers: Vec<Peer>,
+    pub is_connected: bool
 }
 
 
@@ -81,9 +81,10 @@ impl Hive {
             receiver: receive_chan,
             connect_to,
             listen_port,
-            property_config: None,
+            // property_config: None,
             name: String::from(name).into_boxed_str(),
             peers: Vec::new(),
+            is_connected: false,
         };
 
         let properties = config.get("Properties");
@@ -126,7 +127,11 @@ impl Hive {
             /*
             This calls emit on the existing property
              */
-            self.get_mut_property(name).unwrap().set_from_prop(property);
+            let set = self.get_mut_property(name).unwrap().set_from_prop(property);
+            if set {
+                //  REALLY TODO !!!! don't save toml reference, build property string on the fly
+                //self.property_config = Some(self.properties);
+            }
         }else {
 
             // TODO when added for first time, no change event is emitted, EMIT CHANGE!!
@@ -142,7 +147,7 @@ impl Hive {
 
     fn parse_properties(&mut self, properties: &toml::Value) {
         let p_val = properties.as_table().unwrap();
-        self.property_config = Some(properties.clone());
+        // self.property_config = Some(properties.clone());
         for key in p_val.keys() {
             let val = p_val.get(key);
             self.parse_property(key,val)
@@ -220,13 +225,14 @@ impl Hive {
             let send_chan = self.sender.clone();
             // listen for connections loop
             let p = port.clone();
+            self.is_connected = true;
             task::spawn( async move {
                 match Hive::accept_loop(send_chan.clone(), p).await {
                     Err(e) => eprintln!("Failed accept loop: {:?}",e),
                     _ => (),
                 }
             });
-
+            self.is_connected = false;
             self.receive_events(true).await;
             println!("<<<<<<<<<<< SERVER DONE");
 
@@ -255,6 +261,7 @@ impl Hive {
                     for x in 0..self.peers.len(){
                         if self.peers[x].name == from {
                             self.peers.remove(x);
+                            break;
                         }
                     }
                 }
@@ -263,10 +270,8 @@ impl Hive {
     }
 
     async fn send_properties(&self, peer:&Peer){
-        let str = toml::to_string(self.property_config.as_ref().unwrap()).unwrap();
-        let mut message = String::from(PROPERTIES);
-        message.push_str(&str);
-        peer.send(message.as_str()).await;
+        let str = properties_to_sock_str(&self.properties);
+        peer.send(str.as_str()).await;
     }
 
     async fn broadcast(&self, msg: Option<String>, except:&str){
@@ -277,7 +282,6 @@ impl Hive {
         match msg {
             Some(m) => {
                 for p in &self.peers {
-                    // println!("{:?}",p.name);
                     if p.name != except {
                         p.send(m.as_str()).await;
                     }
@@ -289,17 +293,19 @@ impl Hive {
     }
 
     async fn got_message(&mut self, from:&str, msg:String){
+        println!("GOT MESSAGE: {:?}", msg);
         let (msg_type,message) = msg.split_at(3);
-        println!("____ PRE MESSAGE: {:?}, {:?}", from, msg);
         match msg_type{
             PROPERTIES => {
                 let value:toml::Value = toml::from_str(message).unwrap();
                 self.parse_properties(&value);
             },
             PROPERTY => {
+                println!("<< parse message: {:?}", message);
                 let p_toml: toml::Value = toml::from_str(message).unwrap();
+                println!("<< toml  message: {:?}", p_toml);
                 let property = Property::from_table(p_toml.as_table().unwrap());
-                let broadcast_message = property_to_sock_str(property.as_ref());
+                let broadcast_message = property_to_sock_str(property.as_ref(), true);
                 self.set_property(property.unwrap());
 
                 self.broadcast(broadcast_message, from ).await;

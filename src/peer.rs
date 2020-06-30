@@ -112,6 +112,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
     while is_running{
         let mut sender = sender.clone();
         let mut size_buff = [0; 4];
+
         let r = reader.read(&mut size_buff).await;
         let from = String::from(&from);
         match r {

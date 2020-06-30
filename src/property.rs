@@ -115,24 +115,28 @@ impl Property {
         self.set(p);
     }
 
-    pub fn set_from_prop(&mut self, v:Property) {
-        self.set(v.value.as_ref().unwrap().clone());
+    pub fn set_from_prop(&mut self, v:Property)-> bool{
+        return self.set(v.value.as_ref().unwrap().clone());
     }
     pub fn emit(&mut self){
         block_on(self.on_changed.emit(None));
     }
 
-    pub fn set(&mut self, v: PropertyType)
+    pub fn set(&mut self, v: PropertyType) -> bool
         where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
+        println!("<<<< set thing {}", v);
         let v_clone = v.clone();
         let op_v = Some(v);
 
         if !self.value.eq(&op_v) {
             self.value = op_v;
+            println!("<<<< emit change!!");
             block_on(self.on_changed.emit(Some(v_clone)));
+            return true;
         } else {
-            println!("do nothing ")
+            println!("do nothing ");
+            return false;
         }
     }
 

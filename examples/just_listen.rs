@@ -19,14 +19,19 @@ fn main() {
     lightValue = 0
     thermostatName = "thermostat"
     thermostatTemperature= "too cold"
-    thermostatTarget_temp = 1.45
+    thermostatTarget_temp = 2
     "#;
     let mut server_hive = Hive::new_from_str("SERVE", props_str);
     server_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(|value|{
         println!("<<<< SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
     });
-
-    block_on(server_hive.run());
+    let (mut send_chan, mut receive_chan) = mpsc::unbounded();
+    task::spawn(async move {
+        server_hive.run().await;
+        send_chan.send(true);
+    });
+    let done = block_on(receive_chan.next());
+    println!("Done");
 
 
 
