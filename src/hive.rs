@@ -27,10 +27,8 @@ pub struct Hive {
     receiver: Receiver<SocketEvent>,
     connect_to: Option<Box<str>>,
     listen_port: Option<Box<str>>,
-    //property_config: Option<toml::Value>,
     pub name: Box<str>,
     peers: Vec<Peer>,
-    pub is_connected: bool
 }
 
 
@@ -81,10 +79,8 @@ impl Hive {
             receiver: receive_chan,
             connect_to,
             listen_port,
-            // property_config: None,
             name: String::from(name).into_boxed_str(),
             peers: Vec::new(),
-            is_connected: false,
         };
 
         let properties = config.get("Properties");
@@ -127,11 +123,7 @@ impl Hive {
             /*
             This calls emit on the existing property
              */
-            let set = self.get_mut_property(name).unwrap().set_from_prop(property);
-            if set {
-                //  REALLY TODO !!!! don't save toml reference, build property string on the fly
-                //self.property_config = Some(self.properties);
-            }
+            self.get_mut_property(name).unwrap().set_from_prop(property);
         }else {
 
             // TODO when added for first time, no change event is emitted, EMIT CHANGE!!
@@ -147,7 +139,6 @@ impl Hive {
 
     fn parse_properties(&mut self, properties: &toml::Value) {
         let p_val = properties.as_table().unwrap();
-        // self.property_config = Some(properties.clone());
         for key in p_val.keys() {
             let val = p_val.get(key);
             self.parse_property(key,val)
@@ -225,14 +216,12 @@ impl Hive {
             let send_chan = self.sender.clone();
             // listen for connections loop
             let p = port.clone();
-            self.is_connected = true;
             task::spawn( async move {
                 match Hive::accept_loop(send_chan.clone(), p).await {
                     Err(e) => eprintln!("Failed accept loop: {:?}",e),
                     _ => (),
                 }
             });
-            self.is_connected = false;
             self.receive_events(true).await;
             println!("<<<<<<<<<<< SERVER DONE");
 
