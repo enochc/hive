@@ -12,9 +12,9 @@ use futures::{SinkExt, StreamExt};
 use futures::channel::mpsc;
 use toml;
 
-use crate::handler::{Handler, property_to_sock_str, properties_to_sock_str};
+use crate::handler::{Handler, };
 use crate::peer::{Peer, SocketEvent};
-use crate::property::Property;
+use crate::property::{Property, property_to_sock_str, properties_to_sock_str};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
@@ -32,8 +32,9 @@ pub struct Hive {
 }
 
 
-pub (crate) const PROPERTIES:&str = "|P|";
-pub (crate) const PROPERTY:&str = "|p|";
+pub (crate) const PROPERTIES: &str = "|P|";
+pub (crate) const PROPERTY: &str = "|p|";
+pub (crate) const DELETE: &str = "|d|";
 
 // static mut PEERS: Vec<Peer> = Vec::new();
 //

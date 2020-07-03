@@ -3,6 +3,8 @@ use std::convert::TryFrom;
 use futures::executor::block_on;
 use std::fmt;
 use std::borrow::Borrow;
+use crate::hive::{PROPERTIES, PROPERTY, DELETE};
+use std::collections::HashMap;
 
 // #[derive(PartialEq, Clone, Debug, Deserialize, Serialize)]
 // pub enum PropertyType {
@@ -143,4 +145,37 @@ impl Property {
     pub fn get(&self) -> &Option<PropertyType> {
         &self.value
     }
+}
+
+pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> String {
+    let mut message = PROPERTIES.to_string();
+    for p in properties {
+        message.push_str(
+            property_to_sock_str(Some(p.1), false).unwrap().as_str()
+        );
+        message.push('\n');
+    }
+    return String::from(message);
+}
+
+pub(crate) fn property_to_sock_str(property:Option<&Property>, inc_head:bool) -> Option<String> {
+    return match property {
+        Some(p) if p.value.is_some() => {
+            let mut message = if inc_head {
+                PROPERTY.to_string()
+            } else {
+                String::from("")
+            };
+            message.push_str(p.to_string().as_str());
+            Some(message)
+        },
+        Some(p) => {
+            let mut message = DELETE.to_string();
+            message.push_str(p.get_name());
+            Some(message)
+        },
+        _ => None
+    }
+
+
 }

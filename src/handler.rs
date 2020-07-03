@@ -1,7 +1,7 @@
 
 use futures::channel::mpsc::UnboundedSender;
 use crate::peer::{SocketEvent};
-use crate::property::Property;
+use crate::property::{Property, property_to_sock_str};
 use crate::hive::{PROPERTY, PROPERTIES};
 use futures::SinkExt;
 use futures::executor::block_on;
@@ -27,12 +27,13 @@ impl Handler {
 
     pub async fn send_property(&mut self, property:Property){
 
-        let mut message = PROPERTY.to_string();
-        message.push_str(property.to_string().as_str());
+        let message = property_to_sock_str(Some(&property), true)
+            .unwrap();
         let socket_event = SocketEvent::Message {
             from: String::from(""),
             msg: message.to_string()
         };
+
         self.sender.send(socket_event).await.expect("Failed to send property");
     }
 
@@ -43,27 +44,3 @@ impl Handler {
 
 }
 
-pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> String {
-    let mut message = PROPERTIES.to_string();
-    for p in properties {
-        message.push_str(
-            property_to_sock_str(Some(p.1), false).unwrap().as_str()
-        );
-        message.push('\n');
-    }
-    return String::from(message);
-}
-
-pub(crate) fn property_to_sock_str(property:Option<&Property>, inc_head:bool) -> Option<String> {
-    match property {
-        Some(p) =>{
-            let mut message = if inc_head{
-                PROPERTY.to_string() } else{String::from("")
-            };
-            message.push_str(p.to_string().as_str());
-            return Some(message);
-        },
-        _ => None
-    }
-
-}
