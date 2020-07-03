@@ -37,6 +37,16 @@ impl Handler {
         self.sender.send(socket_event).await.expect("Failed to send property");
     }
 
+    pub async fn delete_property(&mut self, name: &str){
+        let p = Property::new(name, None);
+        let message = property_to_sock_str(Some(&p), true).unwrap();
+        let socket_event = SocketEvent::Message {
+            from: String::from(""),
+            msg: message.to_string()
+        };
+        self.sender.send(socket_event).await;
+    }
+
     pub fn hangup(&mut self) {
         block_on(self.sender.send(SocketEvent::Hangup{from:String::from("")}))
             .expect("failed to hangup");

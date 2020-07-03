@@ -47,10 +47,16 @@ fn main() {
     // wait a sec for the client to connect and sync properties
     sleep(Duration::from_secs(1));
 
+
+
     //TODO this works for the server hand, make it work for the client hand
-    block_on(client_hand.send_property_string("thermostatName", "dumb thermostat"));
+    block_on(client_hand.send_property_string("thermostatName", "Before"));
     sleep(Duration::from_secs(1));
-    block_on( server_hand.send_property_string("thermostatName", "hip hip"));
+
+    block_on(server_hand.delete_property("thermostatName"));
+    sleep(Duration::from_secs(1));
+
+    block_on( server_hand.send_property_string("thermostatName", "After"));
     // sleep a few seconds then call it quits
     sleep(Duration::from_secs(1));
     client_hand.hangup();

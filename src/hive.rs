@@ -293,15 +293,21 @@ impl Hive {
             PROPERTY => {
                 println!("<< parse message: {:?}", message);
                 let p_toml: toml::Value = toml::from_str(message).unwrap();
-                println!("<< toml  message: {:?}", p_toml);
                 let property = Property::from_table(p_toml.as_table().unwrap());
-                let broadcast_message = property_to_sock_str(property.as_ref(), true);
+                // let broadcast_message = property_to_sock_str(property.as_ref(), true);
                 self.set_property(property.unwrap());
 
-                self.broadcast(broadcast_message, from ).await;
+                self.broadcast(Some(msg), from ).await;
 
-            }
-            _ => println!("got message {:?}", msg)
+            },
+            DELETE => {
+                println!("Delete: {:?}", message);
+                let p = self.properties.remove(&message.to_owned().clone());
+                // this is unnecessary, but fun
+                drop(p);
+                self.broadcast(Some(msg), from ).await;
+            },
+            _ => println!("got unknown message {:?}", msg)
         }
     }
 }
