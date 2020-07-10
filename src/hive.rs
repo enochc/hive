@@ -33,13 +33,14 @@ pub struct Hive {
     pub peers_changed: Signal<Vec<(String, String)>>,
 }
 
-
+// Message type definitions
 pub (crate) const PROPERTIES: &str = "|P|";
 pub (crate) const PROPERTY: &str = "|p|";
 pub (crate) const DELETE: &str = "|d|";
 pub (crate) const PEER_MESSAGE: &str = "|s|";
 pub (crate) const HEADER: &str = "|H|";
 pub (crate) const PEER_MESSAGE_DIV: &str = "|=|";
+pub (crate) const REQUEST_PEERS: &str = "<p|";
 
 
 
@@ -273,11 +274,13 @@ impl Hive {
     }
 
     async fn send_to_peer(&self, msg:&str, peer_name:&str){
-        for peer in &self.peers {
-            if peer.name == String::from(peer_name) {//} == peer_name {
+        let p = self.get_peer_by_name(peer_name);
+        match p {
+            Some(peer) => {
                 let msg = format!("{}{}",PEER_MESSAGE ,msg);
                 peer.send(msg.as_str()).await;
-            }
+            },
+            _ => eprintln!("Missing Peer {}", peer_name)
         }
     }
 
@@ -296,16 +299,34 @@ impl Hive {
         peer.send(str.as_ref()).await;
     }
 
-    async fn set_headers_from_peer(&mut self, head:&str, from:&str){
-        for p in self.peers.as_mut_slice() {
-            if p.address() == from {
-                let vec: Vec<&str> = head.split("NAME=").collect();
-                let name = vec[1];
-                p.set_name(name);
+    fn get_peer_by_name(&self, name:&str) -> Option<&Peer> {
+        for p in self.peers {
+            if p.name == name {
+                return Some(&p)
             }
         }
+        return None
+    }
+    fn get_peer_by_address(&self, addr:&str) -> Option<&Peer> {
+        for p in self.peers {
+            if p.address() == addr {
+                return Some(&p)
+            }
+        }
+        return None
+    }
 
-        self.emit_peers().await;
+    async fn set_headers_from_peer(&mut self, head:&str, from:&str){
+        let p = self.get_peer_by_address(from);
+        // match p {
+        //     Some( peer)=> {
+        //         let vec: Vec<&str> = head.split("NAME=").collect();
+        //         let name = vec[1];
+        //         peer.set_name(name);
+        //         self.emit_peers().await;
+        //     },
+        //     _ => eprintln!("No peer")
+        // }
     }
 
     async fn broadcast(&self, msg: Option<String>, except:&str){
@@ -323,6 +344,9 @@ impl Hive {
             },
             _ => {}
         }
+
+    }
+    async fn send_peers(&self, from:&str) {
 
     }
 
@@ -367,6 +391,9 @@ impl Hive {
                 if self.name.to_string() == pear_name.to_string() {
                     self.message_received.emit(String::from(vec[1])).await;
                 }
+
+            }
+            REQUEST_PEERS => {
 
             }
             _ => println!("got unknown message {:?},{:?}", msg_type, msg)
