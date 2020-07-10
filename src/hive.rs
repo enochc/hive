@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     fs,
 };
-
+use crate::signal::Signal;
 use async_std::{
     net::{TcpListener, TcpStream, ToSocketAddrs},
     task,
@@ -14,7 +14,7 @@ use toml;
 
 use crate::handler::{Handler, };
 use crate::peer::{Peer, SocketEvent};
-use crate::property::{Property, property_to_sock_str, properties_to_sock_str};
+use crate::property::{Property, properties_to_sock_str};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
@@ -29,32 +29,25 @@ pub struct Hive {
     listen_port: Option<Box<str>>,
     pub name: Box<str>,
     peers: Vec<Peer>,
+    pub message_received: Signal<String>,
+    pub peers_changed: Signal<Vec<(String, String)>>,
 }
 
 
 pub (crate) const PROPERTIES: &str = "|P|";
 pub (crate) const PROPERTY: &str = "|p|";
 pub (crate) const DELETE: &str = "|d|";
-
-// static mut PEERS: Vec<Peer> = Vec::new();
-//
-// unsafe fn add_peer(peer:Peer) -> bool{
-//     for p in &PEERS {
-//         if p.name == peer.name {
-//             return false;
-//         }
-//     }
-//     PEERS.push(peer);
-//     true
-// }
+pub (crate) const PEER_MESSAGE: &str = "|s|";
+pub (crate) const HEADER: &str = "|H|";
+pub (crate) const PEER_MESSAGE_DIV: &str = "|=|";
 
 
 
 impl Hive {
 
-    // fn add_peer(&mut self, name:String, stream: Arc<TcpStream>){
-    //     self.peers.insert(name, stream);
-    // }
+    fn is_sever(&self) ->bool{
+        self.listen_port.is_some()
+    }
 
     pub fn new_from_str(name: &str, properties: &str) -> Hive{
         let config: toml::Value = toml::from_str(properties).unwrap();
@@ -82,6 +75,8 @@ impl Hive {
             listen_port,
             name: String::from(name).into_boxed_str(),
             peers: Vec::new(),
+            message_received: Default::default(),
+            peers_changed: Default::default(),
         };
 
         let properties = config.get("Properties");
@@ -155,6 +150,7 @@ impl Hive {
                 message size = u32 unsigned 32 bite number, 4 bytes in length
      */
 
+    // servers run this to accept client connections
     async fn accept_loop(mut sender: Sender<SocketEvent>, addr: impl ToSocketAddrs) -> Result<()> {
         let listener = TcpListener::bind(addr).await?;
         let mut incoming = listener.incoming();
@@ -162,9 +158,9 @@ impl Hive {
             let stream = stream?;
             println!("Accepting from: {}", stream.peer_addr()?);
             match stream.peer_addr() {
-                Ok(peer) => {
+                Ok(addr) => {
                     let se = SocketEvent::NewPeer {
-                        name: peer.to_string(),
+                        name: addr.to_string(),
                         stream,
                     };
                     sender.send(se).await.expect("failed to send message");
@@ -188,15 +184,12 @@ impl Hive {
                 match stream {
                     Ok( s) => {
                         match s.peer_addr() {
-                            Ok(peer) => {
-                                let name = peer.to_string();
-
+                            Ok(_addr) => {
                                 let se = SocketEvent::NewPeer {
-                                    name,
+                                    name:String::from(""),
                                     stream: s,
                                 };
                                 send_chan.clone().send(se).await.expect("failed to send peer");
-                                // p.send("Hi from client").await;
                             },
                             Err(e) => eprintln!("No peer address: {:?}", e),
                         }
@@ -232,7 +225,6 @@ impl Hive {
 
     async fn receive_events(&mut self, is_server:bool){
         while !self.sender.is_closed() {
-            // let Some(event) = ;
             match self.receiver.next().await.unwrap() {
                 SocketEvent::NewPeer { name, stream } => {
                     let p = Peer::new(
@@ -242,7 +234,17 @@ impl Hive {
                     if is_server {
                         self.send_properties(&p).await;
                     }
+                    // Send the header with my "peer name"
+                    self.send_header(&p).await;
                     self.peers.push(p);
+
+                    /*
+                     //self.emit_peers().await;
+                    It makes sense to call this here, but it's better if we
+                    wait for the peer repsponse with it's header info so we
+                    wave the actual peer name that it's given us to response with
+                    so instead its called from the "set_headers_from_peer" method
+                     */
                 },
                 SocketEvent::Message { from, msg } => {
                     self.got_message(from.as_str(), msg).await;
@@ -259,9 +261,51 @@ impl Hive {
         }
     }
 
+    async fn emit_peers(&mut self) {
+        let mut peer_strings: Vec<(String, String)> = Vec::new();
+        for x in 0..self.peers.len(){
+            let p = &self.peers[x];
+            let adr = p.address().clone();
+            let name = p.name.clone();
+            peer_strings.push((name, adr));
+        }
+        self.peers_changed.emit(peer_strings).await;
+    }
+
+    async fn send_to_peer(&self, msg:&str, peer_name:&str){
+        for peer in &self.peers {
+            if peer.name == String::from(peer_name) {//} == peer_name {
+                let msg = format!("{}{}",PEER_MESSAGE ,msg);
+                peer.send(msg.as_str()).await;
+            }
+        }
+    }
+
     async fn send_properties(&self, peer:&Peer){
         let str = properties_to_sock_str(&self.properties);
         peer.send(str.as_str()).await;
+    }
+
+    /*
+    Currently this only responds to new connected peers with the peer name
+    TODO we could send other init options here such as a property filter etc
+     */
+    async fn send_header(&self, peer:&Peer){
+        let mut str = HEADER.to_string();
+        str.push_str(format!("NAME={}",self.name).as_ref());
+        peer.send(str.as_ref()).await;
+    }
+
+    async fn set_headers_from_peer(&mut self, head:&str, from:&str){
+        for p in self.peers.as_mut_slice() {
+            if p.address() == from {
+                let vec: Vec<&str> = head.split("NAME=").collect();
+                let name = vec[1];
+                p.set_name(name);
+            }
+        }
+
+        self.emit_peers().await;
     }
 
     async fn broadcast(&self, msg: Option<String>, except:&str){
@@ -272,7 +316,7 @@ impl Hive {
         match msg {
             Some(m) => {
                 for p in &self.peers {
-                    if p.name != except {
+                    if p.address() != except {
                         p.send(m.as_str()).await;
                     }
                 }
@@ -283,7 +327,7 @@ impl Hive {
     }
 
     async fn got_message(&mut self, from:&str, msg:String){
-        println!("GOT MESSAGE: {:?}", msg);
+        println!("GOT MESSAGE: {}: {:?}", self.name, msg);
         let (msg_type,message) = msg.split_at(3);
         match msg_type{
             PROPERTIES => {
@@ -291,7 +335,6 @@ impl Hive {
                 self.parse_properties(&value);
             },
             PROPERTY => {
-                println!("<< parse message: {:?}", message);
                 let p_toml: toml::Value = toml::from_str(message).unwrap();
                 let property = Property::from_table(p_toml.as_table().unwrap());
                 // let broadcast_message = property_to_sock_str(property.as_ref(), true);
@@ -301,13 +344,32 @@ impl Hive {
 
             },
             DELETE => {
-                println!("Delete: {:?}", message);
                 let p = self.properties.remove(&message.to_owned().clone());
                 // this is unnecessary, but fun
                 drop(p);
                 self.broadcast(Some(msg), from ).await;
             },
-            _ => println!("got unknown message {:?}", msg)
+            HEADER => {
+                self.set_headers_from_peer(msg.as_ref(), from).await;
+            }
+            PEER_MESSAGE => {
+                //|s|127.0.0.1:27733|=|message
+                let c = message.split(PEER_MESSAGE_DIV);
+                let vec: Vec<&str> = c.collect();
+                let pear_name = vec[0];
+
+                // TODO in future scenario where a hive can be a server and client
+                //  is this need to be considered?
+                if self.is_sever() {
+                    self.send_to_peer(message, pear_name).await;
+                }
+
+                if self.name.to_string() == pear_name.to_string() {
+                    self.message_received.emit(String::from(vec[1])).await;
+                }
+
+            }
+            _ => println!("got unknown message {:?},{:?}", msg_type, msg)
         }
     }
 }

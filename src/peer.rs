@@ -37,6 +37,13 @@ fn as_u32_be(array: &[u8; 4]) -> u32 {
 }
 
 impl Peer {
+    pub fn set_name(&mut self, name:&str){
+        self.name = String::from(name);
+    }
+    pub fn address(&self) -> String {
+        return self.stream.peer_addr().unwrap().to_string();
+    }
+
    pub fn new(name:String,
               stream:TcpStream,
               sender: UnboundedSender<SocketEvent>) -> Peer {

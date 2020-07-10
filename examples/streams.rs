@@ -25,28 +25,41 @@ fn main() {
     server_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(|value|{
         println!("<<<< SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
     });
+    server_hive.peers_changed.connect(|peers|{
+        println!("PEERS: {:?}", peers);
+    });
 
     let mut server_hand = server_hive.get_handler();
     task::spawn(  async move{
         server_hive.run().await;
     });
 
-    let mut client_hive = Hive::new_from_str("CLI", "connect = \"127.0.0.1:3000\"");
-
+    let mut client_hive = Hive::new_from_str("client1", "connect = \"127.0.0.1:3000\"");
     client_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(move |value|{
        println!("<<<< CLIENT|| THERMOSTAT NAME CHANGED: {:?}", value);
     });
+    client_hive.message_received.connect(|message|{
+        println!("MESSAGE {}", message);
+    });
     let mut client_hand = client_hive.get_handler();
-
-
 
     task::spawn(async move {
         client_hive.run().await;
     });
 
+
+
     // wait a sec for the client to connect and sync properties
     sleep(Duration::from_secs(1));
 
+    let mut client_hive_2 = Hive::new_from_str("CLI", "connect = \"127.0.0.1:3000\"");
+    let mut client_2_handler = client_hive_2.get_handler();
+    task::spawn(async move {
+        client_hive_2.run().await;
+    });
+    sleep(Duration::from_secs(1));
+
+    block_on(server_hand.send_to_peer("client1", "hey you"));
 
 
     //TODO this works for the server hand, make it work for the client hand
