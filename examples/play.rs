@@ -1,14 +1,59 @@
+#![allow(warnings)]
 use async_std::{
     prelude::*,
     task,
 };
 use futures::channel::mpsc;
 use futures::SinkExt;
+use async_std::sync::{RwLock, Arc};
+
+
+pub struct Signal<T>
+where T: Clone + 'static
+ {
+    slots: Vec<Arc<Box<dyn Fn(T)>>>,
+}
+
+impl<T> Clone for Signal<T>
+    where T: Clone{
+    fn clone(&self) -> Signal<T>{
+        self.slots.clone();
+        return Signal{
+            slots: self.slots.clone()
+        }
+    }
+}
+
+impl<T> Signal<T>
+    where T: Clone {
+    fn new(func: Box<dyn Fn(T)>) -> Signal<T> {
+        //let mut v = Vec::new();
+        //v.push(Arc::new(func));
+        let v = vec![Arc::new(func)];
+        return Signal{
+            slots: v
+        }
+    }
+    fn connect(mut self, func:fn(T)) {
+        self.slots.push(Arc::new(Box::new(func)));
+    }
+}
 
 fn main(){
-    task::block_on(run());
+    // task::block_on(run());
+    fn bb(it:u32) {
+        println!("<<<<< do a thing {}", it);
+    }
+    let s:Signal<u32> = Signal::new(Box::new(bb));
+    let p = s.clone();
+
+
+    // let b = bb;
+    // let c = b.clone();
+    // c(4);
+    // s();
 }
-#[allow(unused_must_use)]
+
 async fn run (){
     let (tx,mut rx) = mpsc::channel(5);
     let mut  tx = tx.clone();
@@ -33,23 +78,4 @@ async fn run (){
         }
     }).await;
 
-
-
-
-
 }
-
-/*
-  let mut x: Option<f32> = None;
-// ...
-
-    x = Some(3.5);
-// ...
-
-    if let Some(value) = x {
-        println!("x has value: {}", value);
-    }
-    else {
-        println!("x is not set");
-    }
- */

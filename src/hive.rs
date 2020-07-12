@@ -20,6 +20,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
+
 // #[derive(Debug)]
 pub struct Hive {
     pub properties: HashMap<String, Property>,
@@ -29,8 +30,7 @@ pub struct Hive {
     listen_port: Option<Box<str>>,
     pub name: Box<str>,
     peers: Vec<Peer>,
-    pub message_received: Signal<String>,
-    pub peers_changed: Signal<Vec<(String, String)>>,
+    pub message_received: Signal<String>
 }
 
 
@@ -40,11 +40,12 @@ pub (crate) const DELETE: &str = "|d|";
 pub (crate) const PEER_MESSAGE: &str = "|s|";
 pub (crate) const HEADER: &str = "|H|";
 pub (crate) const PEER_MESSAGE_DIV: &str = "|=|";
+pub (crate) const REQUEST_PEERS: &str = "<p|";
+pub (crate) const ACK:&str = "<<|";
 
 
 
 impl Hive {
-
     fn is_sever(&self) ->bool{
         self.listen_port.is_some()
     }
@@ -76,7 +77,6 @@ impl Hive {
             name: String::from(name).into_boxed_str(),
             peers: Vec::new(),
             message_received: Default::default(),
-            peers_changed: Default::default(),
         };
 
         let properties = config.get("Properties");
@@ -86,7 +86,21 @@ impl Hive {
                 _ => ()
             }
         };
+
         return hive;
+    }
+
+    async fn notify_peers_change(&mut self){
+        let peer_str= format!("{}{}", REQUEST_PEERS, self.peer_string());
+        for p in &self.peers {
+            if p.update_peers {
+                let stream = p.stream.clone();
+                let msg = peer_str.clone();
+                task::spawn(  async move{
+                    Peer::send_on_stream(stream, &msg).await.unwrap();
+                });
+            }
+        }
     }
 
     pub fn get_handler(&self) -> Handler {
@@ -200,7 +214,7 @@ impl Hive {
             });
             // listen for messages from server
             self.receive_events(false).await;
-            println!("<<<<<<<<<<< CLIENT DONE");
+            println!("CLIENT DONE");
         }
 
         // I'm a server
@@ -217,7 +231,7 @@ impl Hive {
                 }
             });
             self.receive_events(true).await;
-            println!("<<<<<<<<<<< SERVER DONE");
+            println!("SERVER DONE");
 
         }
         return Result::Ok(true)
@@ -251,7 +265,7 @@ impl Hive {
                 },
                 SocketEvent::Hangup {from} => {
                     for x in 0..self.peers.len(){
-                        if self.peers[x].name == from {
+                        if self.peers[x].address() == from {
                             self.peers.remove(x);
                             break;
                         }
@@ -261,24 +275,48 @@ impl Hive {
         }
     }
 
+    fn peer_string(& self)->String {
+        // name:address,name:address
+        let mut peers_string = String::new();
+        for x in 0..self.peers.len(){
+            if x>0 {peers_string.push_str(",")};
+            let p = &self.peers[x];
+            let adr = p.address().clone();
+            let name = p.name.clone();
+            peers_string.push_str(&format!("{}|{}", name, adr))
+        };
+        return peers_string;
+    }
+
     async fn emit_peers(&mut self) {
-        let mut peer_strings: Vec<(String, String)> = Vec::new();
+        let mut ps: Vec<(String, String)> = Vec::new();
         for x in 0..self.peers.len(){
             let p = &self.peers[x];
             let adr = p.address().clone();
             let name = p.name.clone();
-            peer_strings.push((name, adr));
+            ps.push((name, adr));
         }
-        self.peers_changed.emit(peer_strings).await;
+        self.notify_peers_change().await;
     }
 
     async fn send_to_peer(&self, msg:&str, peer_name:&str){
-        for peer in &self.peers {
-            if peer.name == String::from(peer_name) {//} == peer_name {
+        let p = self.get_peer_by_name(peer_name);
+        match p {
+            Some(peer) => {
                 let msg = format!("{}{}",PEER_MESSAGE ,msg);
                 peer.send(msg.as_str()).await;
+            },
+            _=> eprintln!("No peer {}", peer_name)
+        }
+    }
+
+    fn get_peer_by_name(&self, name:&str)->Option<&Peer>{
+        for peer in &self.peers {
+            if peer.name == String::from(name) {
+                return Some(peer)
             }
         }
+        return None
     }
 
     async fn send_properties(&self, peer:&Peer){
@@ -304,7 +342,6 @@ impl Hive {
                 p.set_name(name);
             }
         }
-
         self.emit_peers().await;
     }
 
@@ -351,7 +388,7 @@ impl Hive {
             },
             HEADER => {
                 self.set_headers_from_peer(msg.as_ref(), from).await;
-            }
+            },
             PEER_MESSAGE => {
                 //|s|127.0.0.1:27733|=|message
                 let c = message.split(PEER_MESSAGE_DIV);
@@ -368,8 +405,29 @@ impl Hive {
                     self.message_received.emit(String::from(vec[1])).await;
                 }
 
+            },
+            REQUEST_PEERS => {
+
+                let peer_str = format!("{}{}", REQUEST_PEERS, self.peer_string());
+                for p in self.peers.as_mut_slice() {
+                    if p.address() == from {
+                        p.send(&peer_str).await;
+                        p.update_peers = true;
+                    }
+                }
+
             }
             _ => println!("got unknown message {:?},{:?}", msg_type, msg)
         }
+
     }
+    // fn get_peer_by_address(&self, addr:&str)->Option<&Peer>{
+    //     for peer in &self.peers {
+    //         if peer.address() == String::from(addr) {
+    //             return Some(peer)
+    //         }
+    //     }
+    //     return None
+    // }
 }
+

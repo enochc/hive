@@ -10,28 +10,14 @@ use futures::executor::block_on;
 use failure::_core::time::Duration;
 use std::thread::sleep;
 
+macro_rules! peer_by_address {
+    ($addr:tt, $close:tt) => {
+        println!("{:?}", $addr);
+        $close(5)
+    };
+}
 
 fn main(){
-    let five = 5;
-    let p = Arc::new(five);
-   let r = block_on(dothign(p));
-    println!("return:: {:?}", r);
+    peer_by_address!("what", (|x| {println!("blahh: {:?}",x)}));
 }
 
-async fn dothign(s: Arc<i32>) -> i32{
-
-    let p = s.clone();
-    let new = task::spawn(async move {
-        sleep(Duration::from_secs(1));
-        *p+1
-        // println!("done:: {:?}", s);
-    }).await;
-    println!("done:: {:?}", new);
-    // return new
-    *s+2
-}
-// impl Solution {
-//     pub fn kids_with_candies(candies: Vec<i32>, extra_candies: i32) -> Vec<bool> {
-//
-//     }
-// }

@@ -25,9 +25,7 @@ fn main() {
     server_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(|value|{
         println!("<<<< SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
     });
-    server_hive.peers_changed.connect(|peers|{
-        println!("PEERS: {:?}", peers);
-    });
+
 
     let mut server_hand = server_hive.get_handler();
     task::spawn(  async move{

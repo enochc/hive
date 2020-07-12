@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 // use futures::channel::mpsc;
 use futures::channel::mpsc::{UnboundedSender};
 use futures::SinkExt;
@@ -8,6 +9,8 @@ use async_std::{
     task,
     sync::Arc,
 };
+use crate::hive::ACK;
+use crate::signal::Signal;
 
 #[derive(Debug)]
 pub enum SocketEvent {
@@ -26,7 +29,8 @@ pub enum SocketEvent {
 
 pub struct Peer{
     pub name:String,
-    pub stream: Arc<TcpStream>
+    pub stream: Arc<TcpStream>,
+    pub update_peers:bool,
 }
 
 fn as_u32_be(array: &[u8; 4]) -> u32 {
@@ -48,9 +52,11 @@ impl Peer {
               stream:TcpStream,
               sender: UnboundedSender<SocketEvent>) -> Peer {
         let arc_str = Arc::new(stream);
+
         let peer = Peer{
             name,
-            stream: arc_str.clone()
+            stream: arc_str.clone(),
+            update_peers: false
         };
 
         // Start read loop
@@ -64,21 +70,23 @@ impl Peer {
     }
     pub async fn send(& self, msg: &str){
         let stream = self.stream.clone();
-        println!("Send to peer {:?}: {:?}",self.name ,msg);
-        send(stream, msg).await.expect("failed to send to Peer");
+        println!("Send to peer {}: {}",self.name ,msg);
+        Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
+    }
+
+    pub async fn send_on_stream(stream: Arc<TcpStream>, message: &str) -> Result<bool, std::io::Error> {
+        let mut bytes = Vec::new();
+        let msg_length: u32 = message.len() as u32;
+        bytes.append(&mut msg_length.to_be_bytes().to_vec());
+        bytes.append(&mut message.as_bytes().to_vec());
+        let mut stream = &*stream;
+        stream.write(&bytes).await?;
+        // stream.flush().await;
+        Result::Ok(true)
     }
 
 }
-async fn send(stream: Arc<TcpStream>, message: &str) -> Result<bool, std::io::Error> {
-    let mut bytes = Vec::new();
-    let msg_length: u32 = message.len() as u32;
-    bytes.append(&mut msg_length.to_be_bytes().to_vec());
-    bytes.append(&mut message.as_bytes().to_vec());
-    let mut stream = &*stream;
-    stream.write(&bytes).await?;
-    // stream.flush().await;
-    Result::Ok(true)
-}
+
 /*
  Messages are transferred between services in the following protocol:
  message - 4 bytes consisting of message size, then the following x bytes are the message
@@ -142,7 +150,13 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
                                 msg
                             };
                             if !sender.is_closed(){
+
                                 sender.send(se).await.expect("Failed to send message");
+                                // process message to hive, then send ack
+                                let stream = stream.clone();
+                                println!("<< SEND ACK");
+                                Peer::send_on_stream(stream, ACK).await.expect("failed to send Ack");
+
                             }
                         },
                         Err(e) => {
