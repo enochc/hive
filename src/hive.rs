@@ -267,6 +267,7 @@ impl Hive {
                     for x in 0..self.peers.len(){
                         if self.peers[x].address() == from {
                             self.peers.remove(x);
+                            self.emit_peers().await;
                             break;
                         }
                     }

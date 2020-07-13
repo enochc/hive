@@ -18,7 +18,6 @@ fn main() {
     is_active = true
     lightValue = 0
     thermostatName = "thermostat"
-    thermostatTemperature= "too cold"
     thermostatTarget_temp = 2
     "#;
     let mut server_hive = Hive::new_from_str("SERVE", props_str);
