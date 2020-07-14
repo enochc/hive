@@ -1,8 +1,5 @@
 // Much code "borrowed" from> https://book.async.rs/tutorial/implementing_a_client.html
-use std::{
-    collections::HashMap,
-    fs,
-};
+use std::{collections::HashMap, fs, panic};
 use crate::signal::Signal;
 use async_std::{
     net::{TcpListener, TcpStream, ToSocketAddrs},
@@ -366,61 +363,60 @@ impl Hive {
 
     async fn got_message(&mut self, from:&str, msg:String){
         println!("GOT MESSAGE: {}: {:?}", self.name, msg);
-        let (msg_type,message) = msg.split_at(3);
-        match msg_type{
-            PROPERTIES => {
-                let value:toml::Value = toml::from_str(message).unwrap();
-                self.parse_properties(&value);
-            },
-            PROPERTY => {
-                let p_toml: toml::Value = toml::from_str(message).unwrap();
-                let property = Property::from_table(p_toml.as_table().unwrap());
-                // let broadcast_message = property_to_sock_str(property.as_ref(), true);
-                self.set_property(property.unwrap());
+        if msg.len() <3{
+            println!("<<< Whats this? {}", msg);
+        }else {
+            let (msg_type, message) = msg.split_at(3);
+            match msg_type {
+                PROPERTIES => {
+                    let value: toml::Value = toml::from_str(message).unwrap();
+                    self.parse_properties(&value);
+                },
+                PROPERTY => {
+                    let p_toml: toml::Value = toml::from_str(message).unwrap();
+                    let property = Property::from_table(p_toml.as_table().unwrap());
+                    // let broadcast_message = property_to_sock_str(property.as_ref(), true);
+                    self.set_property(property.unwrap());
 
-                self.broadcast(Some(msg), from ).await;
+                    self.broadcast(Some(msg), from).await;
+                },
+                DELETE => {
+                    let p = self.properties.remove(&message.to_owned().clone());
+                    // this is unnecessary, but fun
+                    drop(p);
+                    self.broadcast(Some(msg), from).await;
+                },
+                HEADER => {
+                    self.set_headers_from_peer(msg.as_ref(), from).await;
+                },
+                PEER_MESSAGE => {
+                    //|s|127.0.0.1:27733|=|message
+                    let c = message.split(PEER_MESSAGE_DIV);
+                    let vec: Vec<&str> = c.collect();
+                    let pear_name = vec[0];
 
-            },
-            DELETE => {
-                let p = self.properties.remove(&message.to_owned().clone());
-                // this is unnecessary, but fun
-                drop(p);
-                self.broadcast(Some(msg), from ).await;
-            },
-            HEADER => {
-                self.set_headers_from_peer(msg.as_ref(), from).await;
-            },
-            PEER_MESSAGE => {
-                //|s|127.0.0.1:27733|=|message
-                let c = message.split(PEER_MESSAGE_DIV);
-                let vec: Vec<&str> = c.collect();
-                let pear_name = vec[0];
+                    // TODO in future scenario where a hive can be a server and client
+                    //  is this need to be considered?
+                    if self.is_sever() {
+                        self.send_to_peer(vec[1], pear_name).await;
+                    }
 
-                // TODO in future scenario where a hive can be a server and client
-                //  is this need to be considered?
-                if self.is_sever() {
-                    self.send_to_peer(message, pear_name).await;
-                }
-
-                if self.name.to_string() == pear_name.to_string() {
-                    self.message_received.emit(String::from(vec[1])).await;
-                }
-
-            },
-            REQUEST_PEERS => {
-
-                let peer_str = format!("{}{}", REQUEST_PEERS, self.peer_string());
-                for p in self.peers.as_mut_slice() {
-                    if p.address() == from {
-                        p.send(&peer_str).await;
-                        p.update_peers = true;
+                    if self.name.to_string() == pear_name.to_string() {
+                        self.message_received.emit(String::from(vec[1])).await;
+                    }
+                },
+                REQUEST_PEERS => {
+                    let peer_str = format!("{}{}", REQUEST_PEERS, self.peer_string());
+                    for p in self.peers.as_mut_slice() {
+                        if p.address() == from {
+                            p.send(&peer_str).await;
+                            p.update_peers = true;
+                        }
                     }
                 }
-
+                _ => println!("got unknown message {:?},{:?}", msg_type, msg)
             }
-            _ => println!("got unknown message {:?},{:?}", msg_type, msg)
         }
-
     }
     // fn get_peer_by_address(&self, addr:&str)->Option<&Peer>{
     //     for peer in &self.peers {
