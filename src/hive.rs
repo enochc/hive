@@ -279,7 +279,7 @@ impl Hive {
         for x in 0..self.peers.len(){
             if x>0 {peers_string.push_str(",")};
             let p = &self.peers[x];
-            let adr = p.address().clone();
+            let adr = p.address();
             let name = p.name.clone();
             peers_string.push_str(&format!("{}|{}", name, adr))
         };
@@ -290,7 +290,7 @@ impl Hive {
         let mut ps: Vec<(String, String)> = Vec::new();
         for x in 0..self.peers.len(){
             let p = &self.peers[x];
-            let adr = p.address().clone();
+            let adr = p.address();
             let name = p.name.clone();
             ps.push((name, adr));
         }

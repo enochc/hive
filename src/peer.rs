@@ -31,6 +31,7 @@ pub struct Peer{
     pub name:String,
     pub stream: Arc<TcpStream>,
     pub update_peers:bool,
+    address:Option<String>,
 }
 
 fn as_u32_be(array: &[u8; 4]) -> u32 {
@@ -44,8 +45,11 @@ impl Peer {
     pub fn set_name(&mut self, name:&str){
         self.name = String::from(name);
     }
-    pub fn address(&self) -> String {
-        return self.stream.peer_addr().unwrap().to_string();
+    pub fn address(& self) -> String {
+        return match self.address.clone() {
+            Some(t) => t,
+            _ => String::from("")
+        };
     }
 
    pub fn new(name:String,
@@ -56,7 +60,8 @@ impl Peer {
         let peer = Peer{
             name,
             stream: arc_str.clone(),
-            update_peers: false
+            update_peers: false,
+            address: Some(arc_str.peer_addr().unwrap().to_string()),
         };
 
         // Start read loop
