@@ -157,7 +157,9 @@ pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> 
     }
     return String::from(message);
 }
-
+ /*
+ Returns string ex: |p|thermostatName="main therm"
+  */
 pub(crate) fn property_to_sock_str(property:Option<&Property>, inc_head:bool) -> Option<String> {
     return match property {
         Some(p) if p.value.is_some() => {
@@ -176,6 +178,4 @@ pub(crate) fn property_to_sock_str(property:Option<&Property>, inc_head:bool) ->
         },
         _ => None
     }
-
-
 }

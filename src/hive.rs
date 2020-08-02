@@ -39,6 +39,7 @@ pub (crate) const HEADER: &str = "|H|";
 pub (crate) const PEER_MESSAGE_DIV: &str = "|=|";
 pub (crate) const REQUEST_PEERS: &str = "<p|";
 pub (crate) const ACK:&str = "<<|";
+pub const HANDSHAKE:&str = "GET / HIVE/1.0\n";
 
 
 
@@ -170,6 +171,7 @@ impl Hive {
             println!("Accepting from: {}", stream.peer_addr()?);
             match stream.peer_addr() {
                 Ok(addr) => {
+                    // Check if websocket or plain Hive peer
                     let se = SocketEvent::NewPeer {
                         name: addr.to_string(),
                         stream,
@@ -241,7 +243,8 @@ impl Hive {
                     let p = Peer::new(
                         name,
                         stream,
-                        self.sender.clone());
+                        self.sender.clone(),
+                        is_server).await;
                     if is_server {
                         self.send_properties(&p).await;
                     }
@@ -252,7 +255,7 @@ impl Hive {
                     /*
                      //self.emit_peers().await;
                     It makes sense to call this here, but it's better if we
-                    wait for the peer repsponse with it's header info so we
+                    wait for the peer response with it's header info so we
                     wave the actual peer name that it's given us to response with
                     so instead its called from the "set_headers_from_peer" method
                      */
@@ -397,13 +400,20 @@ impl Hive {
 
                     // TODO in future scenario where a hive can be a server and client
                     //  is this need to be considered?
-                    if self.is_sever() {
+                    if self.is_sever() && self.name.to_string() != pear_name.to_string() {
                         self.send_to_peer(vec[1], pear_name).await;
-                    }
-
-                    if self.name.to_string() == pear_name.to_string() {
+                    } else if vec.len() == 2 {
+                        // The message is for me, I'm a server
                         self.message_received.emit(String::from(vec[1])).await;
+                    } else {
+                        // The message is for me, I'm a client, the peer_name has been stripped
+                        self.message_received.emit(String::from(pear_name)).await;
                     }
+                    // let myName = self.name.to_string();
+                    //
+                    // if self.name.to_string() == pear_name.to_string() {
+                    //
+                    // }
                 },
                 REQUEST_PEERS => {
                     let peer_str = format!("{}{}", REQUEST_PEERS, self.peer_string());

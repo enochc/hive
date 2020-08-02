@@ -1,16 +1,19 @@
 #![allow(unused_imports)]
+
 // use futures::channel::mpsc;
 use futures::channel::mpsc::{UnboundedSender};
-use futures::SinkExt;
+// use futures::{SinkExt, AsyncBufReadExt};
+use futures::{SinkExt};
 use async_std::{
     io::BufReader,
-    net::{ TcpStream},
+    net::{TcpStream},
     prelude::*,
     task,
     sync::Arc,
 };
-use crate::hive::ACK;
+use crate::hive::{ACK, HANDSHAKE};
 use crate::signal::Signal;
+
 
 #[derive(Debug)]
 pub enum SocketEvent {
@@ -23,59 +26,84 @@ pub enum SocketEvent {
         msg: String,
     },
     Hangup {
-        from:String,
+        from: String,
     },
 }
 
-pub struct Peer{
-    pub name:String,
+pub struct Peer {
+    pub name: String,
     pub stream: Arc<TcpStream>,
-    pub update_peers:bool,
-    address:Option<String>,
+    pub update_peers: bool,
+    address: Option<String>,
+    is_http: bool,
 }
 
 fn as_u32_be(array: &[u8; 4]) -> u32 {
     ((array[0] as u32) << 24) +
         ((array[1] as u32) << 16) +
-        ((array[2] as u32) <<  8) +
-        ((array[3] as u32) <<  0)
+        ((array[2] as u32) << 8) +
+        ((array[3] as u32) << 0)
 }
 
 impl Peer {
-    pub fn set_name(&mut self, name:&str){
+    pub fn set_name(&mut self, name: &str) {
         self.name = String::from(name);
     }
-    pub fn address(& self) -> String {
+    pub fn address(&self) -> String {
         return match self.address.clone() {
             Some(t) => t,
             _ => String::from("")
         };
     }
 
-   pub fn new(name:String,
-              stream:TcpStream,
-              sender: UnboundedSender<SocketEvent>) -> Peer {
+    pub async fn new(name: String,
+                     stream: TcpStream,
+                     sender: UnboundedSender<SocketEvent>,
+                     is_server: bool) -> Peer {
         let arc_str = Arc::new(stream);
 
-        let peer = Peer{
+        let mut peer = Peer {
             name,
             stream: arc_str.clone(),
             update_peers: false,
             address: Some(arc_str.peer_addr().unwrap().to_string()),
+            is_http: false
         };
 
         // Start read loop
         let send_clone = sender.clone();
         let arc_str2 = arc_str.clone();
 
-        task::spawn(async move{
+        if !is_server {
+            (&*arc_str).write(&HANDSHAKE.as_bytes()).await;
+        }
+        peer.handshake().await;
+
+        task::spawn(async move {
             read_loop(send_clone, arc_str2).await;
         });
         return peer;
     }
-    pub async fn send(& self, msg: &str){
+
+    /*
+    If the handshake line starts with "GET / HTTP/1.1\r\n" then we're looking at a web socket
+     */
+    async fn handshake(&mut self) {
+        let mut reader = BufReader::new(&*self.stream);
+        let mut buf = String::new();
+        reader.read_line(&mut buf).await;
+        if buf.starts_with("GET / HTTP/"){
+            println!("<<<< This is a web socket");
+            self.is_http = true
+
+        }
+        println!("Line:<<<<< {:?}", buf);
+        //GET / HTTP/1.1\r\n
+    }
+
+    pub async fn send(&self, msg: &str) {
         let stream = self.stream.clone();
-        println!("Send to peer {}: {}",self.name ,msg);
+        println!("Send to peer {}: {}", self.name, msg);
         Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
     }
 
@@ -89,7 +117,6 @@ impl Peer {
         // stream.flush().await;
         Result::Ok(true)
     }
-
 }
 
 /*
@@ -122,14 +149,14 @@ impl Peer {
 //         _ => {}
 //     }
 // }
-async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>){
+async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>) {
     let mut reader = BufReader::new(&*stream);
     let from = match stream.peer_addr() {
         Ok(addr) => addr.to_string(),
         _ => String::from("no peer address"),
     };
     let mut is_running = true;
-    while is_running{
+    while is_running {
         let mut sender = sender.clone();
         let mut size_buff = [0; 4];
 
@@ -137,11 +164,10 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
         let from = String::from(&from);
         match r {
             Ok(read) => {
-
                 if read == 0 {
                     // end connection, something bad happened, or the client just disconnected.
                     println!("Read zero bytes");
-                    sender.send(SocketEvent::Hangup{from}).await.expect("Failed to send Hangup");
+                    sender.send(SocketEvent::Hangup { from }).await.expect("Failed to send Hangup");
                     is_running = false;
                 } else {
                     let message_size = as_u32_be(&size_buff);
@@ -152,30 +178,28 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
                             let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
                             let se = SocketEvent::Message {
                                 from,
-                                msg
+                                msg,
                             };
-                            if !sender.is_closed(){
-
+                            if !sender.is_closed() {
                                 sender.send(se).await.expect("Failed to send message");
                                 // process message to hive, then send ack
-                                let stream = stream.clone();
-                                println!("<< SEND ACK");
-                                Peer::send_on_stream(stream, ACK).await.expect("failed to send Ack");
-
+                                // let stream = stream.clone();
+                                // println!("<< SEND ACK");
+                                // Peer::send_on_stream(stream, ACK).await.expect("failed to send Ack");
                             }
-                        },
+                        }
                         Err(e) => {
                             eprintln!("Failed to read message {:?}", e);
-                            sender.send(SocketEvent::Hangup{
+                            sender.send(SocketEvent::Hangup {
                                 from
                             }).await.expect("Failed to send Hangup");
                         }
                     }
                 }
-            },
+            }
             Err(e) => {
-                eprintln!("ERROR: {:?}",e);
-                sender.send(SocketEvent::Hangup{from}).await
+                eprintln!("ERROR: {:?}", e);
+                sender.send(SocketEvent::Hangup { from }).await
                     .expect("Failed to send hangup");
                 is_running = false;
             }
