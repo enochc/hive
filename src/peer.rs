@@ -11,8 +11,12 @@ use async_std::{
     task,
     sync::Arc,
 };
+use crypto::digest::Digest;
+use crypto::sha1::Sha1;
+
 use crate::hive::{ACK, HANDSHAKE};
 use crate::signal::Signal;
+use std::collections::HashMap;
 
 
 #[derive(Debug)]
@@ -75,7 +79,11 @@ impl Peer {
         let arc_str2 = arc_str.clone();
 
         if !is_server {
-            (&*arc_str).write(&HANDSHAKE.as_bytes()).await;
+            let mut stream = &*arc_str;
+            stream.write(&HANDSHAKE.as_bytes()).await;
+            // stream.flush();
+
+
         }
         peer.handshake().await;
 
@@ -87,18 +95,73 @@ impl Peer {
 
     /*
     If the handshake line starts with "GET / HTTP/1.1\r\n" then we're looking at a web socket
+    the handshake ends with \r\n\r\n, an empty response with only the \r\n byte, then we know
+    to exit when the read length == 2
+
+    HTTP/1.1 101 Switching Protocols
+    Upgrade: websocket
+    Connection: Upgrade
+    Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+
+    concatenate the client's Sec-WebSocket-Key and the string "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    together (it's a "magic string"), take the SHA-1 hash of the result, and return the base64
+    encoding of that hash.
      */
     async fn handshake(&mut self) {
+        let mut headers:HashMap<String, String> = HashMap::new();
         let mut reader = BufReader::new(&*self.stream);
         let mut buf = String::new();
-        reader.read_line(&mut buf).await;
-        if buf.starts_with("GET / HTTP/"){
-            println!("<<<< This is a web socket");
-            self.is_http = true
-
+        loop {
+            buf.clear();
+            match reader.read_line(&mut buf).await {
+                // done collecting header
+                Ok(t) if (t == 2 || t == 0) => { break; }
+                // just keep filling the buffer
+                Ok(t) if (t > 2) => {
+                    let rest = buf.split(":");
+                    let vec: Vec<&str> = rest.collect();
+                    if vec.len()>1{
+                        let mut resp:String = String::from(vec[1]);
+                        for  x in 2..vec.len(){
+                            resp.push_str(":");
+                            resp.push_str(vec[x]);
+                        }
+                        let end =resp.len() - 2;
+                        headers.insert(String::from(vec[0]), String::from(&resp[0..end]));
+                    } else {
+                        let val = vec[0];
+                        let end = val.len() - 2;
+                        headers.insert(String::from("HEAD"), String::from(&val[0..end]));
+                    }
+                },
+                _ => {break;}
+            }
         }
-        println!("Line:<<<<< {:?}", buf);
-        //GET / HTTP/1.1\r\n
+
+        /*
+        So if the Key was "dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
+        the Sec-WebSocket-Accept header's value is "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+         */
+        if headers.get("HEAD").unwrap_or(&String::from("")).starts_with("GET / HTTP/"){
+            // println!("<<<< This is a web socket");
+            println!("headers {:?}", headers);
+            self.is_http = true;
+            self.name = String::from("Web Socket");
+            let key = format!("{}{}",headers["Sec-WebSocket-Key"],"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+            let mut hasher = Sha1::new();
+
+
+            hasher.input_str(&key);
+            // hasher.input_str("dGhlIHNhbXBsZSBub25jZQ==");
+            // should be: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+            let hex = hasher.result_str();
+            // let pp = base64::encode(hex);
+            // println!("key {}",hex);
+            let response = format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n", hex);
+            println!("response: {}", response);
+            let mut stream = &*self.stream;
+            stream.write(&response.as_bytes()).await;
+        }
     }
 
     pub async fn send(&self, msg: &str) {

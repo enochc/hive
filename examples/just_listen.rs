@@ -12,14 +12,14 @@ use failure::_core::time::Duration;
 fn main() {
 
     let props_str = r#"
-    listen = "127.0.0.1:3000"
-    [Properties]
-    thingvalue= 1
-    is_active = true
-    lightValue = 0
-    thermostatName = "thermostat"
-    thermostatTarget_temp = 2
-    "#;
+listen = "127.0.0.1:3000"
+[Properties]
+thingvalue= 1
+is_active = true
+lightValue = 0
+thermostatName = "thermostat"
+thermostatTarget_temp = 2
+"#;
     let mut server_hive = Hive::new_from_str("SERVE", props_str);
     server_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(|value|{
         println!("<<<< SERV|| THERMOSTAT NAME CHANGED: {:?}", value);

@@ -12,6 +12,7 @@ use toml;
 use crate::handler::{Handler, };
 use crate::peer::{Peer, SocketEvent};
 use crate::property::{Property, properties_to_sock_str};
+use config::FileFormat;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
@@ -39,7 +40,7 @@ pub (crate) const HEADER: &str = "|H|";
 pub (crate) const PEER_MESSAGE_DIV: &str = "|=|";
 pub (crate) const REQUEST_PEERS: &str = "<p|";
 pub (crate) const ACK:&str = "<<|";
-pub const HANDSHAKE:&str = "GET / HIVE/1.0\n";
+pub const HANDSHAKE:&str = "GET / HIVE/1.0\r\n\r\n";
 
 
 
