@@ -18,8 +18,8 @@ serde = "1.0"
 serde_derive = "1.0"
 spmc = "0.3.0"
 #async-std = "1.6.0"
-async-std = { git = 'https://github.com/stjepang/async-std', branch = 'new-scheduler' }
-
+#async-std = { git = 'https://github.com/stjepang/async-std', branch = 'new-scheduler' }
+async-std = "1.6.2"
 
 [lib]
 name = "hive"
