@@ -87,19 +87,6 @@ impl Hive {
         return hive;
     }
 
-    async fn notify_peers_change(&mut self){
-        let peer_str= format!("{}{}", REQUEST_PEERS, self.peer_string());
-        for p in &self.peers {
-            if p.update_peers {
-                let stream = p.stream.clone();
-                let msg = peer_str.clone();
-                task::spawn(  async move{
-                    Peer::send_on_stream(stream, &msg).await.unwrap();
-                });
-            }
-        }
-    }
-
     pub fn get_handler(&self) -> Handler {
         return Handler {
             sender: self.sender.clone(),
@@ -276,8 +263,12 @@ impl Hive {
     fn peer_string(& self)->String {
         // name:address,name:address
         let mut peers_string = String::new();
+        let myadr = self.listen_port.as_ref().expect("No port").clone();
+        let myname = String::from(self.name.as_ref());
+        peers_string.push_str(&format!("{}|{}", myname, myadr));
+
         for x in 0..self.peers.len(){
-            if x>0 {peers_string.push_str(",")};
+            {peers_string.push_str(",")};
             let p = &self.peers[x];
             let adr = p.address();
             let name = p.name.clone();
@@ -287,14 +278,16 @@ impl Hive {
     }
 
     async fn emit_peers(&mut self) {
-        let mut ps: Vec<(String, String)> = Vec::new();
-        for x in 0..self.peers.len(){
-            let p = &self.peers[x];
-            let adr = p.address();
-            let name = p.name.clone();
-            ps.push((name, adr));
+        let peer_str= format!("{}{}", REQUEST_PEERS, self.peer_string());
+        for p in &self.peers {
+            if p.update_peers {
+                let stream = p.stream.clone();
+                let msg = peer_str.clone();
+                task::spawn(  async move{
+                    Peer::send_on_stream(stream, &msg).await.unwrap();
+                });
+            }
         }
-        self.notify_peers_change().await;
     }
 
     async fn send_to_peer(&self, msg:&str, peer_name:&str){
