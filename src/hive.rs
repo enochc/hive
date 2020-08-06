@@ -1,5 +1,5 @@
 // Much code "borrowed" from> https://book.async.rs/tutorial/implementing_a_client.html
-use std::{collections::HashMap, fs, panic};
+use std::{collections::HashMap, fs};
 use crate::signal::Signal;
 use async_std::{
     net::{TcpListener, TcpStream, ToSocketAddrs},
