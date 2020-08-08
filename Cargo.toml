@@ -1,6 +1,6 @@
 [package]
 name = "hive"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Enoch Carter <mrenoch@gmail.com>"]
 edition = "2018"
 
@@ -9,15 +9,12 @@ edition = "2018"
 [dependencies]
 futures = "0.3.5"
 #tokio = {version = "0.2.21", features = ["macros", "rt-core", "sync", "tcp"]}
-tokio = {version = "0.2.21", features = ["full"]}
+#tokio = {version = "0.2.21", features = ["full"]}
 failure = "0.1.8"
 #https://docs.rs/config/0.10.1/config/
 config = "0.10.1"
 toml = "0.5"
-serde = "1.0"
-serde_derive = "1.0"
-spmc = "0.3.0"
-#async-std = "1.6.0"
+
 #async-std = { git = 'https://github.com/stjepang/async-std', branch = 'new-scheduler' }
 async-std = "1.6.2"
 

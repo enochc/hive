@@ -263,12 +263,16 @@ impl Hive {
     fn peer_string(& self)->String {
         // name:address,name:address
         let mut peers_string = String::new();
-        let myadr = self.listen_port.as_ref().expect("No port").clone();
-        let myname = String::from(self.name.as_ref());
-        peers_string.push_str(&format!("{}|{}", myname, myadr));
+        //DEBUG
+        println!("name {:?}", &self.name);
+
+        // let myadr = self.listen_port.as_ref().expect("No port").clone();
+        // let myname = String::from(self.name.as_ref());
+        // peers_string.push_str(&format!("{}|{}", myname, myadr));
 
         for x in 0..self.peers.len(){
-            {peers_string.push_str(",")};
+            if x>0 {peers_string.push_str(",")};
+            // {peers_string.push_str(",")};
             let p = &self.peers[x];
             let adr = p.address();
             let name = p.name.clone();
@@ -278,6 +282,28 @@ impl Hive {
     }
 
     async fn emit_peers(&mut self) {
+        // TODO look into this emit peers logic and notify_peers_change and peer_string
+        // let peer_str= format!("{}{}", REQUEST_PEERS, self.peer_string());
+        // for p in &self.peers {
+        //     if p.update_peers {
+        //         let stream = p.stream.clone();
+        //         let msg = peer_str.clone();
+        //         task::spawn(  async move{
+        //             Peer::send_on_stream(stream, &msg).await.unwrap();
+        //         });
+        //     }
+        // }
+        let mut ps: Vec<(String, String)> = Vec::new();
+        for x in 0..self.peers.len() {
+            let p = &self.peers[x];
+            let adr = p.address();
+            let name = p.name.clone();
+            ps.push((name, adr));
+        }
+        self.notify_peers_change().await;
+    }
+
+    async fn notify_peers_change(&mut self){
         let peer_str= format!("{}{}", REQUEST_PEERS, self.peer_string());
         for p in &self.peers {
             if p.update_peers {
@@ -289,6 +315,7 @@ impl Hive {
             }
         }
     }
+
 
     async fn send_to_peer(&self, msg:&str, peer_name:&str){
         let p = self.get_peer_by_name(peer_name);

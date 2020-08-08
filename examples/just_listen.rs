@@ -28,9 +28,21 @@ fn main() {
     speed = 1000
     "#;
     let mut server_hive = Hive::new_from_str("SERVE", props_str);
-    // server_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(|value|{
-    //     println!("<<<< SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
-    // });
+
+    server_hive.get_mut_property("moveup").unwrap().on_changed.connect( move|value|{
+        println!("<<<< MOVE UP: {:?}", value);
+        // let val = value.unwrap().as_bool().unwrap();
+        // move_up_clone.store(val, Ordering::SeqCst);
+
+    });
+
+    server_hive.get_mut_property("movedown").unwrap().on_changed.connect(move |value|{
+        println!("<<<< MOVE DOWN: {:?}", value);
+        // let val = value.unwrap().as_bool().unwrap();
+        // move_down.store(val, Ordering::SeqCst);
+    });
+
+
     let (mut send_chan, mut receive_chan) = mpsc::unbounded();
     task::spawn(async move {
         server_hive.run().await;
