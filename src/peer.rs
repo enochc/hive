@@ -9,7 +9,7 @@ use async_std::{
     task,
     sync::Arc,
 };
-use crate::hive::ACK;
+// use crate::hive::ACK;
 use crate::signal::Signal;
 
 #[derive(Debug)]
@@ -158,7 +158,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
 
                                 sender.send(se).await.expect("Failed to send message");
                                 // process message to hive, then send ack
-                                let stream = stream.clone();
+                                // let stream = stream.clone();
                                 // println!("<< SEND ACK");
                                 // Peer::send_on_stream(stream, ACK).await.expect("failed to send Ack");
 

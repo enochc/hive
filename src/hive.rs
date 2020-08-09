@@ -38,7 +38,7 @@ pub (crate) const PEER_MESSAGE: &str = "|s|";
 pub (crate) const HEADER: &str = "|H|";
 pub (crate) const PEER_MESSAGE_DIV: &str = "|=|";
 pub (crate) const REQUEST_PEERS: &str = "<p|";
-pub (crate) const ACK:&str = "<<|";
+// pub (crate) const ACK:&str = "<<|";
 
 
 
@@ -170,7 +170,7 @@ impl Hive {
         Ok(())
     }
 
-    pub async fn run(& mut self) -> Result<bool> {
+    pub async fn run(& mut self){//} -> Result<()> {
 
         // I'm a client
         if !self.connect_to.is_none() {
@@ -218,7 +218,7 @@ impl Hive {
             println!("SERVER DONE");
 
         }
-        return Result::Ok(true)
+        // return Result::Ok(())
     }
 
     async fn receive_events(&mut self, is_server:bool){

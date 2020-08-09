@@ -1,23 +1,24 @@
 #![allow(unused_imports)]
-
+use async_std::prelude::*;
 use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
 use hive::hive::Hive;
 use async_std::task;
 use futures::{SinkExt, StreamExt};
 use hive::property::Property;
-use futures::executor::block_on;
-use std::thread::sleep;
+// use async_std::task::sleep;
 use failure::_core::time::Duration;
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use async_std::task::block_on;
+use std::thread::sleep;
 
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 fn main() {
     let counter = Arc::new(AtomicUsize::new(0));
     let count1 = counter.clone();
-    let count2 = count1.clone();
-    let count3 = count2.clone();
+    let count2 = counter.clone();
+    let count3 = counter.clone();
 
     let props_str = r#"
     listen = "127.0.0.1:3000"
@@ -25,11 +26,12 @@ fn main() {
     thingvalue= 1
     is_active = true
     lightValue = 0
-    thermostatName = "thermostat"
+    thermostatName = "orig therm name"
     thermostatTemperature= "too cold"
     thermostatTarget_temp = 1.45
     "#;
     let mut server_hive = Hive::new_from_str("SERVE", props_str);
+    let prop = server_hive.get_mut_property("thermostatName").unwrap();
     server_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(move |value| {
         println!("<<<< SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
         count1.fetch_add(1, Ordering::SeqCst);
@@ -37,7 +39,7 @@ fn main() {
 
 
     let mut server_hand = server_hive.get_handler();
-    task::spawn(async move {
+    task::Builder::new().name("SERVER HIVE".to_string()).spawn(async move {
         server_hive.run().await;
     });
 
@@ -53,45 +55,51 @@ fn main() {
     let mut client_hand = client_hive.get_handler();
 
     task::spawn(async move {
-        client_hive.run().await;
+       client_hive.run().await;
     });
 
 
     // wait a sec for the client to connect and sync properties
-    sleep(Duration::from_secs(1));
+    // sleep(Duration::from_secs(1));
 
     let mut client_hive_2 = Hive::new_from_str("client2", "connect = \"127.0.0.1:3000\"");
     let mut client_2_handler = client_hive_2.get_handler();
+    let mut clone_hand = client_hand.clone();
+
+    let (mut sender, mut receiver) = mpsc::unbounded();
     task::spawn(async move {
-        client_hive_2.run().await;
+        client_hive_2.run();
+        task::sleep(Duration::from_millis(500)).await;
+        server_hand.send_to_peer("client1", "hey you").await;
+        task::sleep(Duration::from_millis(500)).await;
+        clone_hand.send_property_string("thermostatName", "Before").await;
+        task::sleep(Duration::from_millis(500)).await;
+        server_hand.delete_property("thermostatName").await;
+        task::sleep(Duration::from_millis(500)).await;
+        server_hand.send_property_string("thermostatName", "After").await;
+        sender.send(1).await;
     });
-    sleep(Duration::from_millis(500));
 
-    block_on(server_hand.send_to_peer("client1", "hey you"));
+    let done = block_on(receiver.next());
 
+    // block_on(server_hand.send_to_peer("client1", "hey you"));
+    // sleep(Duration::from_millis(500));
 
     //TODO this works for the server hand, make it work for the client hand
-    block_on(client_hand.send_property_string("thermostatName", "Before"));
-    sleep(Duration::from_millis(500));
+    // block_on(client_hand.send_property_string("thermostatName", "Before"));
+    // sleep(Duration::from_millis(500));
 
-    block_on(server_hand.delete_property("thermostatName"));
-    sleep(Duration::from_millis(500));
+    // block_on(server_hand.delete_property("thermostatName"));
+    // sleep(Duration::from_millis(500));
 
-    block_on(server_hand.send_property_string("thermostatName", "After"));
+    // block_on(server_hand.send_property_string("thermostatName", "After"));
+    // sleep(Duration::from_millis(500));
     assert_eq!(counter.load(Ordering::Relaxed), 3);
     // sleep a few seconds then call it quits
-    sleep(Duration::from_millis(500));
+
     client_hand.hangup();
 
-
-
     println!("done with stuff");
-    // server_hand.hangup();
-    // block_on(server_hand.send_property_string("thermostatName", "late"));
 
-    //sleep(Duration::from_secs(20));
-    // let (tx, mut rx) = mpsc::unbounded();
-    //
-    // let result:i32 = block_on(rx.next()).unwrap();
-    // println!("<<<< this wasn't supposed to happen");
 }
+

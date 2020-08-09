@@ -1,63 +1,57 @@
-
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 use async_std::task;
-use async_std::task::JoinHandle;
-use futures::future::join_all;
+// use async_std::task::JoinHandle;
+// use futures::future::join_all;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
+use async_std::sync::Mutex;
+use async_std::task::block_on;
+// use futures::channel::mpsc;
+
 
 
 #[derive(Default)]
-pub struct Signal<T> {
-    slots: RwLock<Vec<Arc<dyn Fn(T) + Send + Sync + 'static>>>,
+pub struct Signal<T>
+    where T: Send, {
+    slots: Mutex<Vec<Arc<dyn Fn(T) + Send + Sync + 'static>>>,
     counter: AtomicUsize,
 }
 
-async fn send_emit<T>(func: Arc<dyn Fn(T) + Send + Sync + 'static>, val: T)->bool
+async fn send_emit<T>(func: Arc<dyn Fn(T) + Send + Sync + 'static>, val: T)
 {
     func(val);
-    true
 }
 
-impl<T> Signal<T>{
-    pub fn num_slots(self) ->usize {
-        return self.slots.read().unwrap().len();
+impl<T> Signal<T>
+    where T: Send, {
+    pub async fn num_slots(self) -> usize {
+        return self.slots.lock().await.len();
     }
 
     pub async fn emit(&mut self, val: T)
-        where T:Sync + Clone + Send +'static,
+        where T: Sync + Clone + Send + 'static,
     {
         let count = self.counter.load(Ordering::Relaxed);
         println!("EMITTING:: {}", count);
-        let mut handles: Vec<JoinHandle<bool>> = Vec::new();
+        // let mut handles: Vec<JoinHandle<bool>> = Vec::new();
         // let mut handles = FuturesUnordered::new();
         // Process each slot asynchronously
-        for s in self.slots.read().unwrap().iter() {
-            println!("one");
+        for s in self.slots.lock().await.iter() {
             let s_clone = s.clone();
-            println!("a");
             let val_clone = val.clone();
-            println!("b");
-            handles.push(task::spawn(  async move {
-                println!("c");
-                send_emit(s_clone, val_clone).await
-            }));
 
+            // TODO this works with streams example, but sometimes completes early
+            //  for properties example
+            task::spawn(async move{
+                send_emit(s_clone, val_clone).await;
+            });
         }
-        println!("tow");
-        join_all(handles).await;
-        // handles.for_each(|_| async { () });
-        // let c = handles.next().await
-        // while let Some(thing) = handles.next().await {
-        //     println!("did something {:?}", thing);
-        // }
-        println!("three");
 
+        // join_all(handles).await;
     }
 
     pub fn connect(&self, slot: impl Fn(T) + Send + Sync + 'static) {
         self.counter.fetch_add(1, Ordering::SeqCst);
-        self.slots.write().expect("Failed to get write lock on slots").push(Arc::new(slot));
+        let mut slots = block_on(self.slots.lock());
+        slots.push(Arc::new(slot));
     }
 }

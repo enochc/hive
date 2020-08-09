@@ -1,19 +1,11 @@
 use crate::signal::Signal;
 use std::convert::TryFrom;
-use futures::executor::block_on;
 use std::fmt;
 use std::borrow::Borrow;
 use crate::hive::{PROPERTIES, PROPERTY, DELETE};
 use std::collections::HashMap;
+use async_std::task::block_on;
 
-// #[derive(PartialEq, Clone, Debug, Deserialize, Serialize)]
-// pub enum PropertyType {
-//     REAL(i64),
-//     FLOAT(f64),
-//     INT(u32),
-//     BOOL(bool),
-//     STRING(Box<str>),
-// }
 
 pub type PropertyType = toml::Value;
 
@@ -120,9 +112,6 @@ impl Property {
     pub fn set_from_prop(&mut self, v:Property)-> bool{
         return self.set(v.value.as_ref().unwrap().clone());
     }
-    pub fn emit(&mut self){
-        block_on(self.on_changed.emit(None));
-    }
 
     pub fn set(&mut self, v: PropertyType) -> bool
         where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
@@ -134,6 +123,7 @@ impl Property {
         if !self.value.eq(&op_v) {
             self.value = op_v;
             println!("<<<< emit change!!");
+
             block_on(self.on_changed.emit(Some(v_clone)));
             return true;
         } else {

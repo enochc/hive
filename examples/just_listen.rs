@@ -45,8 +45,8 @@ fn main() {
 
     let (mut send_chan, mut receive_chan) = mpsc::unbounded();
     task::spawn(async move {
-        server_hive.run().await;
-        send_chan.send(true);
+        server_hive.run();//.await;
+        send_chan.send(true).await;
     });
     let done = block_on(receive_chan.next());
     println!("Done");
