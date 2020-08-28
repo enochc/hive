@@ -15,7 +15,7 @@ fn main() {
     let c2 = Arc::clone(&counter);
 
     p.on_changed.connect(move |v|{
-        print!("Inside signal: {:?}", v);
+        println!("Inside signal: {:?}", v);
         //sleep(Duration::from_millis(1000));
         c1.fetch_add(1, Ordering::SeqCst);
         println!(" DONE")
@@ -33,6 +33,8 @@ fn main() {
     p.set_int(6);
     p.set_int(6);
     p.set_bool(true);
+    // wait a moment for the on_change handler to pick up the change
+    sleep(Duration::from_millis(300));
 
     let ret = counter.load(Ordering::Relaxed);
     sleep(Duration::from_millis(1000));

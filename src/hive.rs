@@ -239,8 +239,8 @@ impl Hive {
                     /*
                      //self.emit_peers().await;
                     It makes sense to call this here, but it's better if we
-                    wait for the peer repsponse with it's header info so we
-                    wave the actual peer name that it's given us to response with
+                    wait for the peer response with it's header info so we
+                    have the actual peer name that it's given us to response with
                     so instead its called from the "set_headers_from_peer" method
                      */
                 },
@@ -251,7 +251,7 @@ impl Hive {
                     for x in 0..self.peers.len(){
                         if self.peers[x].address() == from {
                             self.peers.remove(x);
-                            self.emit_peers().await;
+                            self.notify_peers_change().await;
                             break;
                         }
                     }
@@ -261,46 +261,22 @@ impl Hive {
     }
 
     fn peer_string(& self)->String {
-        // name:address,name:address
         let mut peers_string = String::new();
-        //DEBUG
         println!("name {:?}", &self.name);
 
-        // let myadr = self.listen_port.as_ref().expect("No port").clone();
-        // let myname = String::from(self.name.as_ref());
-        // peers_string.push_str(&format!("{}|{}", myname, myadr));
+        // Add self to peers list
+        let myadr = self.listen_port.as_ref().expect("No port").clone();
+        let myname = String::from(self.name.as_ref());
+        peers_string.push_str(&format!("{}|{}", myname, myadr));
 
         for x in 0..self.peers.len(){
-            if x>0 {peers_string.push_str(",")};
-            // {peers_string.push_str(",")};
+            peers_string.push_str(",");
             let p = &self.peers[x];
             let adr = p.address();
             let name = p.name.clone();
             peers_string.push_str(&format!("{}|{}", name, adr))
         };
         return peers_string;
-    }
-
-    async fn emit_peers(&mut self) {
-        // TODO look into this emit peers logic and notify_peers_change and peer_string
-        // let peer_str= format!("{}{}", REQUEST_PEERS, self.peer_string());
-        // for p in &self.peers {
-        //     if p.update_peers {
-        //         let stream = p.stream.clone();
-        //         let msg = peer_str.clone();
-        //         task::spawn(  async move{
-        //             Peer::send_on_stream(stream, &msg).await.unwrap();
-        //         });
-        //     }
-        // }
-        let mut ps: Vec<(String, String)> = Vec::new();
-        for x in 0..self.peers.len() {
-            let p = &self.peers[x];
-            let adr = p.address();
-            let name = p.name.clone();
-            ps.push((name, adr));
-        }
-        self.notify_peers_change().await;
     }
 
     async fn notify_peers_change(&mut self){
@@ -360,7 +336,11 @@ impl Hive {
                 p.set_name(name);
             }
         }
-        self.emit_peers().await;
+
+        if self.is_sever() {
+            self.notify_peers_change().await;
+        }
+
     }
 
     async fn broadcast(&self, msg: Option<String>, except:&str){
@@ -410,19 +390,21 @@ impl Hive {
                     self.set_headers_from_peer(msg.as_ref(), from).await;
                 },
                 PEER_MESSAGE => {
-                    //|s|127.0.0.1:27733|=|message
                     let c = message.split(PEER_MESSAGE_DIV);
                     let vec: Vec<&str> = c.collect();
-                    let pear_name = vec[0];
-
-                    // TODO in future scenario where a hive can be a server and client
-                    //  is this need to be considered?
-                    if self.is_sever() {
-                        self.send_to_peer(vec[1], pear_name).await;
+                    if vec.len() == 1 {
+                        // the PEER_MESSAGE_DIV separates the peer name from the message
+                        // without the DIV, there is only a message and its for me
+                        println!("the message was forwarded for me: {:?}", message);
+                        self.message_received.emit(String::from(message)).await;
+                        return;
                     }
-
+                    let pear_name = vec[0];
                     if self.name.to_string() == pear_name.to_string() {
+                        println!("Message is for me: {:?}", vec[1]);
                         self.message_received.emit(String::from(vec[1])).await;
+                    } else {
+                        self.send_to_peer(vec[1], pear_name).await;
                     }
                 },
                 REQUEST_PEERS => {
@@ -431,6 +413,7 @@ impl Hive {
                         if p.address() == from {
                             p.send(&peer_str).await;
                             p.update_peers = true;
+                            break;
                         }
                     }
                 }

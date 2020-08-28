@@ -19,6 +19,7 @@ fn main() {
     let count1 = counter.clone();
     let count2 = counter.clone();
     let count3 = counter.clone();
+    let count4 = counter.clone();
 
     let props_str = r#"
     listen = "127.0.0.1:3000"
@@ -33,8 +34,12 @@ fn main() {
     let mut server_hive = Hive::new_from_str("SERVE", props_str);
     let prop = server_hive.get_mut_property("thermostatName").unwrap();
     server_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(move |value| {
-        println!("<<<< SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
+        println!("<<<< 222222222 SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
         count1.fetch_add(1, Ordering::SeqCst);
+    });
+    server_hive.message_received.connect(move |message|{
+        println!("<<<< ----------  MESSAGE {}", message);
+        count4.fetch_add(1, Ordering::SeqCst);
     });
 
 
@@ -45,13 +50,14 @@ fn main() {
 
     let mut client_hive = Hive::new_from_str("client1", "connect = \"127.0.0.1:3000\"");
     client_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(move |value| {
-        println!("<<<< CLIENT|| THERMOSTAT NAME CHANGED: {:?}", value);
+        println!("<<<< 1111111 CLIENT|| THERMOSTAT NAME CHANGED: {:?}", value);
         count3.fetch_add(1, Ordering::SeqCst);
     });
     client_hive.message_received.connect(move |message| {
-        println!("MESSAGE {}", message);
+        println!("<<<< ------------- MESSAGE {}", message);
         count2.fetch_add(1, Ordering::SeqCst);
     });
+
     let mut client_hand = client_hive.get_handler();
 
     task::spawn(async move {
@@ -72,30 +78,21 @@ fn main() {
         task::sleep(Duration::from_millis(500)).await;
         server_hand.send_to_peer("client1", "hey you").await;
         task::sleep(Duration::from_millis(500)).await;
+        clone_hand.send_to_peer("SERVE", "hey mr man").await;
+        task::sleep(Duration::from_millis(500)).await;
         clone_hand.send_property_string("thermostatName", "Before").await;
         task::sleep(Duration::from_millis(500)).await;
         server_hand.delete_property("thermostatName").await;
         task::sleep(Duration::from_millis(500)).await;
+        // These should not be counted, because we deleted the ThermostatName
         server_hand.send_property_string("thermostatName", "After").await;
+        task::sleep(Duration::from_millis(500)).await;
         sender.send(1).await;
     });
 
     let done = block_on(receiver.next());
 
-    // block_on(server_hand.send_to_peer("client1", "hey you"));
-    // sleep(Duration::from_millis(500));
-
-    //TODO this works for the server hand, make it work for the client hand
-    // block_on(client_hand.send_property_string("thermostatName", "Before"));
-    // sleep(Duration::from_millis(500));
-
-    // block_on(server_hand.delete_property("thermostatName"));
-    // sleep(Duration::from_millis(500));
-
-    // block_on(server_hand.send_property_string("thermostatName", "After"));
-    // sleep(Duration::from_millis(500));
-    assert_eq!(counter.load(Ordering::Relaxed), 3);
-    // sleep a few seconds then call it quits
+    assert_eq!(counter.load(Ordering::Relaxed), 5);
 
     client_hand.hangup();
 

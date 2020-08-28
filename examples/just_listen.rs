@@ -26,6 +26,7 @@ fn main() {
     moveup = false
     movedown = false
     speed = 1000
+    pt = 0
     "#;
     let mut server_hive = Hive::new_from_str("SERVE", props_str);
 
@@ -36,20 +37,22 @@ fn main() {
 
     });
 
+    server_hive.get_mut_property("pt").unwrap().on_changed.connect( move|value|{
+        println!("<<<< PT: {:?}", value);
+    });
+
     server_hive.get_mut_property("movedown").unwrap().on_changed.connect(move |value|{
         println!("<<<< MOVE DOWN: {:?}", value);
-        // let val = value.unwrap().as_bool().unwrap();
-        // move_down.store(val, Ordering::SeqCst);
     });
 
 
     let (mut send_chan, mut receive_chan) = mpsc::unbounded();
     task::spawn(async move {
-        server_hive.run();//.await;
+        server_hive.run().await;
         send_chan.send(true).await;
     });
     let done = block_on(receive_chan.next());
-    println!("Done");
+    println!("Done {:?}",done);
 
 
 
