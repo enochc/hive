@@ -6,7 +6,6 @@ use futures::{SinkExt, StreamExt};
 use hive::property::Property;
 use futures::executor::block_on;
 use std::thread::sleep;
-use failure::_core::time::Duration;
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 fn main() {
@@ -21,7 +20,7 @@ fn main() {
     // thermostatTarget_temp = 2
     // "#;
     let props_str = r#"
-    listen = "127.0.0.1:3000"
+    listen = "192.168.5.45:3000"
     [Properties]
     moveup = false
     movedown = false

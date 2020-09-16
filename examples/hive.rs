@@ -1,6 +1,6 @@
 use std::thread::sleep;
-use failure::_core::time::Duration;
 use hive::hive::Hive;
+use std::time::Duration;
 
 fn main() {
     let mut h = Hive::new("Hive","examples/properties.toml");//Hive::parse_properties(&config);

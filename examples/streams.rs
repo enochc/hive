@@ -6,11 +6,11 @@ use async_std::task;
 use futures::{SinkExt, StreamExt};
 use hive::property::Property;
 // use async_std::task::sleep;
-use failure::_core::time::Duration;
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use async_std::task::block_on;
 use std::thread::sleep;
+use std::time::Duration;
 
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]

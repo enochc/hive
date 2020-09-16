@@ -7,7 +7,6 @@ use async_std::{
     sync::Arc,
 };
 use futures::executor::block_on;
-use failure::_core::time::Duration;
 use std::thread::sleep;
 
 macro_rules! peer_by_address {

@@ -1,10 +1,9 @@
 
-use failure::_core::time::Duration;
-
 use hive::property::Property;
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::sleep;
+use std::time::Duration;
 
 
 fn main() {
