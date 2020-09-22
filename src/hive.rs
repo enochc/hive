@@ -19,6 +19,9 @@ type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
 use log::{debug, info, error};
+use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use async_std::sync::Arc;
 // use usb_device::prelude::{UsbVidPid, UsbDeviceBuilder};
 
 
@@ -32,7 +35,8 @@ pub struct Hive {
     listen_port: Option<Box<str>>,
     pub name: Box<str>,
     peers: Vec<Peer>,
-    pub message_received: Signal<String>
+    pub message_received: Signal<String>,
+    pub connected: Arc<AtomicBool>,
 }
 
 
@@ -50,6 +54,10 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 impl Hive {
     fn is_sever(&self) ->bool{
         self.listen_port.is_some()
+    }
+
+    pub fn is_connected(&self)->bool{
+        return self.connected.load(Ordering::Relaxed);
     }
 
     pub fn new_from_str(name: &str, properties: &str) -> Hive{
@@ -79,6 +87,7 @@ impl Hive {
             name: String::from(name).into_boxed_str(),
             peers: Vec::new(),
             message_received: Default::default(),
+            connected: Arc::new(AtomicBool::new(false)),
         };
 
         let properties = config.get("Properties");
@@ -224,35 +233,46 @@ impl Hive {
             info!("Connect To: {:?}", self.connect_to);
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
             let send_chan = self.sender.clone();
-            let (mut tx, mut rx) = mpsc::unbounded();
-            task::spawn(async move{
-                let stream = TcpStream::connect(address).await;
-                match stream {
-                    Ok( s) => {
-                        match s.peer_addr() {
-                            Ok(_addr) => {
-                                let se = SocketEvent::NewPeer {
-                                    name:String::from(""),
-                                    stream: s,
-                                };
-                                send_chan.clone().send(se).await.expect("failed to send peer");
-                                tx.send(true).await.expect("Failed to send connected signal");
-                            },
-                            Err(e) => error!("No peer address: {:?}", e),
+            let (tx, mut rx) = mpsc::unbounded();
+            let mut connected = false;
+            /* loop indefinately to connect to remote server */
+            while !connected{
+                let addr = address.clone();
+                let send_chan_clone = send_chan.clone();
+                let mut tx_clone = tx.clone();
+                task::spawn(async move{
+                    let stream = TcpStream::connect(&addr).await;
+                    match stream {
+                        Ok( s) => {
+                            match s.peer_addr() {
+                                Ok(_addr) => {
+                                    let se = SocketEvent::NewPeer {
+                                        name:String::from(""),
+                                        stream: s,
+                                    };
+                                    send_chan_clone.clone().send(se).await.expect("failed to send peer");
+                                    tx_clone.send(true).await.expect("Failed to send connected signal");
+                                },
+                                Err(e) => error!("No peer address: {:?}", e),
+                            }
+                        },
+                        Err(e) => {
+                            error!("Nope:: {:?}",e);
+                            tx_clone.send(false).await.expect("Failed to send connect failed signal");
+
                         }
-                    },
-                    Err(e) => {
-                        error!("Nope:: {:?}",e);
-                        tx.send(false).await.expect("Failed to send connect failed signal");
+                    };
 
-                    }
-                };
-
-            });
-            // listen for messages from server
-            let connected = rx.next().await.unwrap();//.unwrap().expect("Failed verify connection");
-            if connected {
-                self.receive_events(false).await;
+                });
+                // listen for messages from server
+                connected = rx.next().await.unwrap();
+                if connected {
+                    self.connected.store(true, Ordering::Relaxed);
+                    self.receive_events(false).await;
+                } else {
+                    debug!("failed to connect, retry in a moment");
+                    task::sleep(Duration::from_secs(10)).await;
+                }
             }
 
             debug!("CLIENT DONE");
@@ -271,6 +291,7 @@ impl Hive {
                     _ => (),
                 }
             });
+            self.connected.store(true, Ordering::Relaxed);
             self.receive_events(true).await;
             debug!("SERVER DONE");
 

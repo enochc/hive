@@ -21,10 +21,6 @@ impl Handler {
         self.send_property(p).await;
     }
 
-    pub fn is_connected(&self)->bool{
-        return !self.sender.is_closed()
-    }
-
     pub async fn send_property(&mut self, property:Property){
 
         let message = property_to_sock_str(Some(&property), true)

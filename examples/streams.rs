@@ -46,6 +46,7 @@ fn main() {
 
 
     let mut server_hand = server_hive.get_handler();
+    let server_connected = server_hive.connected.clone();
     task::Builder::new().name("SERVER HIVE".to_string()).spawn(async move {
         server_hive.run().await;
     });
@@ -78,7 +79,7 @@ fn main() {
     task::spawn(async move {
         client_hive_2.run();
         task::sleep(Duration::from_millis(500)).await;
-        if server_hand.is_connected() {
+        if server_connected.load(Ordering::Relaxed) {
             server_hand.send_to_peer("client1", "hey you").await;
             task::sleep(Duration::from_millis(500)).await;
             clone_hand.send_to_peer("SERVE", "hey mr man").await;
@@ -92,7 +93,7 @@ fn main() {
             task::sleep(Duration::from_millis(500)).await;
 
         } else {
-            eprintln!("server is not connected");
+            println!("server is not connected");
         }
         sender.send(1).await;
 
