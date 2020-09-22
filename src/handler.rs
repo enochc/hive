@@ -21,6 +21,10 @@ impl Handler {
         self.send_property(p).await;
     }
 
+    pub fn is_connected(&self)->bool{
+        return !self.sender.is_closed()
+    }
+
     pub async fn send_property(&mut self, property:Property){
 
         let message = property_to_sock_str(Some(&property), true)
@@ -29,8 +33,8 @@ impl Handler {
             from: String::from(""),
             msg: message.to_string()
         };
-
         self.sender.send(socket_event).await.expect("Failed to send property");
+
     }
 
     pub async fn delete_property(&mut self, name: &str){
@@ -50,6 +54,7 @@ impl Handler {
             msg: message.to_string()
         };
         self.sender.send(socket_event).await.unwrap();
+
     }
 
     pub fn hangup(&mut self) {

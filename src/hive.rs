@@ -12,10 +12,15 @@ use toml;
 use crate::handler::{Handler, };
 use crate::peer::{Peer, SocketEvent};
 use crate::property::{Property, properties_to_sock_str};
+// use usbd_serial::{SerialPort, USB_CLASS_CDC, UsbError};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
+
+use log::{debug, info, error};
+// use usb_device::prelude::{UsbVidPid, UsbDeviceBuilder};
+
 
 
 // #[derive(Debug)]
@@ -154,7 +159,7 @@ impl Hive {
         let mut incoming = listener.incoming();
         while let Some(stream) = incoming.next().await {
             let stream = stream?;
-            println!("Accepting from: {}", stream.peer_addr()?);
+            info!("Accepting from: {}", stream.peer_addr()?);
             match stream.peer_addr() {
                 Ok(addr) => {
                     let se = SocketEvent::NewPeer {
@@ -170,13 +175,56 @@ impl Hive {
         Ok(())
     }
 
+    // pub async fn connect_USB(){
+    //     init_logging();
+    //
+    //     let usb_bus = device_specific_usb::UsbBus::new(...);
+    //     let mut serial = SerialPort::new(&usb_bus);
+    //
+    //     let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
+    //         .product("Serial port")
+    //         .device_class(USB_CLASS_CDC)
+    //         .build();
+    //
+    //     loop {
+    //         if !usb_dev.poll(&mut [&mut serial]) {
+    //             continue;
+    //         }
+    //
+    //         let mut buf = [0u8; 64];
+    //
+    //         match serial.read(&mut buf[..]) {
+    //             Ok(count) => {
+    //                 // count bytes were read to &buf[..count]
+    //                 prin
+    //             },
+    //             Err(UsbError::WouldBlock) => {
+    //                 // Err(err) => // An error occurred
+    //             },// No data received
+    //             _ => {error!("Something else happened!");}
+    //
+    //         };
+    //
+    //         match serial.write(&[0x3a, 0x29]) {
+    //             Ok(count) => {
+    //                 // count bytes were written
+    //             },
+    //             Err(err) => {
+    //                 error!("Usb error occurred");
+    //             }// No data could be written (buffers full)
+    //                 // Err(e) => // An error occurred
+    //         };
+    //     }
+    // }
+
     pub async fn run(& mut self){//} -> Result<()> {
 
         // I'm a client
         if !self.connect_to.is_none() {
-            println!("Connect To: {:?}", self.connect_to);
+            info!("Connect To: {:?}", self.connect_to);
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
             let send_chan = self.sender.clone();
+            let (mut tx, mut rx) = mpsc::unbounded();
             task::spawn(async move{
                 let stream = TcpStream::connect(address).await;
                 match stream {
@@ -188,34 +236,43 @@ impl Hive {
                                     stream: s,
                                 };
                                 send_chan.clone().send(se).await.expect("failed to send peer");
+                                tx.send(true).await.expect("Failed to send connected signal");
                             },
-                            Err(e) => eprintln!("No peer address: {:?}", e),
+                            Err(e) => error!("No peer address: {:?}", e),
                         }
                     },
-                    _ => {eprintln!("Nope")}
+                    Err(e) => {
+                        error!("Nope:: {:?}",e);
+                        tx.send(false).await.expect("Failed to send connect failed signal");
+
+                    }
                 };
 
             });
             // listen for messages from server
-            self.receive_events(false).await;
-            println!("CLIENT DONE");
+            let connected = rx.next().await.unwrap();//.unwrap().expect("Failed verify connection");
+            if connected {
+                self.receive_events(false).await;
+            }
+
+            debug!("CLIENT DONE");
         }
 
         // I'm a server
         if !self.listen_port.is_none() {
             let port = self.listen_port.as_ref().unwrap().to_string().clone();
-            println!("{:?} Listening for connections on {:?}",self.name, self.listen_port);
+            info!("{:?} Listening for connections on {:?}",self.name, self.listen_port);
             let send_chan = self.sender.clone();
             // listen for connections loop
             let p = port.clone();
             task::spawn( async move {
                 match Hive::accept_loop(send_chan.clone(), p).await {
-                    Err(e) => eprintln!("Failed accept loop: {:?}",e),
+                    Err(e) => error!("Failed accept loop: {:?}",e),
                     _ => (),
                 }
             });
             self.receive_events(true).await;
-            println!("SERVER DONE");
+            debug!("SERVER DONE");
 
         }
         // return Result::Ok(())
@@ -262,7 +319,7 @@ impl Hive {
 
     fn peer_string(& self)->String {
         let mut peers_string = String::new();
-        println!("name {:?}", &self.name);
+        debug!("name {:?}", &self.name);
 
         // Add self to peers list
         let myadr = self.listen_port.as_ref().expect("No port").clone();
@@ -300,7 +357,7 @@ impl Hive {
                 let msg = format!("{}{}",PEER_MESSAGE ,msg);
                 peer.send(msg.as_str()).await;
             },
-            _=> eprintln!("No peer {}", peer_name)
+            _=> error!("No peer {}", peer_name)
         }
     }
 
@@ -362,9 +419,9 @@ impl Hive {
     }
 
     async fn got_message(&mut self, from:&str, msg:String){
-        println!("GOT MESSAGE: {}: {:?}", self.name, msg);
+        debug!("GOT MESSAGE: {}: {:?}", self.name, msg);
         if msg.len() <3{
-            println!("<<< Whats this? {}", msg);
+            debug!("<<< Whats this? {}", msg);
         }else {
             let (msg_type, message) = msg.split_at(3);
             match msg_type {
@@ -395,13 +452,13 @@ impl Hive {
                     if vec.len() == 1 {
                         // the PEER_MESSAGE_DIV separates the peer name from the message
                         // without the DIV, there is only a message and its for me
-                        println!("the message was forwarded for me: {:?}", message);
+                        debug!("the message was forwarded for me: {:?}", message);
                         self.message_received.emit(String::from(message)).await;
                         return;
                     }
                     let pear_name = vec[0];
                     if self.name.to_string() == pear_name.to_string() {
-                        println!("Message is for me: {:?}", vec[1]);
+                        debug!("Message is for me: {:?}", vec[1]);
                         self.message_received.emit(String::from(vec[1])).await;
                     } else {
                         self.send_to_peer(vec[1], pear_name).await;
@@ -417,7 +474,7 @@ impl Hive {
                         }
                     }
                 }
-                _ => println!("got unknown message {:?},{:?}", msg_type, msg)
+                _ => debug!("got unknown message {:?},{:?}", msg_type, msg)
             }
         }
     }

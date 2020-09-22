@@ -11,10 +11,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_std::task::block_on;
 use std::thread::sleep;
 use std::time::Duration;
+use hive::init_logging;
 
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 fn main() {
+    init_logging();
     let counter = Arc::new(AtomicUsize::new(0));
     let count1 = counter.clone();
     let count2 = counter.clone();
@@ -76,24 +78,28 @@ fn main() {
     task::spawn(async move {
         client_hive_2.run();
         task::sleep(Duration::from_millis(500)).await;
-        server_hand.send_to_peer("client1", "hey you").await;
-        task::sleep(Duration::from_millis(500)).await;
-        clone_hand.send_to_peer("SERVE", "hey mr man").await;
-        task::sleep(Duration::from_millis(500)).await;
-        clone_hand.send_property_string("thermostatName", "Before").await;
-        task::sleep(Duration::from_millis(500)).await;
-        server_hand.delete_property("thermostatName").await;
-        task::sleep(Duration::from_millis(500)).await;
-        // These should not be counted, because we deleted the ThermostatName
-        server_hand.send_property_string("thermostatName", "After").await;
-        task::sleep(Duration::from_millis(500)).await;
+        if server_hand.is_connected() {
+            server_hand.send_to_peer("client1", "hey you").await;
+            task::sleep(Duration::from_millis(500)).await;
+            clone_hand.send_to_peer("SERVE", "hey mr man").await;
+            task::sleep(Duration::from_millis(500)).await;
+            clone_hand.send_property_string("thermostatName", "Before").await;
+            task::sleep(Duration::from_millis(500)).await;
+            server_hand.delete_property("thermostatName").await;
+            task::sleep(Duration::from_millis(500)).await;
+            // These should not be counted, because we deleted the ThermostatName
+            server_hand.send_property_string("thermostatName", "After").await;
+            task::sleep(Duration::from_millis(500)).await;
+
+        } else {
+            eprintln!("server is not connected");
+        }
         sender.send(1).await;
+
     });
 
     let done = block_on(receiver.next());
-
     assert_eq!(counter.load(Ordering::Relaxed), 5);
-
     client_hand.hangup();
 
     println!("done with stuff");

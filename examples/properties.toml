@@ -1,6 +1,5 @@
 
-#listen = 3000
-
+connect = "localhost:3000"
 [Properties]
 thingvalue= 1
 is_active = true

@@ -1,6 +1,6 @@
 [package]
 name = "hive"
-version = "0.1.300"
+version = "0.1.400"
 authors = ["Enoch Carter <mrenoch@gmail.com>"]
 edition = "2018"
 
@@ -12,6 +12,11 @@ futures = "0.3.5"
 #https://docs.rs/config/0.10.1/config/
 config = "0.10.1"
 toml = "0.5"
+log = "0.4.11"
+
+#libusb = "0.3"
+#usbd-serial = "0.1"
+#usb-device = "0.2.5"
 
 #async-std = { git = 'https://github.com/stjepang/async-std', branch = 'new-scheduler' }
 async-std = "1.6.2"
