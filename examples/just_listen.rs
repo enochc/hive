@@ -6,26 +6,20 @@ use futures::{SinkExt, StreamExt};
 use hive::property::Property;
 use futures::executor::block_on;
 use std::thread::sleep;
+use log::{Metadata, Level, Record};
+use hive::init_logging;
+
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 fn main() {
-
-    // let props_str = r#"
-    // listen = "127.0.0.1:3000"
-    // [Properties]
-    // thingvalue= 1
-    // is_active = true
-    // lightValue = 0
-    // thermostatName = "thermostat"
-    // thermostatTarget_temp = 2
-    // "#;
+    init_logging();
     let props_str = r#"
     listen = "192.168.5.45:3000"
     [Properties]
     moveup = false
     movedown = false
     speed = 1000
-    pt = 0
+    pt = 2
     "#;
     let mut server_hive = Hive::new_from_str("SERVE", props_str);
 
