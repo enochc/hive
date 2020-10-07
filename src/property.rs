@@ -6,8 +6,8 @@ use crate::hive::{PROPERTIES, PROPERTY, DELETE};
 use std::collections::HashMap;
 use async_std::task::block_on;
 
-
 pub type PropertyType = toml::Value;
+
 
 #[derive(Default)]
 pub struct Property
@@ -136,7 +136,9 @@ impl Property {
         &self.value
     }
 }
-
+/*
+    |P|one=1\ntwo=2\nthree=3
+ */
 pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> String {
     let mut message = PROPERTIES.to_string();
     for p in properties {
@@ -147,7 +149,9 @@ pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> 
     }
     return String::from(message);
 }
-
+/*
+    |p|one=1
+ */
 pub(crate) fn property_to_sock_str(property:Option<&Property>, inc_head:bool) -> Option<String> {
     return match property {
         Some(p) if p.value.is_some() => {

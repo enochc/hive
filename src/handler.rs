@@ -4,20 +4,21 @@ use futures::SinkExt;
 
 use crate::hive::{PEER_MESSAGE_DIV};
 use crate::peer::SocketEvent;
-use crate::property::{Property, property_to_sock_str};
+use crate::property::{Property, PropertyType, property_to_sock_str};
 
 #[derive(Clone)]
 pub struct Handler {
     pub (crate) sender: UnboundedSender<SocketEvent>
 }
 
+
 impl Handler {
     pub fn set_str(&self, name:&str, value:&str){
         let _prop = Property::from_str(name, value);
     }
 
-    pub async fn send_property_string(&mut self, prop_name:&str, prop_value:&str){
-        let p = Property::from_str(prop_name, prop_value);
+    pub async fn send_property_value(&mut self, prop_name:&str, prop_value:Option<&PropertyType>){
+        let p = Property::from_toml(prop_name, prop_value);
         self.send_property(p).await;
     }
 

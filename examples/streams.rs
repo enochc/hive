@@ -4,7 +4,7 @@ use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
 use hive::hive::Hive;
 use async_std::task;
 use futures::{SinkExt, StreamExt};
-use hive::property::Property;
+use hive::property::{Property, PropertyType};
 // use async_std::task::sleep;
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -61,6 +61,10 @@ fn main() {
         count2.fetch_add(1, Ordering::SeqCst);
     });
 
+    client_hive.get_mut_property("thingvalue").unwrap().on_changed.connect(|value|{
+        println!("thing value::::::::::::::::::::: {:?}", value);
+    });
+
     let mut client_hand = client_hive.get_handler();
 
     task::spawn(async move {
@@ -84,12 +88,14 @@ fn main() {
             task::sleep(Duration::from_millis(500)).await;
             clone_hand.send_to_peer("SERVE", "hey mr man").await;
             task::sleep(Duration::from_millis(500)).await;
-            clone_hand.send_property_string("thermostatName", "Before").await;
+            clone_hand.send_property_value("thermostatName", Some(&"Before".into())).await;
             task::sleep(Duration::from_millis(500)).await;
             server_hand.delete_property("thermostatName").await;
             task::sleep(Duration::from_millis(500)).await;
+            server_hand.send_property_value("thingvalue", Some(&2.into())).await;
+            task::sleep(Duration::from_millis(500)).await;
             // These should not be counted, because we deleted the ThermostatName
-            server_hand.send_property_string("thermostatName", "After").await;
+            server_hand.send_property_value("thermostatName", Some(&"After".into())).await;
             task::sleep(Duration::from_millis(500)).await;
 
         } else {

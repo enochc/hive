@@ -52,7 +52,7 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 
 
 impl Hive {
-    fn is_sever(&self) ->bool{
+    pub fn is_sever(&self) ->bool{
         self.listen_port.is_some()
     }
 

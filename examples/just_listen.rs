@@ -16,8 +16,7 @@ fn main() {
     let props_str = r#"
     listen = "192.168.5.45:3000"
     [Properties]
-    moveup = false
-    movedown = false
+    turn = 0
     speed = 1000
     pt = 2
     "#;

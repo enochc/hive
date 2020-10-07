@@ -1,6 +1,6 @@
 [package]
 name = "hive"
-version = "0.1.402"
+version = "0.1.403"
 authors = ["Enoch Carter <mrenoch@gmail.com>"]
 edition = "2018"
 
