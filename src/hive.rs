@@ -313,7 +313,7 @@ impl Hive {
                     tokio::spawn( async move {
                         debug!("!! Im in a task {:?}", listening);
                         let perf = crate::bluetooth::advertise::Peripheral::new().await;
-                        // perf.run(listening).await;
+                        perf.run(listening).await;
                         // match perf.run(listening).await {
                         //     _ => ()
                         //}
