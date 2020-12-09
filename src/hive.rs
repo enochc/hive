@@ -291,9 +291,16 @@ impl Hive {
                     _ => (),
                 }
             });
+            if cfg!(feature="bluetooth"){
+                info!("!! this is bluetooth");
+                task::spawn(async move{
+                    crate::bluetooth::advertise::run();
+                });
+            }
             self.connected.store(true, Ordering::Relaxed);
             self.receive_events(true).await;
             debug!("SERVER DONE");
+
 
         }
         // return Result::Ok(())

@@ -15,6 +15,8 @@ fn main() {
     init_logging();
     let props_str = r#"
     listen = "192.168.5.45:3000"
+    [bluetooth]
+    btname = "Hive"
     [Properties]
     turn = 0
     speed = 1000

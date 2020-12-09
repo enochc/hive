@@ -25,6 +25,8 @@ fn main() {
 
     let props_str = r#"
     listen = "127.0.0.1:3000"
+    [bluetooth]
+    btname = "Hive"
     [Properties]
     thingvalue= 1
     is_active = true

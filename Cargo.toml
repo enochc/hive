@@ -7,6 +7,9 @@ license = "MIT OR Apache-2.0"
 license-file = "LICENSE.txt"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["bluetooth"]
+bluetooth = ["bluster", "uuid", "tokio"]
 
 [dependencies]
 futures = "0.3.5"
@@ -15,13 +18,19 @@ futures = "0.3.5"
 config = "0.10.1"
 toml = "0.5"
 log = "0.4.11"
+async-std = "1.8"
+
+### bluster = "0.1.2", default crate doesn't have latest updates to the repo for some reason
+bluster = {path="bluster", optional=true}
+uuid = {version="0.8.1", optional=true}
+tokio = {version="0.2", optional=true}
 
 #libusb = "0.3"
 #usbd-serial = "0.1"
 #usb-device = "0.2.5"
 
 #async-std = { git = 'https://github.com/stjepang/async-std', branch = 'new-scheduler' }
-async-std = "1.6.2"
+
 
 [lib]
 name = "hive"
