@@ -307,7 +307,7 @@ impl Hive {
                     task::spawn( async {
                         // let perf = crate::bluetooth::advertise::Peripheral::new().await;
                         // perf.run(listening).await;
-                        // debug!("!! Im in a task");
+                        debug!("!! Im in a task");
                         // Ok(())
                     });
                 }
