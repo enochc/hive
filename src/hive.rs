@@ -234,6 +234,9 @@ impl Hive {
         return self.listening.clone();
     }
 
+    // tokio required by bluetooth bluster libs
+
+
     pub async fn run(& mut self){//} -> Result<()> {
         self.listening.store(true, Ordering::Relaxed);
         // I'm a client
@@ -305,6 +308,7 @@ impl Hive {
 
                     info!("!! this is bluetooth");
                     let listening = self.listening.clone();
+
                     task::spawn( async {
                         let perf = crate::bluetooth::advertise::Peripheral::new().await;
                         // perf.run(listening).await;
