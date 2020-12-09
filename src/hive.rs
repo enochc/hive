@@ -52,6 +52,15 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 // pub (crate) const ACK:&str = "<<|";
 
 
+fn spawn_bluetooth_listener(listening:Arc<AtomicBool>){
+    std::thread::spawn( move||{
+        async_std::task::block_on(async {
+            let perf = crate::bluetooth::advertise::Peripheral::new().await;
+            perf.run(listening).await;
+        })
+
+    });
+}
 
 impl Hive {
     pub fn is_sever(&self) ->bool{
@@ -315,17 +324,9 @@ impl Hive {
                     //
                     // });
 
-                    std::thread::spawn( move||{
-                        async_std::task::block_on(async {
-                            let perf = crate::bluetooth::advertise::Peripheral::new().await;
-                            perf.run(listening).await;
-                        })
-
-                    });
+                    spawn_bluetooth_listener(listening);
 
                     self.receive_events(true).await;
-
-
 
                 }
             #[cfg(not(feature="bluetooth"))]
@@ -335,11 +336,10 @@ impl Hive {
                 }
 
             debug!("SERVER DONE");
-
-
         }
-        // return Result::Ok(())
     }
+
+
 
 
     async fn receive_events(&mut self, is_server:bool){
