@@ -310,15 +310,15 @@ impl Hive {
                     let listening = self.listening.clone();
 
                     // task::spawn( async {
+                    let perf = crate::bluetooth::advertise::Peripheral::new().await;
+                    let p = Arc::new(perf);
                     tokio::spawn( async move {
                         debug!("!! Im in a task {:?}", listening);
-                        let perf = crate::bluetooth::advertise::Peripheral::new().await;
-                        perf.run(listening).await;
-                        // match perf.run(listening).await {
-                        //     _ => ()
-                        //}
+                        //let perf = crate::bluetooth::advertise::Peripheral::new().await;
 
-                        // Ok(())
+                        // WTF wont you compile on a pie!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                        p.run(listening).await;
+
                     });
                 }
             self.connected.store(true, Ordering::Relaxed);
