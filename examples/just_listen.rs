@@ -14,8 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
-#[tokio::main]
-async fn main() {
+fn main() {
     init_logging();
     println!("<< println");
     debug!("<< debug");
@@ -55,8 +54,7 @@ async fn main() {
     let mut send_chan_clone = send_chan.clone();
     let listener = server_hive.get_listener();
 
-    // task::spawn(async move {
-    tokio::spawn(async move {
+    task::spawn(async move {
         &server_hive.run().await;
         send_chan_clone.send(true);
     });

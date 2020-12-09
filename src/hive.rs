@@ -22,6 +22,8 @@ type Receiver<T> = mpsc::UnboundedReceiver<T>;
 use log::{debug, info, error};
 use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
+use futures::executor::block_on;
+use std::error::Error;
 
 // use usb_device::prelude::{UsbVidPid, UsbDeviceBuilder};
 
@@ -51,15 +53,16 @@ pub (crate) const PEER_MESSAGE_DIV: &str = "|=|";
 pub (crate) const REQUEST_PEERS: &str = "<p|";
 // pub (crate) const ACK:&str = "<<|";
 
-
-fn spawn_bluetooth_listener(listening:Arc<AtomicBool>){
-    std::thread::spawn( move||{
-        async_std::task::block_on(async {
+#[cfg(feature="bluetooth")]
+fn spawn_bluetooth_listener(listening:Arc<AtomicBool>)->Result<()>{
+    std::thread::spawn( move|| {
+        async_std::task::block_on(async move {
             let perf = crate::bluetooth::advertise::Peripheral::new().await;
             perf.run(listening).await;
         })
-
     });
+    Ok(())
+
 }
 
 impl Hive {
@@ -323,8 +326,13 @@ impl Hive {
                     // async_std::task::spawn(async move{
                     //
                     // });
+                    let mut rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.spawn(async{
+                        spawn_bluetooth_listener(listening);
+                    });
 
-                    spawn_bluetooth_listener(listening);
+
+
 
                     self.receive_events(true).await;
 
