@@ -19,8 +19,7 @@ impl fmt::Debug for Connection {
 impl<'a> Connection {
     pub fn new() -> Result<Self, Error> {
         let (resource, default) = dbus_tokio::connection::new_system_sync()?;
-        // tokio::spawn(async {
-        async_std::task::spawn(async {
+        tokio::spawn(async {
             let err = resource.await;
             panic!("Lost connection to D-Bus: {}", err);
         });
