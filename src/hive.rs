@@ -4,6 +4,7 @@ use crate::signal::Signal;
 use async_std::{
     net::{TcpListener, TcpStream, ToSocketAddrs},
     task,
+    sync::Arc,
 };
 use futures::{SinkExt, StreamExt};
 use futures::channel::mpsc;
@@ -21,7 +22,7 @@ type Receiver<T> = mpsc::UnboundedReceiver<T>;
 use log::{debug, info, error};
 use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
-use async_std::sync::Arc;
+
 // use usb_device::prelude::{UsbVidPid, UsbDeviceBuilder};
 
 

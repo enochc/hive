@@ -11,7 +11,8 @@ keywords = ["BLE", "Bluetooth", "Bluez", "CoreBluetooth", "USB"]
 categories = ["os", "api-bindings", "hardware-support"]
 [dependencies]
 futures = "0.3"
-tokio = "0.2"
+#tokio = "0.2"
+async-std = "1.8"
 uuid = "0.8.1"
 log = "0.4"
 [target."cfg(any(target_os = \"linux\", target_os = \"android\"))".dependencies]
