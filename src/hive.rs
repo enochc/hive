@@ -309,7 +309,8 @@ impl Hive {
                     info!("!! this is bluetooth");
                     let listening = self.listening.clone();
 
-                    task::spawn( async {
+                    // task::spawn( async {
+                    tokio::spawn( async {
                         let perf = crate::bluetooth::advertise::Peripheral::new().await;
                         // perf.run(listening).await;
                         debug!("!! Im in a task");
