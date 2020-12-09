@@ -27,8 +27,8 @@ impl log::Log for SimpleLogger {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
-            // println!("{:?}{:?}, {:?} - {}", record.file(), record.line(), record.level(), record.args());
-            println!("{:?} - {}", record.level(), record.args());
+            println!("{:?}:{:?} {:?} - {}", record.file(), record.line(), record.level(), record.args());
+            // println!("{:?} - {}", record.level(), record.args());
         }
     }
 
