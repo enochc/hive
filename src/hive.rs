@@ -309,20 +309,31 @@ impl Hive {
                     info!("!! this is bluetooth");
                     let listening = self.listening.clone();
 
-                    // task::spawn( async {
-                    let perf = crate::bluetooth::advertise::Peripheral::new().await;
-                    let p = Arc::new(perf);
-                    tokio::spawn( async move {
-                        debug!("!! Im in a task {:?}", listening);
-                        //let perf = crate::bluetooth::advertise::Peripheral::new().await;
 
-                        // WTF wont you compile on a pie!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                        p.run(listening).await;
+                    self.connected.store(true, Ordering::Relaxed);
+                    // async_std::task::spawn(async move{
+                    //
+                    // });
+
+                    std::thread::spawn( move||{
+                        async_std::task::block_on(async {
+                            let perf = crate::bluetooth::advertise::Peripheral::new().await;
+                            perf.run(listening).await;
+                        })
 
                     });
+
+                    self.receive_events(true).await;
+
+
+
                 }
-            self.connected.store(true, Ordering::Relaxed);
-            self.receive_events(true).await;
+            #[cfg(not(feature="bluetooth"))]
+                {
+                    self.connected.store(true, Ordering::Relaxed);
+                    self.receive_events(true).await;
+                }
+
             debug!("SERVER DONE");
 
 
