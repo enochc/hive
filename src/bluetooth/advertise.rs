@@ -29,6 +29,7 @@ pub struct Peripheral{
 }
 
 // Peripheral
+
 // #[tokio::main(flavor = "current_thread")]
 /// do I need tokio?
 impl Peripheral {
@@ -36,7 +37,7 @@ impl Peripheral {
         let peripheral = Peripheral_device::new().await.expect("Failed to initialize peripheral");
         return Peripheral{peripheral}
     }
-    // #[tokio::main]
+    #[tokio::main]
     pub async fn run(&self, listening:Arc<AtomicBool>) {
         let (sender_characteristic, receiver_characteristic) = channel(1);
         let (sender_descriptor, receiver_descriptor) = channel(1);
