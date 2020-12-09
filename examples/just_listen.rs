@@ -9,6 +9,8 @@ use std::thread::sleep;
 use log::{Metadata, Level, Record};
 use hive::init_logging;
 use log::{debug, info, error};
+use async_std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
@@ -38,16 +40,36 @@ fn main() {
     //     println!("<<<< PT: {:?}", value);
     // });
     //
+
+    use simple_signal::{self, Signal};
+
     server_hive.get_mut_property("turn").unwrap().on_changed.connect(move |value|{
         println!("<<<< TURN: {:?}", value);
     });
 
 
+    let running = Arc::new(AtomicBool::new(true));
+
     let (mut send_chan, mut receive_chan) = mpsc::unbounded();
+    let mut send_chan_clone = send_chan.clone();
+    let listener = server_hive.get_listener();
     task::spawn(async move {
-        server_hive.run().await;
-        send_chan.send(true).await;
+        &server_hive.run().await;
+        send_chan_clone.send(true);
     });
+
+
+    simple_signal::set_handler(&[Signal::Int, Signal::Term], {
+        // let running = running.clone();
+        move |sig| {
+            println!("<< Received signal!! {:?}", sig);
+            // running.store(false, Ordering::SeqCst);
+            listener.store(false, Ordering::Relaxed);
+            send_chan.clone().send(true);
+        }
+    });
+
+
     let done = block_on(receive_chan.next());
     println!("Done {:?}",done);
 

@@ -19,6 +19,7 @@ config = "0.10.1"
 toml = "0.5"
 log = "0.4.11"
 async-std = "1.8"
+simple-signal = "1.1.1"
 
 ### bluster = "0.1.2", default crate doesn't have latest updates to the repo for some reason
 bluster = {path="bluster", optional=true}

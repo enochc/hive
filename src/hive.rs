@@ -37,6 +37,7 @@ pub struct Hive {
     peers: Vec<Peer>,
     pub message_received: Signal<String>,
     pub connected: Arc<AtomicBool>,
+    listening: Arc<AtomicBool>,
 }
 
 
@@ -88,6 +89,7 @@ impl Hive {
             peers: Vec::new(),
             message_received: Default::default(),
             connected: Arc::new(AtomicBool::new(false)),
+            listening: Arc::new(AtomicBool::new(false)),
         };
 
         let properties = config.get("Properties");
@@ -226,8 +228,13 @@ impl Hive {
     //     }
     // }
 
-    pub async fn run(& mut self){//} -> Result<()> {
 
+    pub fn get_listener(&self) ->Arc<AtomicBool>{
+        return self.listening.clone();
+    }
+
+    pub async fn run(& mut self){//} -> Result<()> {
+        self.listening.store(true, Ordering::Relaxed);
         // I'm a client
         if !self.connect_to.is_none() {
             info!("Connect To: {:?}", self.connect_to);
@@ -294,10 +301,19 @@ impl Hive {
 
             #[cfg(feature="bluetooth")]
                 {
+                    let perf = crate::bluetooth::advertise::Peripheral::new();
                     info!("!! this is bluetooth");
                     task::spawn(async move{
-                        crate::bluetooth::advertise::run();
+                        perf.run().await;
+                        //crate::bluetooth::advertise::run();
                     });
+                    task::spawn(async move {
+                        while self.listening.load(Ordering::Relaxed) {
+                            task::sleep(Duration::from_secs(1));
+                        }
+                        perf.stop();
+                    });
+
                 }
             self.connected.store(true, Ordering::Relaxed);
             self.receive_events(true).await;
@@ -307,6 +323,7 @@ impl Hive {
         }
         // return Result::Ok(())
     }
+
 
     async fn receive_events(&mut self, is_server:bool){
         while !self.sender.is_closed() {
