@@ -301,22 +301,15 @@ impl Hive {
 
             #[cfg(feature="bluetooth")]
                 {
-                    let perf = crate::bluetooth::advertise::Peripheral::new();
+                    let perf = crate::bluetooth::advertise::Peripheral::new().await;
                     info!("!! this is bluetooth");
+                    let listening = self.listening.clone();
                     task::spawn(async move{
 
-                        perf.run().await;
-                        Ok(())
+                        perf.run(listening).await;
+                        // return Result::Ok(())
                         //crate::bluetooth::advertise::run();
                     });
-                    task::spawn(async move {
-                        while self.listening.load(Ordering::Relaxed) {
-                            task::sleep(Duration::from_secs(1));
-                        }
-                        perf.stop();
-                        Ok(())
-                    });
-
                 }
             self.connected.store(true, Ordering::Relaxed);
             self.receive_events(true).await;

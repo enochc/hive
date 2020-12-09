@@ -19,6 +19,8 @@ use std::time::Duration;
 use uuid::Uuid;
 use crate::bluetooth::my_blurz::set_discoverable;
 use crate::bluetooth::{ADVERTISING_NAME, SERVICE_ID};
+use std::sync::atomic::AtomicBool;
+use std::thread::sleep;
 
 const ADVERTISING_TIMEOUT: Duration = Duration::from_secs(100);
 
@@ -30,12 +32,12 @@ pub struct Peripheral{
 // #[tokio::main(flavor = "current_thread")]
 /// do I need tokio?
 impl Peripheral {
-    pub fn new()->Peripheral {
+    pub async fn new()->Peripheral {
         let peripheral = Peripheral_device::new().await.expect("Failed to initialize peripheral");
         return Peripheral{peripheral}
     }
-    #[tokio::main]
-    pub async fn run(&self) {
+    // #[tokio::main]
+    pub async fn run(&self, listening:Arc<AtomicBool>) {
         let (sender_characteristic, receiver_characteristic) = channel(1);
         let (sender_descriptor, receiver_descriptor) = channel(1);
 
@@ -189,7 +191,14 @@ impl Peripheral {
             // let timeout = tokio::time::delay_for(ADVERTISING_TIMEOUT);
             // futures::future::join(ad_check, timeout).await;
             // peripheral.stop_advertising().await.unwrap();
-            while self.peripheral.is_advertising().await.unwrap() {}
+            while listening.load(atomic::Ordering::Relaxed) {
+                thread::sleep(Duration::from_secs(1));
+            }
+
+            debug!("Stopping Peripheral from being discoverable");
+            set_discoverable(false).expect("Failed to stop bluetooth advertisement");
+            self.peripheral.stop_advertising().await.unwrap();
+
             // set_discoverable(false).expect("failed to stop being discovered");
             // info!("Peripheral stopped advertising");
         };
@@ -198,10 +207,4 @@ impl Peripheral {
         // futures::join!(characteristic_handler, descriptor_handler, main_fut);
     }
 
-    pub fn stop(&self) {
-        debug!("Stopping Peripheral from being discoverable");
-        set_discoverable(false).expect("Failed to stop bluetooth advertisement");
-        self.peripheral.stop_advertising().await.unwrap();
-
-    }
 }
