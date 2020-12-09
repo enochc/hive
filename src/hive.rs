@@ -291,7 +291,7 @@ impl Hive {
                     _ => (),
                 }
             });
-            
+
             #[cfg(feature="bluetooth")]
                 {
                     info!("!! this is bluetooth");
@@ -299,9 +299,6 @@ impl Hive {
                         crate::bluetooth::advertise::run();
                     });
                 }
-            // if cfg!(feature="bluetooth"){
-
-            // }
             self.connected.store(true, Ordering::Relaxed);
             self.receive_events(true).await;
             debug!("SERVER DONE");

@@ -8,11 +8,14 @@ use futures::executor::block_on;
 use std::thread::sleep;
 use log::{Metadata, Level, Record};
 use hive::init_logging;
+use log::{debug, info, error};
 
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 fn main() {
     init_logging();
+    println!("<< println");
+    debug!("<< debug");
     let props_str = r#"
     listen = "192.168.5.45:3000"
     [bluetooth]
