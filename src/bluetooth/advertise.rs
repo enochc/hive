@@ -20,19 +20,13 @@ use uuid::Uuid;
 use crate::bluetooth::my_blurz::set_discoverable;
 use crate::bluetooth::{ADVERTISING_NAME, SERVICE_ID};
 use std::sync::atomic::AtomicBool;
-use std::thread::sleep;
-use std::error::Error;
 
-const ADVERTISING_TIMEOUT: Duration = Duration::from_secs(100);
+use std::error::Error;
 
 pub struct Peripheral{
     peripheral: Peripheral_device
 }
 
-// Peripheral
-
-// #[tokio::main(flavor = "current_thread")]
-/// do I need tokio?
 impl Peripheral {
 
     pub async fn new()->Peripheral {
@@ -184,26 +178,24 @@ impl Peripheral {
             info!("Peripheral powered on");
             self.peripheral.register_gatt().await.unwrap();
 
-            //set_discoverable(true).expect("Failed to set discoverable");
+            set_discoverable(true).expect("Failed to set discoverable");
             self.peripheral
                 .start_advertising(ADVERTISING_NAME, &[]).await
                 .expect("Failed to start_advertising");
             while !self.peripheral.is_advertising().await.unwrap() {}
-            // let ad_check = async { while !peripheral.is_advertising().await.unwrap() {} };
+
             info!("Peripheral started advertising");
-            // let timeout = tokio::time::delay_for(ADVERTISING_TIMEOUT);
-            // futures::future::join(ad_check, timeout).await;
-            // peripheral.stop_advertising().await.unwrap();
+
             while listening.load(atomic::Ordering::Relaxed) {
                 thread::sleep(Duration::from_secs(1));
             }
 
             debug!("Stopping Peripheral from being discoverable");
-            //set_discoverable(false).expect("Failed to stop bluetooth advertisement");
+
             self.peripheral.stop_advertising().await.unwrap();
 
-            // set_discoverable(false).expect("failed to stop being discovered");
-            // info!("Peripheral stopped advertising");
+            set_discoverable(false).expect("failed to stop being discovered");
+            info!("Peripheral stopped advertising");
         };
         let fut = futures::future::join3(characteristic_handler, descriptor_handler, main_fut);
         fut.await;

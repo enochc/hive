@@ -22,10 +22,6 @@ type Receiver<T> = mpsc::UnboundedReceiver<T>;
 use log::{debug, info, error};
 use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
-use futures::executor::block_on;
-use std::error::Error;
-
-// use usb_device::prelude::{UsbVidPid, UsbDeviceBuilder};
 
 
 
@@ -63,7 +59,7 @@ fn spawn_bluetooth_listener(listening:Arc<AtomicBool>)->Result<()>{
             .unwrap();
         rt.block_on(async move{
             let perf = crate::bluetooth::advertise::Peripheral::new().await;
-            perf.run(listening).await;
+            perf.run(listening).await.expect("Failed to run peripheral");
         });
     });
 
@@ -336,8 +332,7 @@ impl Hive {
                     // let mut rt = tokio::runtime::Runtime::new().unwrap();
 
 
-
-                    spawn_bluetooth_listener(listening);
+                    spawn_bluetooth_listener(listening).expect("Failed to spawn bluetooth");
 
                     self.receive_events(true).await;
 
