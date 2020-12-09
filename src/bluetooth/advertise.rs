@@ -184,7 +184,7 @@ impl Peripheral {
             info!("Peripheral powered on");
             self.peripheral.register_gatt().await.unwrap();
 
-            set_discoverable(true).expect("Failed to set discoverable");
+            //set_discoverable(true).expect("Failed to set discoverable");
             self.peripheral
                 .start_advertising(ADVERTISING_NAME, &[]).await
                 .expect("Failed to start_advertising");
@@ -199,7 +199,7 @@ impl Peripheral {
             }
 
             debug!("Stopping Peripheral from being discoverable");
-            set_discoverable(false).expect("Failed to stop bluetooth advertisement");
+            //set_discoverable(false).expect("Failed to stop bluetooth advertisement");
             self.peripheral.stop_advertising().await.unwrap();
 
             // set_discoverable(false).expect("failed to stop being discovered");
