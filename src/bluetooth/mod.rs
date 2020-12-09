@@ -1,4 +1,4 @@
-pub mod blurz;
+pub mod my_blurz;
 
 #[cfg(not(target_os="linux"))]
 pub mod blurz_cross;

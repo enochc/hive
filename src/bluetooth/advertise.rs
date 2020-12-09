@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
-use crate::bluetooth::blurz::set_discoverable;
+use crate::bluetooth::my_blurz::set_discoverable;
 use crate::bluetooth::{ADVERTISING_NAME, SERVICE_ID};
 
 const ADVERTISING_TIMEOUT: Duration = Duration::from_secs(100);
