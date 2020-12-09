@@ -21,6 +21,7 @@ use crate::bluetooth::my_blurz::set_discoverable;
 use crate::bluetooth::{ADVERTISING_NAME, SERVICE_ID};
 use std::sync::atomic::AtomicBool;
 use std::thread::sleep;
+use std::error::Error;
 
 const ADVERTISING_TIMEOUT: Duration = Duration::from_secs(100);
 
@@ -39,7 +40,7 @@ impl Peripheral {
         return Peripheral{peripheral}
     }
 
-    pub async fn run(&self, listening:Arc<AtomicBool>) {
+    pub async fn run(&self, listening:Arc<AtomicBool>) -> Result<(), Box<dyn Error>> {
         let (sender_characteristic, receiver_characteristic) = channel(1);
         let (sender_descriptor, receiver_descriptor) = channel(1);
 
@@ -206,6 +207,7 @@ impl Peripheral {
         };
         let fut = futures::future::join3(characteristic_handler, descriptor_handler, main_fut);
         fut.await;
+        Ok(())
         // futures::join!(characteristic_handler, descriptor_handler, main_fut);
     }
 
