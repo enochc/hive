@@ -305,6 +305,7 @@ impl Hive {
                     info!("!! this is bluetooth");
                     task::spawn(async move{
                         perf.run().await;
+                        ()
                         //crate::bluetooth::advertise::run();
                     });
                     task::spawn(async move {
@@ -312,6 +313,7 @@ impl Hive {
                             task::sleep(Duration::from_secs(1));
                         }
                         perf.stop();
+                        ()
                     });
 
                 }
