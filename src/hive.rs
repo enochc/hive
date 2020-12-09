@@ -55,12 +55,17 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 
 #[cfg(feature="bluetooth")]
 fn spawn_bluetooth_listener(listening:Arc<AtomicBool>)->Result<()>{
-    std::thread::spawn( move|| {
-        async_std::task::block_on(async move {
-            let perf = crate::bluetooth::advertise::Peripheral::new().await;
-            perf.run(listening).await;
-        })
+
+    let mut rt = tokio::runtime::Builder::new()
+        .threaded_scheduler()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.spawn(async move{
+        let perf = crate::bluetooth::advertise::Peripheral::new().await;
+        perf.run(listening).await;
     });
+
     Ok(())
 
 }
@@ -327,17 +332,10 @@ impl Hive {
                     //
                     // });
                     // let mut rt = tokio::runtime::Runtime::new().unwrap();
-                    let mut rt = tokio::runtime::Builder::new()
-                        .threaded_scheduler()
-                        .enable_all()
-                        .build()
-                        .unwrap();
-                    rt.spawn(async{
-                        spawn_bluetooth_listener(listening);
-                    });
 
 
 
+                    spawn_bluetooth_listener(listening);
 
                     self.receive_events(true).await;
 
