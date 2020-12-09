@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
-fn main() {
+#[tokio::main]
+async fn main() {
     init_logging();
     println!("<< println");
     debug!("<< debug");
