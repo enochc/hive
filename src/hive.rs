@@ -326,7 +326,12 @@ impl Hive {
                     // async_std::task::spawn(async move{
                     //
                     // });
-                    let mut rt = tokio::runtime::Runtime::new().unwrap();
+                    // let mut rt = tokio::runtime::Runtime::new().unwrap();
+                    let mut rt = tokio::runtime::Builder::new()
+                        .threaded_scheduler()
+                        .enable_all()
+                        .build()
+                        .unwrap();
                     rt.spawn(async{
                         spawn_bluetooth_listener(listening);
                     });
