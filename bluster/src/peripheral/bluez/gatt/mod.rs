@@ -31,7 +31,8 @@ impl Gatt {
         tree.set_async_support(Some((
             connection.default.clone(),
             Box::new(|x| {
-                tokio::spawn(x);
+                // tokio::spawn(x);
+                async_std::task::spawn(x);
             }),
         )));
         Gatt {

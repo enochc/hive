@@ -44,7 +44,8 @@ impl Characteristic {
         {
             let object_path = object_path.clone();
             let connection = Arc::clone(connection);
-            tokio::spawn(
+            // tokio::spawn(
+            async_std::task::spawn(
                 message_receiver
                     .map(move |notification: Vec<u8>| {
                         // For notifications, BlueZ wants a PropertiesChanged
@@ -158,7 +159,8 @@ impl Characteristic {
                     let notify_subscribe = gatt::event::NotifySubscribe {
                         notification: sender,
                     };
-                    tokio::spawn(async move {
+                    // tokio::spawn(async move {
+                    async_std::task::spawn(async move {
                         while let Some(notification) = receiver.next().await {
                             let mut message_sender = message_sender.clone();
                             let _ = message_sender.send(notification).await;
