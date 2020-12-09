@@ -59,15 +59,15 @@ fn main() {
     });
 
 
-    // simple_signal::set_handler(&[Signal::Int, Signal::Term], {
-    //     // let running = running.clone();
-    //     move |sig| {
-    //         println!("<< Received signal!! {:?}", sig);
-    //         // running.store(false, Ordering::SeqCst);
-    //         listener.store(false, Ordering::Relaxed);
-    //         send_chan.clone().send(true);
-    //     }
-    // });
+    simple_signal::set_handler(&[Signal::Int, Signal::Term], {
+        // let running = running.clone();
+        move |sig| {
+            println!("<< Received signal!! {:?}", sig);
+            // running.store(false, Ordering::SeqCst);
+            listener.store(false, Ordering::Relaxed);
+            send_chan.clone().send(true);
+        }
+    });
 
 
     let done = block_on(receive_chan.next());
