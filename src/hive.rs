@@ -304,6 +304,7 @@ impl Hive {
                     let perf = crate::bluetooth::advertise::Peripheral::new();
                     info!("!! this is bluetooth");
                     task::spawn(async move{
+                        
                         perf.run().await;
                         ()
                         //crate::bluetooth::advertise::run();
