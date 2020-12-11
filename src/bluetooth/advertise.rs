@@ -178,7 +178,7 @@ impl Peripheral {
             info!("Peripheral powered on");
             self.peripheral.register_gatt().await.unwrap();
 
-            set_discoverable(true).expect("Failed to set discoverable");
+            //set_discoverable(true).expect("Failed to set discoverable");
             self.peripheral
                 .start_advertising(ADVERTISING_NAME, &[]).await
                 .expect("Failed to start_advertising");
@@ -194,7 +194,7 @@ impl Peripheral {
 
             self.peripheral.stop_advertising().await.unwrap();
 
-            set_discoverable(false).expect("failed to stop being discovered");
+            //set_discoverable(false).expect("failed to stop being discovered");
             info!("Peripheral stopped advertising");
         };
         let fut = futures::future::join3(characteristic_handler, descriptor_handler, main_fut);
