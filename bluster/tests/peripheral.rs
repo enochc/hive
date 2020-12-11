@@ -156,8 +156,7 @@ async fn it_advertises_gatt() {
     };
 
     let peripheral = Peripheral::new().await.unwrap();
-    peripheral
-        .add_service(&Service::new(
+    peripheral.add_service(&Service::new(
             Uuid::from_sdp_short_uuid(0x1234 as u16),
             true,
             characteristics,
@@ -169,10 +168,7 @@ async fn it_advertises_gatt() {
         println!("TWI");
         println!("Peripheral powered on");
         peripheral.register_gatt().await.unwrap();
-        peripheral
-            .start_advertising(ADVERTISING_NAME, &[])
-            .await
-            .unwrap();
+        peripheral.start_advertising(ADVERTISING_NAME, &[]).await.unwrap();
 
         println!("Peripheral started advertising");
         let ad_check = async { while !peripheral.is_advertising().await.unwrap() {} };

@@ -38,6 +38,13 @@ pub struct MyBluez{
     // adapter:Option<Arc<BluetoothAdapter<'a>>>
     // adapter: BluetoothAdapter<'a>
 }
+// pub fn set_powered(powered:bool){
+//     let sess = &BluetoothSession::create_session(None).unwrap();
+//     let adapter = BluetoothAdapter::init(
+//         sess
+//     );
+//     adapter.powe
+// }
 pub fn set_discoverable(discoverable:bool)->Result<()>{
     let sess = &BluetoothSession::create_session(None).unwrap();
     let adapter = BluetoothAdapter::init(

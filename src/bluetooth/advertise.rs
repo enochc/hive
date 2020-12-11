@@ -163,8 +163,7 @@ impl Peripheral {
             }
         };
 
-        // let peripheral = Peripheral_device::new().await.unwrap();
-
+        self.peripheral.unregister_gatt().await;
         self.peripheral.add_service(&Service::new(
             Uuid::from_sdp_short_uuid(SERVICE_ID),
             true,
@@ -180,8 +179,7 @@ impl Peripheral {
             self.peripheral.register_gatt().await.unwrap();
 
             //set_discoverable(true).expect("Failed to set discoverable");
-            self.peripheral
-                .start_advertising(ADVERTISING_NAME, &[]).await
+            self.peripheral.start_advertising(ADVERTISING_NAME, &[]).await
                 .expect("Failed to start_advertising");
             while !self.peripheral.is_advertising().await.unwrap() {}
 

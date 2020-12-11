@@ -53,7 +53,8 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 fn spawn_bluetooth_listener(listening:Arc<AtomicBool>)->Result<()>{
     std::thread::spawn(move||{
         let mut rt = tokio::runtime::Builder::new()
-            .threaded_scheduler()
+            .basic_scheduler()
+            // .threaded_scheduler()
             .enable_all()
             .build()
             .unwrap();
