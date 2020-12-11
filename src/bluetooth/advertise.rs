@@ -164,6 +164,7 @@ impl Peripheral {
         };
 
         // let peripheral = Peripheral_device::new().await.unwrap();
+
         self.peripheral.add_service(&Service::new(
             Uuid::from_sdp_short_uuid(SERVICE_ID),
             true,
@@ -187,7 +188,8 @@ impl Peripheral {
             info!("Peripheral started advertising");
 
             while listening.load(atomic::Ordering::Relaxed) {
-                thread::sleep(Duration::from_secs(1));
+                tokio::time::delay_for(Duration::from_secs(1));
+                // thread::sleep(Duration::from_secs(1));
             }
 
             debug!("Stopping Peripheral from being discoverable");
