@@ -163,7 +163,7 @@ impl Peripheral {
             }
         };
 
-        self.peripheral.unregister_gatt().await;
+        // self.peripheral.unregister_gatt().await;
         self.peripheral.add_service(&Service::new(
             Uuid::from_sdp_short_uuid(SERVICE_ID),
             true,
