@@ -52,7 +52,7 @@ impl Peripheral {
                 None,
             ),
             // None,
-            Some("Hive Char".as_bytes().into_vec()),
+            Some("Hive Char".as_bytes().to_vec()),
             {
                 let mut descriptors = HashSet::<Descriptor>::new();
                 descriptors.insert(Descriptor::new(
@@ -66,7 +66,7 @@ impl Peripheral {
                         ))),
                     ),
                     // None,
-                    Some("Hive Desc".as_bytes().into_vec()),
+                    Some("Hive Desc".as_bytes().to_vec()),
                 ));
                 descriptors
             },
