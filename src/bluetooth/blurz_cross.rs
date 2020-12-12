@@ -108,24 +108,24 @@ pub struct BluetoothDevice<'a> {
     session: &'a BluetoothSession,
 }
 impl<'a> BluetoothDevice<'a>{
-    pub fn new(session: &'a BluetoothSession, object_path: String) -> BluetoothDevice {unimplemented!()}
-    pub fn is_connected(&self) -> Result<bool, Box<Error>> {unimplemented!()}
-    pub fn is_paired(&self) -> Result<bool, Box<Error>> {unimplemented!()}
-    pub fn get_name(&self) -> Result<String, Box<Error>> {unimplemented!()}
-    pub fn get_address(&self) -> Result<String, Box<Error>> {unimplemented!()}
-    pub fn connect(&self, timeout_ms: i32) -> Result<(), Box<Error>> {unimplemented!()}
-    pub fn get_gatt_services(&self) -> Result<Vec<String>, Box<Error>> {unimplemented!()}
-    pub fn get_service_data(&self) -> Result<HashMap<String, Vec<u8>>, Box<Error>> {unimplemented!()}
-    pub fn pair(&self) -> Result<(), Box<Error>> {
+    pub fn new(_session: &'a BluetoothSession, _object_path: String) -> BluetoothDevice {unimplemented!()}
+    pub fn is_connected(&self) -> Result<bool, Box<dyn Error>> {unimplemented!()}
+    pub fn is_paired(&self) -> Result<bool, Box<dyn Error>> {unimplemented!()}
+    pub fn get_name(&self) -> Result<String, Box<dyn Error>> {unimplemented!()}
+    pub fn get_address(&self) -> Result<String, Box<dyn Error>> {unimplemented!()}
+    pub fn connect(&self, _timeout_ms: i32) -> Result<(), Box<dyn Error>> {unimplemented!()}
+    pub fn get_gatt_services(&self) -> Result<Vec<String>, Box<dyn Error>> {unimplemented!()}
+    pub fn get_service_data(&self) -> Result<HashMap<String, Vec<u8>>, Box<dyn Error>> {unimplemented!()}
+    pub fn pair(&self) -> Result<(), Box<dyn Error>> {
         unimplemented!()
     }
-    pub fn is_trusted(&self) -> Result<bool, Box<Error>> {unimplemented!()}
-    pub fn set_trusted(&self, value: bool) -> Result<(), Box<Error>> {unimplemented!()}
-    pub fn get_adapter(&self) -> Result<String, Box<Error>> {unimplemented!()}
+    pub fn is_trusted(&self) -> Result<bool, Box<dyn Error>> {unimplemented!()}
+    pub fn set_trusted(&self, _value: bool) -> Result<(), Box<dyn Error>> {unimplemented!()}
+    pub fn get_adapter(&self) -> Result<String, Box<dyn Error>> {unimplemented!()}
     pub fn get_id(&self) -> String {
         unimplemented!()
     }
-    pub fn get_uuids(&self) -> Result<Vec<String>, Box<Error>> {unimplemented!()}
+    pub fn get_uuids(&self) -> Result<Vec<String>, Box<dyn Error>> {unimplemented!()}
 }
 
 #[derive(Debug)]
@@ -197,23 +197,23 @@ pub struct OwnedFd {
 }
 
 impl<'a> BluetoothGATTCharacteristic<'a> {
-    pub fn new(session: &'a BluetoothSession, object_path: String) -> BluetoothGATTCharacteristic {unimplemented!()}
-    pub fn get_gatt_descriptors(&self) -> Result<Vec<String>, Box<Error>> {unimplemented!()}
-    pub fn read_value(&self, offset: Option<u16>) -> Result<Vec<u8>, Box<Error>> {unimplemented!()}
-    pub fn write_value(&self, values: Vec<u8>, offset: Option<u16>) -> Result<(), Box<Error>> {unimplemented!()}
-    pub fn acquire_write(&self) -> Result<(OwnedFd, u16), Box<Error>> {unimplemented!()}
-    pub fn get_value(&self) -> Result<Vec<u8>, Box<Error>> {unimplemented!()}
-    pub fn get_uuid(&self) -> Result<String, Box<Error>> {unimplemented!()}
-    pub fn is_notifying(&self) -> Result<bool, Box<Error>> {unimplemented!()}
-    pub fn start_notify(&self) -> Result<(), Box<Error>> {unimplemented!()}
-    pub fn stop_notify(&self) -> Result<(), Box<Error>> {unimplemented!()}
-    pub fn acquire_notify(&self) -> Result<(OwnedFd, u16), Box<Error>> {unimplemented!()}
-    pub fn get_flags(&self) -> Result<Vec<String>, Box<Error>> {unimplemented!()}
+    pub fn new(_session: &'a BluetoothSession, _object_path: String) -> BluetoothGATTCharacteristic {unimplemented!()}
+    pub fn get_gatt_descriptors(&self) -> Result<Vec<String>, Box<dyn Error>> {unimplemented!()}
+    pub fn read_value(&self, _offset: Option<u16>) -> Result<Vec<u8>, Box<dyn Error>> {unimplemented!()}
+    pub fn write_value(&self, _values: Vec<u8>, _offset: Option<u16>) -> Result<(), Box<dyn Error>> {unimplemented!()}
+    pub fn acquire_write(&self) -> Result<(OwnedFd, u16), Box<dyn Error>> {unimplemented!()}
+    pub fn get_value(&self) -> Result<Vec<u8>, Box<dyn Error>> {unimplemented!()}
+    pub fn get_uuid(&self) -> Result<String, Box<dyn Error>> {unimplemented!()}
+    pub fn is_notifying(&self) -> Result<bool, Box<dyn Error>> {unimplemented!()}
+    pub fn start_notify(&self) -> Result<(), Box<dyn Error>> {unimplemented!()}
+    pub fn stop_notify(&self) -> Result<(), Box<dyn Error>> {unimplemented!()}
+    pub fn acquire_notify(&self) -> Result<(OwnedFd, u16), Box<dyn Error>> {unimplemented!()}
+    pub fn get_flags(&self) -> Result<Vec<String>, Box<dyn Error>> {unimplemented!()}
 
     pub fn get_id(&self) -> String {
         unimplemented!()
     }
-    pub fn get_service(&self) -> Result<String, Box<Error>> {unimplemented!()}
+    pub fn get_service(&self) -> Result<String, Box<dyn Error>> {unimplemented!()}
 }
 
 #[derive(Clone, Debug)]

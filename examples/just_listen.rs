@@ -52,7 +52,7 @@ fn main() {
 
     let (mut send_chan, mut receive_chan) = mpsc::unbounded();
     let mut send_chan_clone = send_chan.clone();
-    let listener = server_hive.get_listener();
+    let advertising = server_hive.get_advertising();
 
     task::spawn(async move {
         &server_hive.run().await;
@@ -65,7 +65,7 @@ fn main() {
         move |sig| {
             println!("<< Received signal!! {:?}", sig);
             // running.store(false, Ordering::SeqCst);
-            listener.store(false, Ordering::Relaxed);
+            advertising.store(false, Ordering::Relaxed);
             send_chan.clone().send(true);
         }
     });

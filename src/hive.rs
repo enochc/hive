@@ -36,7 +36,7 @@ pub struct Hive {
     peers: Vec<Peer>,
     pub message_received: Signal<String>,
     pub connected: Arc<AtomicBool>,
-    listening: Arc<AtomicBool>,
+    advertising: Arc<AtomicBool>,
 }
 
 
@@ -106,7 +106,7 @@ impl Hive {
             peers: Vec::new(),
             message_received: Default::default(),
             connected: Arc::new(AtomicBool::new(false)),
-            listening: Arc::new(AtomicBool::new(false)),
+            advertising: Arc::new(AtomicBool::new(false)),
         };
 
         let properties = config.get("Properties");
@@ -246,15 +246,15 @@ impl Hive {
     // }
 
 
-    pub fn get_listener(&self) ->Arc<AtomicBool>{
-        return self.listening.clone();
+    pub fn get_advertising(&self) ->Arc<AtomicBool>{
+        return self.advertising.clone();
     }
 
     // tokio required by bluetooth bluster libs
 
 
     pub async fn run(& mut self){//} -> Result<()> {
-        self.listening.store(true, Ordering::Relaxed);
+        self.advertising.store(true, Ordering::Relaxed);
         // I'm a client
         if !self.connect_to.is_none() {
             info!("Connect To: {:?}", self.connect_to);
@@ -323,7 +323,7 @@ impl Hive {
                 {
 
                     info!("!! this is bluetooth");
-                    let listening = self.listening.clone();
+                    let advertising = self.advertising.clone();
 
 
                     self.connected.store(true, Ordering::Relaxed);
@@ -333,7 +333,7 @@ impl Hive {
                     // let mut rt = tokio::runtime::Runtime::new().unwrap();
 
 
-                    spawn_bluetooth_listener(listening, true).expect("Failed to spawn bluetooth");
+                    spawn_bluetooth_listener(advertising, true).expect("Failed to spawn bluetooth");
 
                     self.receive_events(true).await;
 

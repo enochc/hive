@@ -22,7 +22,6 @@ use crate::bluetooth::{ADVERTISING_NAME, SERVICE_ID};
 use std::sync::atomic::AtomicBool;
 
 use std::error::Error;
-use futures::executor::block_on;
 
 pub struct Peripheral{
     peripheral: Peripheral_device
@@ -35,7 +34,7 @@ impl Peripheral {
         return Peripheral{peripheral}
     }
 
-    pub async fn run(&self, listening:Arc<AtomicBool>, do_advertise:bool) -> Result<(), Box<dyn Error>> {
+    pub async fn run(&self, advertising:Arc<AtomicBool>, do_advertise:bool) -> Result<(), Box<dyn Error>> {
         let (sender_characteristic, receiver_characteristic) = channel(1);
         let (sender_descriptor, receiver_descriptor) = channel(1);
 
@@ -185,17 +184,13 @@ impl Peripheral {
                 self.peripheral.start_advertising(ADVERTISING_NAME, &[]).await
                     .expect("Failed to start_advertising");
                 while !self.peripheral.is_advertising().await.unwrap() {}
-
                 info!("Peripheral started advertising");
 
-                while listening.load(atomic::Ordering::Relaxed) {
+                while advertising.load(atomic::Ordering::Relaxed) {
                     tokio::time::delay_for(Duration::from_secs(1)).await;
                 }
 
-                debug!("Stopping Peripheral from being discoverable");
-
                 self.peripheral.stop_advertising().await.unwrap();
-
                 set_discoverable(false).expect("failed to stop being discovered");
                 info!("Peripheral stopped advertising");
             }
@@ -210,5 +205,4 @@ impl Peripheral {
         // main_fut.await;
         Ok(())
     }
-
 }
