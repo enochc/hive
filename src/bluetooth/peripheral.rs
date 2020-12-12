@@ -190,7 +190,6 @@ impl Peripheral {
 
                 while listening.load(atomic::Ordering::Relaxed) {
                     tokio::time::delay_for(Duration::from_secs(1)).await;
-                    // thread::sleep(Duration::from_secs(1));
                 }
 
                 debug!("Stopping Peripheral from being discoverable");
@@ -202,18 +201,14 @@ impl Peripheral {
             }
 
         };
-        // let fut = futures::future::join3(characteristic_handler, descriptor_handler, main_fut);
-        thread::spawn(move ||{
-            // futures::executor::block_on(main_fut);
-            // block_on(main_fut);
-
-            let fut = futures::future::join(characteristic_handler, descriptor_handler);
-            block_on(fut);
-            // fut.await;
-        });
-        main_fut.await;
+        let fut = futures::future::join3(characteristic_handler, descriptor_handler, main_fut);
+        fut.await;
+        // thread::spawn(move ||{
+        //     let fut = futures::future::join(characteristic_handler, descriptor_handler);
+        //     block_on(fut);
+        // });
+        // main_fut.await;
         Ok(())
-        // futures::join!(characteristic_handler, descriptor_handler, main_fut);
     }
 
 }
