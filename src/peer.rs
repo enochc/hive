@@ -10,12 +10,11 @@ use async_std::{
     task,
     sync::Arc,
 };
-// use crate::hive::ACK;
-use crate::signal::Signal;
 
-// trait Socket {
-//     async fn read(bytes:&[byte]){}
-// }
+use crate::signal::Signal;
+use std::pin::Pin;
+// use crate::HiveSocket;
+
 
 #[derive(Debug)]
 pub enum SocketEvent {
@@ -46,6 +45,9 @@ fn as_u32_be(array: &[u8; 4]) -> u32 {
         ((array[3] as u32) <<  0)
 }
 
+use crate::HiveSocket;
+use std::borrow::BorrowMut;
+
 impl Peer {
     pub fn set_name(&mut self, name:&str){
         self.name = String::from(name);
@@ -71,26 +73,29 @@ impl Peer {
 
         // Start read loop
         let send_clone = sender.clone();
-        let arc_str2 = arc_str.clone();
+        // let arc_str2 = arc_str.clone();
 
         task::spawn(async move{
-            read_loop(send_clone, arc_str2).await;
+            read_loop(send_clone, &arc_str).await;
         });
         return peer;
     }
     pub async fn send(& self, msg: &str){
-        let stream = self.stream.clone();
+        let stream = &*self.stream.clone();
         println!("Send to peer {}: {}",self.name ,msg);
-        Peer::send_on_stream(&stream, msg).await.expect("failed to send to Peer");
+        Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
     }
 
-    pub async fn send_on_stream(mut stream: &TcpStream, message: &str) -> Result<bool, std::io::Error> {
-    // pub async fn send_on_stream<T: Socket>(stream:T, message: &str)  -> Result<bool, std::io::Error> {
+
+    // pub async fn send_on_stream(mut stream: &TcpStream, message: &str) -> Result<bool, std::io::Error> {
+    pub async fn send_on_stream(mut stream:&(dyn HiveSocket+Sync), message: &str)  -> Result<bool, std::io::Error> {
         let mut bytes = Vec::new();
         let msg_length: u32 = message.len() as u32;
         bytes.append(&mut msg_length.to_be_bytes().to_vec());
         bytes.append(&mut message.as_bytes().to_vec());
-        stream.write(&bytes).await?;
+        // let mut h = stream.clone();
+        stream.do_write(&bytes);//.await;
+        // stream.write(&bytes).await;
         // stream.flush().await;
         Result::Ok(true)
     }
@@ -126,7 +131,9 @@ impl Peer {
 //         _ => {}
 //     }
 // }
-async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>){
+
+async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream){
+// async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &(dyn HiveSocket+Sync)){
     let mut reader = BufReader::new(&*stream);
     let from = match stream.peer_addr() {
         Ok(addr) => addr.to_string(),

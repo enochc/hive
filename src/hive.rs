@@ -69,6 +69,7 @@ fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool)->Resul
 
 }
 
+
 impl Hive {
     pub fn is_sever(&self) ->bool{
         self.listen_port.is_some()
@@ -370,7 +371,7 @@ impl Hive {
                 let stream = p.stream.clone();
                 let msg = peer_str.clone();
                 task::spawn(  async move{
-                    Peer::send_on_stream(&stream, &msg).await.unwrap();
+                    Peer::send_on_stream(&*stream, &msg).await.unwrap();
                 });
             }
         }
