@@ -50,7 +50,7 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 // pub (crate) const ACK:&str = "<<|";
 
 #[cfg(feature="bluetooth")]
-fn spawn_bluetooth_listener(listening:Arc<AtomicBool>)->Result<()>{
+fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool)->Result<()>{
     std::thread::spawn(move||{
         let mut rt = tokio::runtime::Builder::new()
             // .basic_scheduler()
@@ -59,8 +59,8 @@ fn spawn_bluetooth_listener(listening:Arc<AtomicBool>)->Result<()>{
             .build()
             .unwrap();
         rt.block_on(async move{
-            let perf = crate::bluetooth::advertise::Peripheral::new().await;
-            perf.run(listening).await.expect("Failed to run peripheral");
+            let perf = crate::bluetooth::peripheral::Peripheral::new().await;
+            perf.run(listening, do_advertise).await.expect("Failed to run peripheral");
         });
     });
 
@@ -333,7 +333,7 @@ impl Hive {
                     // let mut rt = tokio::runtime::Runtime::new().unwrap();
 
 
-                    spawn_bluetooth_listener(listening).expect("Failed to spawn bluetooth");
+                    spawn_bluetooth_listener(listening, true).expect("Failed to spawn bluetooth");
 
                     self.receive_events(true).await;
 

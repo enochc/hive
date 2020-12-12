@@ -22,6 +22,7 @@ use crate::bluetooth::{ADVERTISING_NAME, SERVICE_ID};
 use std::sync::atomic::AtomicBool;
 
 use std::error::Error;
+use futures::executor::block_on;
 
 pub struct Peripheral{
     peripheral: Peripheral_device
@@ -34,7 +35,7 @@ impl Peripheral {
         return Peripheral{peripheral}
     }
 
-    pub async fn run(&self, listening:Arc<AtomicBool>) -> Result<(), Box<dyn Error>> {
+    pub async fn run(&self, listening:Arc<AtomicBool>, do_advertise:bool) -> Result<(), Box<dyn Error>> {
         let (sender_characteristic, receiver_characteristic) = channel(1);
         let (sender_descriptor, receiver_descriptor) = channel(1);
 
@@ -169,6 +170,7 @@ impl Peripheral {
             true,
             characteristics,
         )).unwrap();
+
         let main_fut = async move {
             info!("ONE");
 
@@ -178,27 +180,38 @@ impl Peripheral {
             info!("Peripheral powered on");
             self.peripheral.register_gatt().await.unwrap();
 
-            //set_discoverable(true).expect("Failed to set discoverable");
-            self.peripheral.start_advertising(ADVERTISING_NAME, &[]).await
-                .expect("Failed to start_advertising");
-            while !self.peripheral.is_advertising().await.unwrap() {}
+            if do_advertise {
+                set_discoverable(true).expect("Failed to set discoverable");
+                self.peripheral.start_advertising(ADVERTISING_NAME, &[]).await
+                    .expect("Failed to start_advertising");
+                while !self.peripheral.is_advertising().await.unwrap() {}
 
-            info!("Peripheral started advertising");
+                info!("Peripheral started advertising");
 
-            while listening.load(atomic::Ordering::Relaxed) {
-                tokio::time::delay_for(Duration::from_secs(1));
-                // thread::sleep(Duration::from_secs(1));
+                while listening.load(atomic::Ordering::Relaxed) {
+                    tokio::time::delay_for(Duration::from_secs(1));
+                    // thread::sleep(Duration::from_secs(1));
+                }
+
+                debug!("Stopping Peripheral from being discoverable");
+
+                self.peripheral.stop_advertising().await.unwrap();
+
+                set_discoverable(false).expect("failed to stop being discovered");
+                info!("Peripheral stopped advertising");
             }
 
-            debug!("Stopping Peripheral from being discoverable");
-
-            self.peripheral.stop_advertising().await.unwrap();
-
-            //set_discoverable(false).expect("failed to stop being discovered");
-            info!("Peripheral stopped advertising");
         };
-        let fut = futures::future::join3(characteristic_handler, descriptor_handler, main_fut);
-        fut.await;
+        // let fut = futures::future::join3(characteristic_handler, descriptor_handler, main_fut);
+        thread::spawn(move ||{
+            // futures::executor::block_on(main_fut);
+            // block_on(main_fut);
+
+            let fut = futures::future::join(characteristic_handler, descriptor_handler);
+            block_on(fut);
+            // fut.await;
+        });
+        main_fut.await;
         Ok(())
         // futures::join!(characteristic_handler, descriptor_handler, main_fut);
     }
