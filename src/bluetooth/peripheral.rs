@@ -24,7 +24,7 @@ use std::sync::atomic::AtomicBool;
 use std::error::Error;
 
 pub struct Peripheral{
-    peripheral: Peripheral_device
+    pub peripheral: Peripheral_device
 }
 
 impl Peripheral {
@@ -51,8 +51,7 @@ impl Peripheral {
                 Some(sender_characteristic),
                 None,
             ),
-            // None,
-            Some("Hive Char".as_bytes().to_vec()),
+            None,
             {
                 let mut descriptors = HashSet::<Descriptor>::new();
                 descriptors.insert(Descriptor::new(
@@ -65,8 +64,7 @@ impl Peripheral {
                             sender_descriptor,
                         ))),
                     ),
-                    // None,
-                    Some("Hive Desc".as_bytes().to_vec()),
+                    None,
                 ));
                 descriptors
             },

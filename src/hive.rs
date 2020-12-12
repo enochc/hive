@@ -312,7 +312,8 @@ impl Hive {
                 SocketEvent::NewPeer { name, stream } => {
                     let p = Peer::new(
                         name,
-                        stream,
+                        Some(stream),
+                        None,
                         self.sender.clone());
                     if is_server {
                         self.send_properties(&p).await;
@@ -368,7 +369,7 @@ impl Hive {
         let peer_str= format!("{}{}", REQUEST_PEERS, self.peer_string());
         for p in &self.peers {
             if p.update_peers {
-                let stream = p.stream.clone();
+                let stream = p.stream.clone().unwrap();
                 let msg = peer_str.clone();
                 task::spawn(  async move{
                     Peer::send_on_stream(&stream, &msg).await.unwrap();

@@ -68,14 +68,6 @@ impl HiveSocket for async_std::net::TcpStream {
     }
 }
 
-// impl HiveSocket for &mut async_std::net::TcpStream {
-//     fn do_write(&self, bytes:&[u8]) {
-//         println!("writing");
-//
-//     }
-// }
-
-
 
 // fn get_toml_config(file_path: &str) -> toml::Value{
 //     let foo: String = fs::read_to_string("examples/properties.toml").unwrap().parse().unwrap();
