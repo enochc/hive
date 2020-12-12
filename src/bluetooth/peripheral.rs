@@ -189,7 +189,7 @@ impl Peripheral {
                 info!("Peripheral started advertising");
 
                 while listening.load(atomic::Ordering::Relaxed) {
-                    tokio::time::delay_for(Duration::from_secs(1));
+                    tokio::time::delay_for(Duration::from_secs(1)).await;
                     // thread::sleep(Duration::from_secs(1));
                 }
 
