@@ -30,6 +30,8 @@ pub struct Peripheral{
     event_sender: Sender<SocketEvent>
 }
 
+pub const HIVE_CHAR_ID:u16 = 0x1235;
+
 impl Peripheral {
 
     pub async fn new(mut event_sender: Sender<SocketEvent>)->Peripheral {
@@ -43,7 +45,7 @@ impl Peripheral {
 
         let mut characteristics: HashSet<Characteristic> = HashSet::new();
         characteristics.insert(Characteristic::new(
-            Uuid::from_sdp_short_uuid(0x2A3D as u16),
+            Uuid::from_sdp_short_uuid(HIVE_CHAR_ID),
             characteristic::Properties::new(
                 Some(characteristic::Read(characteristic::Secure::Insecure(
                     sender_characteristic.clone(),
@@ -58,7 +60,7 @@ impl Peripheral {
             {
                 let mut descriptors = HashSet::<Descriptor>::new();
                 descriptors.insert(Descriptor::new(
-                    Uuid::from_sdp_short_uuid(0x2A3D as u16),
+                    Uuid::from_sdp_short_uuid(HIVE_CHAR_ID),
                     descriptor::Properties::new(
                         Some(descriptor::Read(descriptor::Secure::Insecure(
                             sender_descriptor.clone(),
