@@ -22,16 +22,19 @@ use crate::bluetooth::{ADVERTISING_NAME, SERVICE_ID};
 use std::sync::atomic::AtomicBool;
 
 use std::error::Error;
+use crate::hive::Sender;
+use crate::peer::SocketEvent;
 
 pub struct Peripheral{
-    pub peripheral: Peripheral_device
+    pub peripheral: Peripheral_device,
+    event_sender: Sender<SocketEvent>
 }
 
 impl Peripheral {
 
-    pub async fn new()->Peripheral {
+    pub async fn new(mut event_sender: Sender<SocketEvent>)->Peripheral {
         let peripheral = Peripheral_device::new().await.expect("Failed to initialize peripheral");
-        return Peripheral{peripheral}
+        return Peripheral{peripheral, event_sender}
     }
 
     pub async fn run(&self, advertising:Arc<AtomicBool>, do_advertise:bool) -> Result<(), Box<dyn Error>> {
@@ -51,7 +54,7 @@ impl Peripheral {
                 Some(sender_characteristic),
                 None,
             ),
-            None,
+            Some("Hive_Char".as_bytes().to_vec()),
             {
                 let mut descriptors = HashSet::<Descriptor>::new();
                 descriptors.insert(Descriptor::new(
@@ -64,7 +67,7 @@ impl Peripheral {
                             sender_descriptor,
                         ))),
                     ),
-                    None,
+                    Some("Hive_Desc".as_bytes().to_vec()),
                 ));
                 descriptors
             },

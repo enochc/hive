@@ -16,7 +16,7 @@ use crate::property::{Property, properties_to_sock_str};
 // use usbd_serial::{SerialPort, USB_CLASS_CDC, UsbError};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
-type Sender<T> = mpsc::UnboundedSender<T>;
+pub type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
 use log::{debug, info, error};
@@ -50,7 +50,7 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 // pub (crate) const ACK:&str = "<<|";
 
 #[cfg(feature="bluetooth")]
-fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool)->Result<()>{
+fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool, mut sender: Sender<SocketEvent>)->Result<()>{
     std::thread::spawn(move||{
         let mut rt = tokio::runtime::Builder::new()
             // .basic_scheduler()
@@ -59,11 +59,10 @@ fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool)->Resul
             .build()
             .unwrap();
         rt.block_on(async move{
-            let perf = crate::bluetooth::peripheral::Peripheral::new().await;
+            let perf = crate::bluetooth::peripheral::Peripheral::new(sender).await;
             perf.run(listening, do_advertise).await.expect("Failed to run peripheral");
         });
     });
-
 
     Ok(())
 
@@ -270,7 +269,7 @@ impl Hive {
             // listen for connections loop
             let p = port.clone();
             task::spawn( async move {
-                match Hive::accept_loop(send_chan.clone(), p).await {
+                match Hive::accept_loop(send_chan, p).await {
                     Err(e) => error!("Failed accept loop: {:?}",e),
                     _ => (),
                 }
@@ -278,10 +277,8 @@ impl Hive {
 
             #[cfg(feature="bluetooth")]
                 {
-
                     info!("!! this is bluetooth");
                     let advertising = self.advertising.clone();
-
 
                     self.connected.store(true, Ordering::Relaxed);
                     // async_std::task::spawn(async move{
@@ -289,11 +286,13 @@ impl Hive {
                     // });
                     // let mut rt = tokio::runtime::Runtime::new().unwrap();
 
-
-                    spawn_bluetooth_listener(advertising, true).expect("Failed to spawn bluetooth");
+                    spawn_bluetooth_listener(
+                        advertising,
+                        true,
+                        self.sender.clone()
+                    ).expect("Failed to spawn bluetooth");
 
                     self.receive_events(true).await;
-
                 }
             #[cfg(not(feature="bluetooth"))]
                 {
