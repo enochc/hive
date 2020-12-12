@@ -1,7 +1,8 @@
 #![allow(unused_imports)]
 // use futures::channel::mpsc;
 use futures::channel::mpsc::{UnboundedSender};
-use futures::SinkExt;
+// use futures::{SinkExt, AsyncReadExt, AsyncWriteExt};
+use futures::{SinkExt};
 use async_std::{
     io::BufReader,
     net::{ TcpStream},
@@ -11,6 +12,10 @@ use async_std::{
 };
 // use crate::hive::ACK;
 use crate::signal::Signal;
+
+// trait Socket {
+//     async fn read(bytes:&[byte]){}
+// }
 
 #[derive(Debug)]
 pub enum SocketEvent {
@@ -76,20 +81,19 @@ impl Peer {
     pub async fn send(& self, msg: &str){
         let stream = self.stream.clone();
         println!("Send to peer {}: {}",self.name ,msg);
-        Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
+        Peer::send_on_stream(&stream, msg).await.expect("failed to send to Peer");
     }
 
-    pub async fn send_on_stream(stream: Arc<TcpStream>, message: &str) -> Result<bool, std::io::Error> {
+    pub async fn send_on_stream(mut stream: &TcpStream, message: &str) -> Result<bool, std::io::Error> {
+    // pub async fn send_on_stream<T: Socket>(stream:T, message: &str)  -> Result<bool, std::io::Error> {
         let mut bytes = Vec::new();
         let msg_length: u32 = message.len() as u32;
         bytes.append(&mut msg_length.to_be_bytes().to_vec());
         bytes.append(&mut message.as_bytes().to_vec());
-        let mut stream = &*stream;
         stream.write(&bytes).await?;
         // stream.flush().await;
         Result::Ok(true)
     }
-
 }
 
 /*

@@ -2,6 +2,7 @@
 use log::{debug};
 
 #[cfg(target_os = "linux")]
+#[allow(unused_imports)]
 use blurz::{
     BluetoothAdapter, BluetoothDevice,
     BluetoothEvent::{self, Connected},

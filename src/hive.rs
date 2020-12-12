@@ -203,54 +203,10 @@ impl Hive {
         Ok(())
     }
 
-    // pub async fn connect_USB(){
-    //     init_logging();
-    //
-    //     let usb_bus = device_specific_usb::UsbBus::new(...);
-    //     let mut serial = SerialPort::new(&usb_bus);
-    //
-    //     let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
-    //         .product("Serial port")
-    //         .device_class(USB_CLASS_CDC)
-    //         .build();
-    //
-    //     loop {
-    //         if !usb_dev.poll(&mut [&mut serial]) {
-    //             continue;
-    //         }
-    //
-    //         let mut buf = [0u8; 64];
-    //
-    //         match serial.read(&mut buf[..]) {
-    //             Ok(count) => {
-    //                 // count bytes were read to &buf[..count]
-    //                 prin
-    //             },
-    //             Err(UsbError::WouldBlock) => {
-    //                 // Err(err) => // An error occurred
-    //             },// No data received
-    //             _ => {error!("Something else happened!");}
-    //
-    //         };
-    //
-    //         match serial.write(&[0x3a, 0x29]) {
-    //             Ok(count) => {
-    //                 // count bytes were written
-    //             },
-    //             Err(err) => {
-    //                 error!("Usb error occurred");
-    //             }// No data could be written (buffers full)
-    //                 // Err(e) => // An error occurred
-    //         };
-    //     }
-    // }
-
 
     pub fn get_advertising(&self) ->Arc<AtomicBool>{
         return self.advertising.clone();
     }
-
-    // tokio required by bluetooth bluster libs
 
 
     pub async fn run(& mut self){//} -> Result<()> {
@@ -349,8 +305,6 @@ impl Hive {
     }
 
 
-
-
     async fn receive_events(&mut self, is_server:bool){
         while !self.sender.is_closed() {
             match self.receiver.next().await.unwrap() {
@@ -416,7 +370,7 @@ impl Hive {
                 let stream = p.stream.clone();
                 let msg = peer_str.clone();
                 task::spawn(  async move{
-                    Peer::send_on_stream(stream, &msg).await.unwrap();
+                    Peer::send_on_stream(&stream, &msg).await.unwrap();
                 });
             }
         }
