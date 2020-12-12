@@ -358,7 +358,7 @@ impl Hive {
             peers_string.push_str(",");
             let p = &self.peers[x];
             let adr = p.address();
-            let name = p.name.clone();
+            let name = &p.name;
             peers_string.push_str(&format!("{}|{}", name, adr))
         };
         return peers_string;
@@ -371,7 +371,7 @@ impl Hive {
                 let stream = p.stream.clone();
                 let msg = peer_str.clone();
                 task::spawn(  async move{
-                    Peer::send_on_stream(&*stream, &msg).await.unwrap();
+                    Peer::send_on_stream(&stream, &msg).await.unwrap();
                 });
             }
         }

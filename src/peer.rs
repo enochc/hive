@@ -33,7 +33,7 @@ pub enum SocketEvent {
 
 pub struct Peer{
     pub name:String,
-    pub stream: Arc<TcpStream>,
+    pub stream: TcpStream,
     pub update_peers:bool,
     address:Option<String>,
 }
@@ -62,18 +62,19 @@ impl Peer {
    pub fn new(name:String,
               stream:TcpStream,
               sender: UnboundedSender<SocketEvent>) -> Peer {
-        let arc_str = Arc::new(stream);
+
+        let arc_str = stream;
+        let addr = arc_str.peer_addr().unwrap().to_string();
 
         let peer = Peer{
             name,
             stream: arc_str.clone(),
             update_peers: false,
-            address: Some(arc_str.peer_addr().unwrap().to_string()),
+            address: Some(addr),
         };
 
         // Start read loop
         let send_clone = sender.clone();
-        // let arc_str2 = arc_str.clone();
 
         task::spawn(async move{
             read_loop(send_clone, &arc_str).await;
@@ -81,7 +82,7 @@ impl Peer {
         return peer;
     }
     pub async fn send(& self, msg: &str){
-        let stream = &*self.stream.clone();
+        let stream = &self.stream.clone();
         println!("Send to peer {}: {}",self.name ,msg);
         Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
     }
@@ -94,6 +95,7 @@ impl Peer {
         bytes.append(&mut msg_length.to_be_bytes().to_vec());
         bytes.append(&mut message.as_bytes().to_vec());
         // let mut h = stream.clone();
+
         stream.do_write(&bytes);//.await;
         // stream.write(&bytes).await;
         // stream.flush().await;
