@@ -328,8 +328,9 @@ impl Hive {
 
     async fn receive_events(&mut self, is_server:bool){
         while !self.sender.is_closed() {
-            match self.receiver.next().await.unwrap() {
-                SocketEvent::NewPeer { name, stream } => {
+            match self.receiver.next().await {
+
+                Some(SocketEvent::NewPeer { name, stream }) => {
                     let p = Peer::new(
                         name,
                         Some(stream),
@@ -350,10 +351,10 @@ impl Hive {
                     so instead its called from the "set_headers_from_peer" method
                      */
                 },
-                SocketEvent::Message { from, msg } => {
+                Some(SocketEvent::Message { from, msg }) => {
                     self.got_message(from.as_str(), msg).await;
                 },
-                SocketEvent::Hangup {from} => {
+                Some(SocketEvent::Hangup {from}) => {
                     for x in 0..self.peers.len(){
                         if self.peers[x].address() == from {
                             self.peers.remove(x);
@@ -361,6 +362,9 @@ impl Hive {
                             break;
                         }
                     }
+                },
+                None => {
+                    println!("Received Nothing...");
                 }
             }
         }
