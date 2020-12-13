@@ -18,7 +18,7 @@ use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
 use crate::bluetooth::my_blurz::set_discoverable;
-use crate::bluetooth::{ADVERTISING_NAME, SERVICE_ID};
+use crate::bluetooth::{ADVERTISING_NAME, SERVICE_ID, HIVE_CHAR_ID};
 use std::sync::atomic::AtomicBool;
 
 use std::error::Error;
@@ -27,16 +27,18 @@ use crate::peer::SocketEvent;
 
 pub struct Peripheral{
     pub peripheral: Peripheral_device,
+    ble_name: String,
     event_sender: Sender<SocketEvent>
 }
 
-pub const HIVE_CHAR_ID:u16 = 0x1235;
+
 
 impl Peripheral {
 
-    pub async fn new(mut event_sender: Sender<SocketEvent>)->Peripheral {
+    pub async fn new(ble_name:&str, mut event_sender: Sender<SocketEvent>)->Peripheral {
         let peripheral = Peripheral_device::new().await.expect("Failed to initialize peripheral");
-        return Peripheral{peripheral, event_sender}
+        let name = String::from(ble_name);
+        return Peripheral{peripheral, ble_name: name, event_sender}
     }
 
     pub async fn run(&self, advertising:Arc<AtomicBool>, do_advertise:bool) -> Result<(), Box<dyn Error>> {

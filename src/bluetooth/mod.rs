@@ -6,3 +6,4 @@ pub mod peripheral;
 
 pub const ADVERTISING_NAME:&str = "Hive";
 pub const SERVICE_ID:u16 = 0x1234;
+pub const HIVE_CHAR_ID:u16 = 0x1235;

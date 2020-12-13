@@ -31,6 +31,7 @@ pub struct Hive {
     sender: Sender<SocketEvent>,
     receiver: Receiver<SocketEvent>,
     connect_to: Option<Box<str>>,
+    bt_connect_to:Option<Box<str>>,
     listen_port: Option<Box<str>>,
     pub name: Box<str>,
     peers: Vec<Peer>,
@@ -50,7 +51,8 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 // pub (crate) const ACK:&str = "<<|";
 
 #[cfg(feature="bluetooth")]
-fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool, mut sender: Sender<SocketEvent>)->Result<()>{
+fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool, mut sender: Sender<SocketEvent>, ble_name:Box<str>)->Result<()>{
+    // let str = ble_name.clone();
     std::thread::spawn(move||{
         let mut rt = tokio::runtime::Builder::new()
             // .basic_scheduler()
@@ -59,7 +61,7 @@ fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool, mut se
             .build()
             .unwrap();
         rt.block_on(async move{
-            let perf = crate::bluetooth::peripheral::Peripheral::new(sender).await;
+            let perf = crate::bluetooth::peripheral::Peripheral::new(&ble_name, sender.clone()).await;
             perf.run(listening, do_advertise).await.expect("Failed to run peripheral");
         });
     });
@@ -80,18 +82,16 @@ impl Hive {
 
     pub fn new_from_str(name: &str, properties: &str) -> Hive{
         let config: toml::Value = toml::from_str(properties).unwrap();
-        let connect_to = match config.get("connect") {
-            Some(v) => {
-                Some(String::from(v.as_str().unwrap()).into_boxed_str())
-            },
-            _ => None
+        let prop= |p:&str|{
+            return match config.get("connect") {
+                Some(v) => Some(v.to_string().into_boxed_str()),
+                _=> None
+            }
         };
-        let listen_port = match config.get("listen") {
-            Some(v) => {
-                Some(String::from(v.as_str().unwrap()).into_boxed_str())
-            },
-            _ => None
-        };
+        let connect_to = prop("connect");
+        let listen_port = prop("listen");
+        let mut bt_connect_to =  prop("bt_connect");
+
 
         let props:HashMap::<String, Property> = HashMap::new();
 
@@ -101,6 +101,7 @@ impl Hive {
             sender: send_chan,
             receiver: receive_chan,
             connect_to,
+            bt_connect_to,
             listen_port,
             name: String::from(name).into_boxed_str(),
             peers: Vec::new(),
@@ -281,15 +282,14 @@ impl Hive {
                     let advertising = self.advertising.clone();
 
                     self.connected.store(true, Ordering::Relaxed);
-                    // async_std::task::spawn(async move{
-                    //
-                    // });
-                    // let mut rt = tokio::runtime::Runtime::new().unwrap();
+
+                    let clone = self.bt_connect_to.clone().unwrap();
 
                     spawn_bluetooth_listener(
                         advertising,
                         true,
-                        self.sender.clone()
+                        self.sender.clone(),
+                        clone,
                     ).expect("Failed to spawn bluetooth");
 
                     self.receive_events(true).await;
