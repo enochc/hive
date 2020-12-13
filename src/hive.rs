@@ -65,6 +65,7 @@ fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool, mut se
             let perf = crate::bluetooth::peripheral::Peripheral::new(&ble_name, sender.clone()).await;
             perf.run(listening, do_advertise).await.expect("Failed to run peripheral");
         });
+        println!("Bluetooth no longer listening");
     });
 
     Ok(())

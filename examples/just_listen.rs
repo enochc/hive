@@ -28,50 +28,16 @@ fn main() {
     "#;
     let mut server_hive = Hive::new_from_str("SERVE", props_str);
 
-    // server_hive.get_mut_property("moveup").unwrap().on_changed.connect( move|value|{
-    //     println!("<<<< MOVE UP: {:?}", value);
-    //     // let val = value.unwrap().as_bool().unwrap();
-    //     // move_up_clone.store(val, Ordering::SeqCst);
-    //
-    // });
-
-    // server_hive.get_mut_property("pt").unwrap().on_changed.connect( move|value|{
-    //     println!("<<<< PT: {:?}", value);
-    // });
-    //
-
     use simple_signal::{self, Signal};
 
     server_hive.get_mut_property("turn").unwrap().on_changed.connect(move |value|{
         println!("<<<< TURN: {:?}", value);
     });
 
-
-    let running = Arc::new(AtomicBool::new(true));
-
-    // let (mut send_chan, mut receive_chan) = mpsc::unbounded();
-    // let mut send_chan_clone = send_chan.clone();
     let advertising = server_hive.get_advertising();
 
-    // task::spawn(async move {
-    //     &server_hive.run().await;
-        // send_chan_clone.send(true);
-    // });
-
-
-    // simple_signal::set_handler(&[Signal::Int, Signal::Term], {
-    //     // let running = running.clone();
-    //     move |sig| {
-    //         println!("<< Received signal!! {:?}", sig);
-    //         // running.store(false, Ordering::SeqCst);
-    //         advertising.store(false, Ordering::Relaxed);
-    //         send_chan.clone().send(true);
-    //     }
-    // });
     task::block_on(async {server_hive.run().await});
-    // server_hive.run().await;
 
-    // let done = block_on(receive_chan.next());
     println!("Done!! ");
 
 

@@ -42,20 +42,23 @@ impl Peripheral {
     }
 
     pub async fn run(&self, advertising:Arc<AtomicBool>, do_advertise:bool) -> Result<(), Box<dyn Error>> {
-        let (sender_characteristic, receiver_characteristic) = channel(1);
-        let (sender_descriptor, receiver_descriptor) = channel(1);
+        let ( sender_characteristic, receiver_characteristic) = channel(1);
+        let ( sender_descriptor, receiver_descriptor) = channel(1);
+
+        let sender_characteristic_clone = sender_characteristic.clone();
+        let sender_descriptor_clone = sender_descriptor.clone();
 
         let mut characteristics: HashSet<Characteristic> = HashSet::new();
         characteristics.insert(Characteristic::new(
             Uuid::from_sdp_short_uuid(HIVE_CHAR_ID),
             characteristic::Properties::new(
                 Some(characteristic::Read(characteristic::Secure::Insecure(
-                    sender_characteristic.clone(),
+                    sender_characteristic_clone.clone(),
                 ))),
                 Some(characteristic::Write::WithResponse(
-                    characteristic::Secure::Insecure(sender_characteristic.clone()),
+                    characteristic::Secure::Insecure(sender_characteristic_clone.clone()),
                 )),
-                Some(sender_characteristic),
+                Some(sender_characteristic_clone),
                 None,
             ),
             Some("Hive_Char".as_bytes().to_vec()),
@@ -65,10 +68,10 @@ impl Peripheral {
                     Uuid::from_sdp_short_uuid(HIVE_CHAR_ID),
                     descriptor::Properties::new(
                         Some(descriptor::Read(descriptor::Secure::Insecure(
-                            sender_descriptor.clone(),
+                            sender_descriptor_clone.clone(),
                         ))),
                         Some(descriptor::Write(descriptor::Secure::Insecure(
-                            sender_descriptor,
+                            sender_descriptor_clone,
                         ))),
                     ),
                     Some("Hive_Desc".as_bytes().to_vec()),
@@ -177,6 +180,7 @@ impl Peripheral {
             characteristics,
         )).unwrap();
 
+
         let main_fut = async move {
             info!("ONE");
 
@@ -193,7 +197,7 @@ impl Peripheral {
                 while !self.peripheral.is_advertising().await.unwrap() {}
                 info!("Peripheral started advertising");
 
-                while advertising.load(atomic::Ordering::Relaxed) {
+                while !self.event_sender.is_closed(){
                     tokio::time::delay_for(Duration::from_secs(1)).await;
                 }
 
@@ -203,13 +207,28 @@ impl Peripheral {
             }
 
         };
-        let fut = futures::future::join3(characteristic_handler, descriptor_handler, main_fut);
+
+        let mut sender_characteristic_clone = sender_characteristic.clone();
+        let mut sender_descriptor_clone = sender_descriptor.clone();
+        // let mut advertising_clone = advertising.clone();
+        let fut_stop = async {
+            // we pretty much wait here for a long time
+            while !self.event_sender.is_closed() {
+                tokio::time::delay_for(Duration::from_secs(1)).await;
+            }
+            &sender_characteristic_clone.clone().close_channel();
+            &sender_descriptor_clone.close_channel();
+            // advertising_clone.store(false, atomic::Ordering::Relaxed);
+        };
+
+        let fut = futures::future::join4(characteristic_handler, descriptor_handler, main_fut, fut_stop);
         fut.await;
         // thread::spawn(move ||{
         //     let fut = futures::future::join(characteristic_handler, descriptor_handler);
         //     block_on(fut);
         // });
         // main_fut.await;
+        info!("<< Peripheral stopped!");
         Ok(())
     }
 }
