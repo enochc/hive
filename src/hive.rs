@@ -83,7 +83,7 @@ impl Hive {
     pub fn new_from_str(name: &str, properties: &str) -> Hive{
         let config: toml::Value = toml::from_str(properties).unwrap();
         let prop= |p:&str|{
-            return match config.get("connect") {
+            return match config.get(p) {
                 Some(v) => Some(v.to_string().into_boxed_str()),
                 _=> None
             }
