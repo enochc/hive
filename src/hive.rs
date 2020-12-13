@@ -73,7 +73,7 @@ fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool, mut se
 
 impl Hive {
     pub fn is_sever(&self) ->bool{
-        self.listen_port.is_some()
+        self.listen_port.is_some() || self.bt_connect_to.is_some()
     }
 
     pub fn is_connected(&self)->bool{
@@ -211,9 +211,10 @@ impl Hive {
 
 
     pub async fn run(& mut self){//} -> Result<()> {
+        println!("<< RUN {:?} :: {:?}", self.listen_port, self.bt_connect_to);
         self.advertising.store(true, Ordering::Relaxed);
         // I'm a client
-        if !self.connect_to.is_none() {
+        if self.connect_to.is_some() {
             info!("Connect To: {:?}", self.connect_to);
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
             let send_chan = self.sender.clone();
