@@ -263,42 +263,43 @@ impl Hive {
         }
 
         // I'm a server
-        if !self.listen_port.is_none() {
-            let port = self.listen_port.as_ref().unwrap().to_string().clone();
-            info!("{:?} Listening for connections on {:?}",self.name, self.listen_port);
-            let send_chan = self.sender.clone();
-            // listen for connections loop
-            let p = port.clone();
-            task::spawn( async move {
-                match Hive::accept_loop(send_chan, p).await {
-                    Err(e) => error!("Failed accept loop: {:?}",e),
-                    _ => (),
-                }
-            });
+        if self.listen_port.is_some() || self.bt_connect_to.is_some() {
+            if self.listen_port.is_some(){
+                let port = self.listen_port.as_ref().unwrap().to_string().clone();
+                info!("{:?} Listening for connections on {:?}",self.name, self.listen_port);
+                let send_chan = self.sender.clone();
+                // listen for connections loop
+                let p = port.clone();
+                task::spawn( async move {
+                    match Hive::accept_loop(send_chan, p).await {
+                        Err(e) => error!("Failed accept loop: {:?}",e),
+                        _ => (),
+                    }
+                });
+            }
+
 
             #[cfg(feature="bluetooth")]
-                {
-                    info!("!! this is bluetooth");
-                    let advertising = self.advertising.clone();
+            if self.bt_connect_to.is_some(){
+                info!("!! this is bluetooth");
+                let advertising = self.advertising.clone();
 
-                    self.connected.store(true, Ordering::Relaxed);
+                // self.connected.store(true, Ordering::Relaxed);
 
-                    let clone = self.bt_connect_to.clone().unwrap();
+                let clone = self.bt_connect_to.clone().unwrap();
 
-                    spawn_bluetooth_listener(
-                        advertising,
-                        true,
-                        self.sender.clone(),
-                        clone,
-                    ).expect("Failed to spawn bluetooth");
+                spawn_bluetooth_listener(
+                    advertising,
+                    true,
+                    self.sender.clone(),
+                    clone,
+                ).expect("Failed to spawn bluetooth");
+            }
 
-                    self.receive_events(true).await;
-                }
-            #[cfg(not(feature="bluetooth"))]
-                {
-                    self.connected.store(true, Ordering::Relaxed);
-                    self.receive_events(true).await;
-                }
+
+            self.connected.store(true, Ordering::Relaxed);
+            self.receive_events(true).await;
+
 
             debug!("SERVER DONE");
         }
