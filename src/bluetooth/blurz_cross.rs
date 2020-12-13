@@ -1,3 +1,4 @@
+
 /// This mod only exists to allow writing and compiling code on my dev machine which happens
 /// to be a mac. This code is never expected to run.
 
@@ -42,12 +43,19 @@ pub struct BluetoothAdapter<'a>{
     object_path: String,
     session: &'a BluetoothSession,
 }
+
+#[allow(unused_variables)]
 impl<'a> BluetoothAdapter<'a> {
-    pub fn init(_session: &BluetoothSession) -> Result<BluetoothAdapter<'a>, Box<dyn Error>> {unimplemented!()}
+    pub fn init(session: &BluetoothSession) -> Result<BluetoothAdapter<'a>, Box<dyn Error>> {unimplemented!()}
     pub fn get_device_list(&self) -> Result<Vec<String>, Box<dyn Error>> {unimplemented!()}
     pub fn get_id(&self) -> String { unimplemented!() }
-    pub fn set_discoverable(&self, _value: bool) -> Result<(), Box<dyn Error>> {unimplemented!()}
+    pub fn get_address(&self) -> Result<String, Box<dyn Error>> {unimplemented!()}
+    pub fn get_name(&self) -> Result<String, Box<dyn Error>> {unimplemented!()}
+    pub fn get_alias(&self) -> Result<String, Box<dyn Error>> {unimplemented!()}
+    pub fn set_discoverable(&self, value: bool) -> Result<(), Box<dyn Error>> {unimplemented!()}
+    pub fn remove_device(&self, device: String) -> Result<(), Box<dyn Error>> {unimplemented!()}
 }
+
 #[derive(Debug)]
 pub struct BluetoothSession {
 

@@ -14,7 +14,6 @@ use futures::channel::mpsc::UnboundedSender;
 
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::peripheral::Peripheral;
-use crate::HiveSocket;
 use crate::signal::Signal;
 
 #[cfg(not(feature = "bluetooth"))]
@@ -94,7 +93,6 @@ impl Peer {
 
 
     pub async fn send_on_stream(mut stream: &TcpStream, message: &str) -> Result<bool, std::io::Error> {
-    // pub async fn send_on_stream(mut stream: &(dyn HiveSocket + Sync), message: &str) -> Result<bool, std::io::Error> {
         let mut bytes = Vec::new();
         let msg_length: u32 = message.len() as u32;
         bytes.append(&mut msg_length.to_be_bytes().to_vec());
@@ -102,7 +100,7 @@ impl Peer {
         // let mut h = stream.clone();
 
         // stream.do_write(&bytes);//.await;
-        stream.write(&bytes).await;
+        stream.write(&bytes).await.expect("Failed to write to stream");
         // stream.flush().await;
         Result::Ok(true)
     }
@@ -140,7 +138,6 @@ impl Peer {
 // }
 
 async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream) {
-// async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &(dyn HiveSocket+Sync)){
     let mut reader = BufReader::new(&*stream);
     let from = match stream.peer_addr() {
         Ok(addr) => addr.to_string(),

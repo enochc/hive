@@ -1,10 +1,5 @@
-// use std::fs;
 
-
-// use std::os::raw::c_char;
-// use std::ffi::{CStr};
 use log::{Metadata, Level, Record, LevelFilter};
-use std::pin::Pin;
 
 mod hive_macros;
 pub mod property;
@@ -17,7 +12,9 @@ pub mod handler;
 pub mod bluetooth;
 
 
-
+#[cfg(feature="bluetooth")]
+#[macro_use]
+extern crate lazy_static;
 
 // INIT LOGGING
 pub struct SimpleLogger;
@@ -50,23 +47,23 @@ use async_std::{
 
 
 
-/// futures_io::AsyncWrite
+// futures_io::AsyncWrite
 
-pub trait HiveSocket {
-    // fn read(bytes:&[u8]){}
-    fn do_write(& self, bytes:&[u8]) {}
-    fn do_read(& self, bytes:&[u8]){}
-}
-
-impl HiveSocket for async_std::net::TcpStream {
-    fn do_write(& self, bytes:&[u8]) {
-        println!("writing");
-        async_std::task::block_on(async{
-            let mut  s = self;
-            s.write(bytes).await;
-        });
-    }
-}
+// pub trait HiveSocket {
+//     // fn read(bytes:&[u8]){}
+//     fn do_write(& self, bytes:&[u8]) {}
+//     fn do_read(& self, bytes:&[u8]){}
+// }
+//
+// impl HiveSocket for async_std::net::TcpStream {
+//     fn do_write(& self, bytes:&[u8]) {
+//         println!("writing");
+//         async_std::task::block_on(async{
+//             let mut  s = self;
+//             s.write(bytes).await;
+//         });
+//     }
+// }
 
 
 // fn get_toml_config(file_path: &str) -> toml::Value{

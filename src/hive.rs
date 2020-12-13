@@ -52,7 +52,7 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 // pub (crate) const ACK:&str = "<<|";
 
 #[cfg(feature="bluetooth")]
-fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool, mut sender: Sender<SocketEvent>, ble_name:String)->Result<()>{
+fn spawn_bluetooth_listener(do_advertise:bool, mut sender: Sender<SocketEvent>, ble_name:String)->Result<()>{
     // let str = ble_name.clone();
     std::thread::spawn(move||{
         let mut rt = tokio::runtime::Builder::new()
@@ -63,7 +63,7 @@ fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool, mut se
             .unwrap();
         rt.block_on(async move{
             let perf = crate::bluetooth::peripheral::Peripheral::new(&ble_name, sender.clone()).await;
-            perf.run(listening, do_advertise).await.expect("Failed to run peripheral");
+            perf.run(do_advertise).await.expect("Failed to run peripheral");
         });
         println!("Bluetooth no longer listening");
     });
@@ -236,7 +236,15 @@ impl Hive {
         self.setup_stop_listener();
         println!("<< RUN {:?} :: {:?}", self.listen_port.as_ref().unwrap(), self.bt_connect_to);
         self.advertising.store(true, Ordering::Relaxed);
-        // I'm a client
+
+        // I'm a bluetooth client
+        #[cfg(feature="bluetooth")]
+        if self.bt_connect_to.is_some(){
+            info!("Connect bluetooth to :{:?}", self.bt_connect_to);
+
+        }
+
+        // I'm a TCP client
         if self.connect_to.is_some() {
             info!("Connect To: {:?}", self.connect_to);
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
@@ -306,12 +314,10 @@ impl Hive {
             #[cfg(feature="bluetooth")]
             if self.bt_listen.is_some(){
                 info!("!! this is bluetooth");
-                let advertising = self.advertising.clone();
 
                 let clone = self.bt_listen.as_ref().unwrap().clone();
 
                 spawn_bluetooth_listener(
-                    advertising,
                     true,
                     self.sender.clone(),
                     clone,
