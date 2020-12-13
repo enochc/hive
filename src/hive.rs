@@ -209,13 +209,30 @@ impl Hive {
         Ok(())
     }
 
+    pub fn stop(&self){
+        debug!("Stopped called.");
+        self.sender.close_channel();
+    }
 
     pub fn get_advertising(&self) ->Arc<AtomicBool>{
         return self.advertising.clone();
     }
 
+    fn setup_stop_listener(&self){
+        let sender = self.sender.clone();
+        simple_signal::set_handler(&[
+            simple_signal::Signal::Int,
+            simple_signal::Signal::Term], {move  |s| {
+                println!("Signal {:?} received.",s);
+                sender.close_channel();
+            }
+        });
+    }
+
+
 
     pub async fn run(& mut self){//} -> Result<()> {
+        self.setup_stop_listener();
         println!("<< RUN {:?} :: {:?}", self.listen_port.as_ref().unwrap(), self.bt_connect_to);
         self.advertising.store(true, Ordering::Relaxed);
         // I'm a client
@@ -285,13 +302,10 @@ impl Hive {
                 });
             }
 
-
             #[cfg(feature="bluetooth")]
             if self.bt_listen.is_some(){
                 info!("!! this is bluetooth");
                 let advertising = self.advertising.clone();
-
-                // self.connected.store(true, Ordering::Relaxed);
 
                 let clone = self.bt_listen.as_ref().unwrap().clone();
 
@@ -303,12 +317,11 @@ impl Hive {
                 ).expect("Failed to spawn bluetooth");
             }
 
-
             self.connected.store(true, Ordering::Relaxed);
             self.receive_events(true).await;
 
-
             debug!("SERVER DONE");
+
         }
     }
 
