@@ -49,14 +49,14 @@ fn main() {
 
     let running = Arc::new(AtomicBool::new(true));
 
-    let (mut send_chan, mut receive_chan) = mpsc::unbounded();
-    let mut send_chan_clone = send_chan.clone();
+    // let (mut send_chan, mut receive_chan) = mpsc::unbounded();
+    // let mut send_chan_clone = send_chan.clone();
     let advertising = server_hive.get_advertising();
 
-    task::spawn(async move {
-        &server_hive.run().await;
-        send_chan_clone.send(true);
-    });
+    // task::spawn(async move {
+    //     &server_hive.run().await;
+        // send_chan_clone.send(true);
+    // });
 
 
     // simple_signal::set_handler(&[Signal::Int, Signal::Term], {
@@ -68,10 +68,11 @@ fn main() {
     //         send_chan.clone().send(true);
     //     }
     // });
+    task::block_on(async {server_hive.run().await});
+    // server_hive.run().await;
 
-
-    let done = block_on(receive_chan.next());
-    println!("Done {:?}",done);
+    // let done = block_on(receive_chan.next());
+    println!("Done!! ");
 
 
 
