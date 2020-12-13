@@ -30,10 +30,10 @@ pub struct Hive {
     pub properties: HashMap<String, Property>,
     sender: Sender<SocketEvent>,
     receiver: Receiver<SocketEvent>,
-    connect_to: Option<Box<str>>,
-    bt_connect_to:Option<Box<str>>,
-    bt_listen:Option<Box<str>>,
-    listen_port: Option<Box<str>>,
+    connect_to: Option<String>,
+    bt_connect_to:Option<String>,
+    bt_listen:Option<String>,
+    listen_port: Option<String>,
     pub name: Box<str>,
     peers: Vec<Peer>,
     pub message_received: Signal<String>,
@@ -52,7 +52,7 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 // pub (crate) const ACK:&str = "<<|";
 
 #[cfg(feature="bluetooth")]
-fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool, mut sender: Sender<SocketEvent>, ble_name:Box<str>)->Result<()>{
+fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool, mut sender: Sender<SocketEvent>, ble_name:String)->Result<()>{
     // let str = ble_name.clone();
     std::thread::spawn(move||{
         let mut rt = tokio::runtime::Builder::new()
@@ -85,14 +85,16 @@ impl Hive {
         let config: toml::Value = toml::from_str(properties).unwrap();
         let prop= |p:&str|{
             return match config.get(p) {
-                Some(v) => Some(v.to_string().into_boxed_str()),
+                // Some(v) => Some(v.to_string()),
+                Some(v) => Some(String::from(v.as_str().unwrap())),
                 _=> None
+
             }
         };
         let connect_to = prop("connect");
         let listen_port = prop("listen");
         let bt_listen = prop("bt_listen");
-        let mut bt_connect_to =  prop("bt_connect");
+        let bt_connect_to =  prop("bt_connect");
 
 
         let props:HashMap::<String, Property> = HashMap::new();
@@ -214,7 +216,7 @@ impl Hive {
 
 
     pub async fn run(& mut self){//} -> Result<()> {
-        println!("<< RUN {:?} :: {:?}", self.listen_port, self.bt_connect_to);
+        println!("<< RUN {:?} :: {:?}", self.listen_port.as_ref().unwrap(), self.bt_connect_to);
         self.advertising.store(true, Ordering::Relaxed);
         // I'm a client
         if self.connect_to.is_some() {
@@ -291,7 +293,7 @@ impl Hive {
 
                 // self.connected.store(true, Ordering::Relaxed);
 
-                let clone = self.bt_listen.clone().unwrap();
+                let clone = self.bt_listen.as_ref().unwrap().clone();
 
                 spawn_bluetooth_listener(
                     advertising,

@@ -12,7 +12,7 @@ default = []
 bluetooth = ["bluster", "blurz", "uuid", "tokio"]
 
 [dependencies]
-futures = "0.3.5"
+futures = "0.3"
 #tokio = {version = "0.2.21", features = ["macros", "rt-core", "sync", "tcp"]}
 #https://docs.rs/config/0.10.1/config/
 config = "0.10.1"
@@ -21,11 +21,9 @@ log = "0.4.11"
 async-std = "1.8"
 simple-signal = "1.1.1"
 
-async-trait = "0.1"
-
 ### bluster = "0.1.2", default crate doesn't have latest updates to the repo for some reason
-bluster = {path="bluster", optional=true}
-
+#bluster = {path="bluster", optional=true}
+bluster = {git="https://github.com/dfrankland/bluster", branch="master", optional=true}
 
 uuid = {version="0.8.1", optional=true}
 tokio = {version="0.2", optional=true}

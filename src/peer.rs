@@ -93,16 +93,16 @@ impl Peer {
     }
 
 
-    // pub async fn send_on_stream(mut stream: &TcpStream, message: &str) -> Result<bool, std::io::Error> {
-    pub async fn send_on_stream(mut stream: &(dyn HiveSocket + Sync), message: &str) -> Result<bool, std::io::Error> {
+    pub async fn send_on_stream(mut stream: &TcpStream, message: &str) -> Result<bool, std::io::Error> {
+    // pub async fn send_on_stream(mut stream: &(dyn HiveSocket + Sync), message: &str) -> Result<bool, std::io::Error> {
         let mut bytes = Vec::new();
         let msg_length: u32 = message.len() as u32;
         bytes.append(&mut msg_length.to_be_bytes().to_vec());
         bytes.append(&mut message.as_bytes().to_vec());
         // let mut h = stream.clone();
 
-        stream.do_write(&bytes);//.await;
-        // stream.write(&bytes).await;
+        // stream.do_write(&bytes);//.await;
+        stream.write(&bytes).await;
         // stream.flush().await;
         Result::Ok(true)
     }

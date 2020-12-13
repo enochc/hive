@@ -188,7 +188,7 @@ impl Peripheral {
 
             if do_advertise {
                 set_discoverable(true).expect("Failed to set discoverable");
-                self.peripheral.start_advertising(ADVERTISING_NAME, &[]).await
+                self.peripheral.start_advertising(&self.ble_name, &[]).await
                     .expect("Failed to start_advertising");
                 while !self.peripheral.is_advertising().await.unwrap() {}
                 info!("Peripheral started advertising");
