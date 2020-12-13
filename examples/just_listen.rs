@@ -20,8 +20,7 @@ fn main() {
     debug!("<< debug");
     let props_str = r#"
     listen = "192.168.5.45:3000"
-    [bluetooth]
-    btname = "Hive"
+    bt_listen = "Hive_Peripheral"
     [Properties]
     turn = 0
     speed = 1000

@@ -32,6 +32,7 @@ pub struct Hive {
     receiver: Receiver<SocketEvent>,
     connect_to: Option<Box<str>>,
     bt_connect_to:Option<Box<str>>,
+    bt_listen:Option<Box<str>>,
     listen_port: Option<Box<str>>,
     pub name: Box<str>,
     peers: Vec<Peer>,
@@ -73,7 +74,7 @@ fn spawn_bluetooth_listener(listening:Arc<AtomicBool>, do_advertise:bool, mut se
 
 impl Hive {
     pub fn is_sever(&self) ->bool{
-        self.listen_port.is_some() || self.bt_connect_to.is_some()
+        self.listen_port.is_some() || self.bt_listen.is_some()
     }
 
     pub fn is_connected(&self)->bool{
@@ -90,6 +91,7 @@ impl Hive {
         };
         let connect_to = prop("connect");
         let listen_port = prop("listen");
+        let bt_listen = prop("bt_listen");
         let mut bt_connect_to =  prop("bt_connect");
 
 
@@ -102,6 +104,7 @@ impl Hive {
             receiver: receive_chan,
             connect_to,
             bt_connect_to,
+            bt_listen,
             listen_port,
             name: String::from(name).into_boxed_str(),
             peers: Vec::new(),
@@ -264,7 +267,8 @@ impl Hive {
         }
 
         // I'm a server
-        if self.listen_port.is_some() || self.bt_connect_to.is_some() {
+        // if self.listen_port.is_some() || self.bt_listen.is_some() {
+        if self.is_sever() {
             if self.listen_port.is_some(){
                 let port = self.listen_port.as_ref().unwrap().to_string().clone();
                 info!("{:?} Listening for connections on {:?}",self.name, self.listen_port);
@@ -281,13 +285,13 @@ impl Hive {
 
 
             #[cfg(feature="bluetooth")]
-            if self.bt_connect_to.is_some(){
+            if self.bt_listen.is_some(){
                 info!("!! this is bluetooth");
                 let advertising = self.advertising.clone();
 
                 // self.connected.store(true, Ordering::Relaxed);
 
-                let clone = self.bt_connect_to.clone().unwrap();
+                let clone = self.bt_listen.clone().unwrap();
 
                 spawn_bluetooth_listener(
                     advertising,
