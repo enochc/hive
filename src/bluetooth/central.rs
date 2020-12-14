@@ -263,6 +263,9 @@ pub fn scan_for_devices(bt_session: &BluetoothSession,
     return session.stop_discovery();
 }
 
+#[cfg(target_os = "linux")]
+use bluetooth_serial_port::{BtAddr, BtProtocol, BtSocket};
+
 #[derive(Debug)]
 pub struct HiveConnection {
     pub addr: String,
