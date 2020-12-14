@@ -240,7 +240,7 @@ impl Hive {
 
     pub async fn run(& mut self){//} -> Result<()> {
         self.setup_stop_listener();
-        println!("<< RUN {:?} :: {:?}", self.listen_port.as_ref().unwrap(), self.bt_connect_to);
+        println!("<< RUN {:?} :: {:?}", self.listen_port, self.bt_connect_to);
         self.advertising.store(true, Ordering::Relaxed);
 
         // I'm a bluetooth client
