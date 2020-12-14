@@ -22,7 +22,7 @@ type Receiver<T> = mpsc::UnboundedReceiver<T>;
 use log::{debug, info, error};
 use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
-
+use crate::bluetooth::central::Central;
 
 
 // #[derive(Debug)]
@@ -54,7 +54,7 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 #[cfg(feature="bluetooth")]
 fn spawn_bluetooth_listener(do_advertise:bool, mut sender: Sender<SocketEvent>, ble_name:String)->Result<()>{
     // let str = ble_name.clone();
-    std::thread::spawn(move||{
+    std::thread::spawn( move||{
         let mut rt = tokio::runtime::Builder::new()
             // .basic_scheduler()
             .threaded_scheduler()
@@ -65,11 +65,17 @@ fn spawn_bluetooth_listener(do_advertise:bool, mut sender: Sender<SocketEvent>, 
             let perf = crate::bluetooth::peripheral::Peripheral::new(&ble_name, sender.clone()).await;
             perf.run(do_advertise).await.expect("Failed to run peripheral");
         });
+
         println!("Bluetooth no longer listening");
     });
-
     Ok(())
+}
 
+#[cfg(feature="bluetooth")]
+fn spawn_bluetooth_central(ble_name:String) -> Result<()> {
+    let central = Central::new(&ble_name);
+    central.connect();
+    Ok(())
 }
 
 
@@ -241,7 +247,9 @@ impl Hive {
         #[cfg(feature="bluetooth")]
         if self.bt_connect_to.is_some(){
             info!("Connect bluetooth to :{:?}", self.bt_connect_to);
-
+            let name = self.bt_connect_to.as_ref().unwrap().clone();
+            spawn_bluetooth_central(name);
+            self.connected.store(true, Ordering::Relaxed);
         }
 
         // I'm a TCP client
@@ -280,16 +288,16 @@ impl Hive {
                     };
 
                 });
-                // listen for messages from server
+
                 connected = rx.next().await.unwrap();
-                if connected {
-                    self.connected.store(true, Ordering::Relaxed);
-                    self.receive_events(false).await;
-                } else {
+                if !connected  {
                     debug!("failed to connect, retry in a moment");
                     task::sleep(Duration::from_secs(10)).await;
                 }
             }
+
+            self.connected.store(true, Ordering::Relaxed);
+            // self.receive_events(false).await;
 
             debug!("CLIENT DONE");
         }
@@ -325,11 +333,17 @@ impl Hive {
             }
 
             self.connected.store(true, Ordering::Relaxed);
-            self.receive_events(true).await;
+            // self.receive_events(true).await;
 
             debug!("SERVER DONE");
-
         }
+
+        if self.connected.load(Ordering::Relaxed){
+
+            //This is where we sit for a long time and just receive events
+            self.receive_events(true).await;
+        }
+
     }
 
 

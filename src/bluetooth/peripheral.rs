@@ -19,7 +19,7 @@ use std::time::Duration;
 use uuid::Uuid;
 use crate::bluetooth::my_blurz::set_discoverable;
 use crate::bluetooth::{SERVICE_ID, HIVE_CHAR_ID};
-use std::sync::atomic::AtomicBool;
+
 
 use std::error::Error;
 use crate::hive::Sender;

@@ -1,6 +1,7 @@
 // https://github.com/JojiiOfficial/LiveBudsCli/tree/master/src/daemon/bluetooth
 // https://github.com/JojiiOfficial/LiveBudsCli/blob/master/src/daemon/bluetooth/rfcomm_connector.rs#L159
 
+use log::{debug,info};
 use std::str::FromStr;
 use std::thread;
 use std::time::Duration;
@@ -17,7 +18,6 @@ use blurz::{
 };
 use bluster::SdpShortUuid;
 use bytes::{BufMut, BytesMut};
-use log::{debug, info};
 use regex::Regex;
 use uuid::Uuid;
 
@@ -42,17 +42,17 @@ lazy_static! {
 }
 
 
-struct Central {
+pub struct Central {
     connect_to_name: String,
 }
 
 impl Central {
-    fn new(name: &str) -> Central {
+    pub fn new(name: &str) -> Central {
         return Central {
             connect_to_name: String::from(name)
         };
     }
-    fn connect(&self) {
+    pub fn connect(&self) {
         let session = &BluetoothSession::create_session(None).unwrap();
 
         // #[cfg(target_os = "linux")]
@@ -195,7 +195,7 @@ impl Central {
                 let ff = Uuid::from_sdp_short_uuid(SERVICE_ID);
                 let tp_serv = Uuid::from_str(&uuid).unwrap();
                 let my_service = tp_serv == ff;
-                println!("SERVICE: {:?} == {:?}, {:?}", s, uuid, assigned_number);
+                debug!("SERVICE: {:?} == {:?}, {:?}", s, uuid, assigned_number);
                 let num_num = u16::from_str(assigned_number).unwrap();
 
                 debug!("<< MY SERVICE {:?} == {:?}, {:?}", ff, tp_serv, my_service);
@@ -212,15 +212,15 @@ impl Central {
 
                         let hive_char_id = Uuid::from_sdp_short_uuid(HIVE_CHAR_ID);
                         let char_id = Uuid::from_str(&c.get_uuid().unwrap());
-                        println!("<<<< char char: {:?}", char_id);
-                        println!("<<<< hive char: {:?}", hive_char_id);
+                        debug!("<<<< char char: {:?}", char_id);
+                        debug!("<<<< hive char: {:?}", hive_char_id);
                         if hive_char_id == Uuid::from_str(&c.get_uuid().unwrap()).unwrap() {
-                            println!("<<<<<<<<<<<< MYCHAR!!!!!");
+                            debug!("<<<<<<<<<<<< MYCHAR!!!!!");
 
 
-                            println!("<< {:?} == {:?}", c.get_value(), c);
-                            println!("<< {:?}", c.get_uuid());
-                            println!("<< characteristic: {:?}", String::from_utf8(c.read_value(None).unwrap()));
+                            debug!("<< {:?} == {:?}", c.get_value(), c);
+                            debug!("<< {:?}", c.get_uuid());
+                            debug!("<< characteristic: {:?}", String::from_utf8(c.read_value(None).unwrap()));
                             let msg = "you whats up mama?".to_string().into_bytes();
                             c.write_value(msg, None).expect("Failed to write to characteristic");
 
@@ -229,7 +229,7 @@ impl Central {
                                 let d = Descriptor::new(session, descriptor.clone());
                                 let bytes = d.read_value(None).unwrap();
                                 let val = String::from_utf8(bytes);
-                                println!("<<<< descriptor: {:?}", val);
+                                debug!("<<<< descriptor: {:?}", val);
                             }
                             let notify = c.start_notify();
                             if notify.is_ok() {
@@ -244,7 +244,7 @@ impl Central {
     }
 }
 
-fn scan_for_devices(bt_session: &BluetoothSession,
+pub fn scan_for_devices(bt_session: &BluetoothSession,
                     adapter: BluetoothAdapter, ) -> Result<(), Box<dyn std::error::Error>> {
     debug!("<<<< SCANNING FOR DEVICES...");
     let session =
