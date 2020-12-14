@@ -263,31 +263,33 @@ pub fn scan_for_devices(bt_session: &BluetoothSession,
     return session.stop_discovery();
 }
 
-#[cfg(target_os = "linux")]
-use bluetooth_serial_port::{BtAddr, BtProtocol, BtSocket};
 
-#[derive(Debug)]
-pub struct HiveConnection {
-    pub addr: String,
-    pub socket: BtSocket,
-    pub fd: i32,
-}
-
+// todo this was expirimental work, might just remove it
 // #[cfg(target_os = "linux")]
-pub fn connect_rfcomm(addr: &str) -> Result<HiveConnection, String> {
-    debug!("one");
-    let mut socket = BtSocket::new(BtProtocol::RFCOMM).map_err(|e| e.to_string())?;
-    debug!("two");
-    let address = BtAddr::from_str(addr.as_ref()).unwrap();
-    debug!("three");
-    socket.connect(address).map_err(|e| e.to_string())?;
-    debug!("four");
-    // let fd = socket.get_fd();
-    // debug!("five");
-
-    Ok(HiveConnection {
-        addr: addr.to_owned(),
-        socket,
-        fd: 6,// fd,
-    })
-}
+// use bluetooth_serial_port::{BtAddr, BtProtocol, BtSocket};
+//
+// #[derive(Debug)]
+// pub struct HiveConnection {
+//     pub addr: String,
+//     pub socket: BtSocket,
+//     pub fd: i32,
+// }
+//
+// // #[cfg(target_os = "linux")]
+// pub fn connect_rfcomm(addr: &str) -> Result<HiveConnection, String> {
+//     debug!("one");
+//     let mut socket = BtSocket::new(BtProtocol::RFCOMM).map_err(|e| e.to_string())?;
+//     debug!("two");
+//     let address = BtAddr::from_str(addr.as_ref()).unwrap();
+//     debug!("three");
+//     socket.connect(address).map_err(|e| e.to_string())?;
+//     debug!("four");
+//     // let fd = socket.get_fd();
+//     // debug!("five");
+//
+//     Ok(HiveConnection {
+//         addr: addr.to_owned(),
+//         socket,
+//         fd: 6,// fd,
+//     })
+// }

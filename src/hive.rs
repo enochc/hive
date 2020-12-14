@@ -52,7 +52,7 @@ pub (crate) const REQUEST_PEERS: &str = "<p|";
 // pub (crate) const ACK:&str = "<<|";
 
 #[cfg(feature="bluetooth")]
-fn spawn_bluetooth_listener(do_advertise:bool, mut sender: Sender<SocketEvent>, ble_name:String)->Result<()>{
+fn spawn_bluetooth_listener(do_advertise:bool, sender: Sender<SocketEvent>, ble_name:String)->Result<()>{
     // let str = ble_name.clone();
     std::thread::spawn( move||{
         let mut rt = tokio::runtime::Builder::new()
@@ -248,7 +248,7 @@ impl Hive {
         if self.bt_connect_to.is_some(){
             info!("Connect bluetooth to :{:?}", self.bt_connect_to);
             let name = self.bt_connect_to.as_ref().unwrap().clone();
-            spawn_bluetooth_central(name);
+            spawn_bluetooth_central(name).expect("Failed to spawn bluetooth central");
             self.connected.store(true, Ordering::Relaxed);
         }
 
