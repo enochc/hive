@@ -12,7 +12,7 @@ use toml;
 
 use crate::handler::{Handler, };
 use crate::peer::{Peer, SocketEvent};
-use crate::property::{Property, properties_to_sock_str};
+use crate::property::{Property, properties_to_sock_str, PropertyType};
 // use usbd_serial::{SerialPort, USB_CLASS_CDC, UsbError};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -22,6 +22,8 @@ type Receiver<T> = mpsc::UnboundedReceiver<T>;
 use log::{debug, info, error};
 use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(feature="bluetooth")]
 use crate::bluetooth::central::Central;
 
 
@@ -144,9 +146,15 @@ impl Hive {
         Hive::new_from_str(name, foo.as_str())
     }
 
-    pub fn get_mut_property(&mut self, key: &str) -> Option<&mut Property> {
+    pub fn get_mut_property(&mut self, key: &str, def_val:Option<PropertyType>) -> Option<&mut Property> {
+        // property value must be initialized to something if it doesn't currenlty exist
+        // otherwise Hive will treat the property as a delete
+        let val = match def_val {
+            Some(v) => Some(v),
+            None => Some(true.into())
+        };
         if !self.properties.contains_key(key){
-            let p = Property::new(key, None);
+            let p = Property::new(key, val);
             self.set_property(p);
         }
 
@@ -163,7 +171,7 @@ impl Hive {
             /*
             This calls emit on the existing property
              */
-            self.get_mut_property(name).unwrap().set_from_prop(property);
+            self.get_mut_property(name, None).unwrap().set_from_prop(property);
         }else {
 
             // TODO when added for first time, no change event is emitted, EMIT CHANGE!!
@@ -297,9 +305,7 @@ impl Hive {
             }
 
             self.connected.store(true, Ordering::Relaxed);
-            // self.receive_events(false).await;
 
-            debug!("CLIENT DONE");
         }
 
         // I'm a server
@@ -333,9 +339,7 @@ impl Hive {
             }
 
             self.connected.store(true, Ordering::Relaxed);
-            // self.receive_events(true).await;
 
-            debug!("SERVER DONE");
         }
 
         if self.connected.load(Ordering::Relaxed){
@@ -343,6 +347,7 @@ impl Hive {
             //This is where we sit for a long time and just receive events
             self.receive_events(true).await;
         }
+        debug!("<<<<<<  Hive DONE");
 
     }
 
@@ -498,10 +503,27 @@ impl Hive {
             debug!("<<< Whats this? {}", msg);
         }else {
             let (msg_type, message) = msg.split_at(3);
+            debug!("<<< {:?}, {:?}", msg_type,message);
             match msg_type {
                 PROPERTIES => {
-                    let value: toml::Value = toml::from_str(message).unwrap();
-                    self.parse_properties(&value);
+                    debug!("WFT!!: {:?}, {:?}", msg_type, PROPERTIES);
+                    debug!("MESSAGE: {}", message);
+
+                    let map:toml::Value = toml::from_str(message).unwrap();
+                    debug!("FFF {:?}", map);
+
+
+                    // let value: toml::Value = match toml::from_str(message){
+                    //     Ok(t) => t.into,
+                    //     Err(e) => {
+                    //
+                    //         eprintln!("ERROR: {:?}, {:?}",e, message);
+                    //         println!("something")
+                    //     },
+                    // };
+                    // debug!("value: {:?}", value);
+                    //
+                    self.parse_properties(&map);
                 },
                 PROPERTY => {
                     let p_toml: toml::Value = toml::from_str(message).unwrap();

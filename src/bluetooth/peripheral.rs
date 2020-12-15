@@ -88,7 +88,7 @@ impl Peripheral {
                 match event {
                     Event::ReadRequest(read_request) => {
                         info!(
-                            "GATT server got a read request with offset {}!",
+                            "Characteristic got a read request with offset {}!",
                             read_request.offset
                         );
                         let value = characteristic_value.lock().unwrap().clone();
@@ -96,12 +96,12 @@ impl Peripheral {
                             .response
                             .send(Response::Success(value.clone().into()))
                             .unwrap();
-                        info!("GATT server responded with \"{}\"", value);
+                        info!("Characteristic responded with \"{}\"", value);
                     }
                     Event::WriteRequest(write_request) => {
                         let new_value = String::from_utf8(write_request.data).unwrap();
                         info!(
-                            "GATT server got a write request with offset {} and data {}!",
+                            "Characteristic got a write request with offset {} and data {}!",
                             write_request.offset, new_value,
                         );
                         *characteristic_value.lock().unwrap() = new_value;
@@ -111,7 +111,7 @@ impl Peripheral {
                             .unwrap();
                     }
                     Event::NotifySubscribe(notify_subscribe) => {
-                        info!("GATT server got a notify subscription!");
+                        info!("Characteristic got a notify subscription!");
                         let notifying = Arc::clone(&notifying);
                         notifying.store(true, atomic::Ordering::Relaxed);
                         thread::spawn(move || {
@@ -121,7 +121,7 @@ impl Peripheral {
                                     break;
                                 };
                                 count += 1;
-                                debug!("GATT server notifying \"hi {}\"!", count);
+                                debug!("Characteristic notifying \"hi {}\"!", count);
                                 notify_subscribe
                                     .clone()
                                     .notification
@@ -132,7 +132,7 @@ impl Peripheral {
                         });
                     }
                     Event::NotifyUnsubscribe => {
-                        info!("GATT server got a notify unsubscribe!");
+                        info!("Characteristic got a notify unsubscribe!");
                         notifying.store(false, atomic::Ordering::Relaxed);
                     }
                 };
@@ -146,7 +146,7 @@ impl Peripheral {
                 match event {
                     Event::ReadRequest(read_request) => {
                         info!(
-                            "GATT server got a read request with offset {}!",
+                            "Descriptor got a read request with offset {}!",
                             read_request.offset
                         );
                         let value = descriptor_value.lock().unwrap().clone();
@@ -154,12 +154,12 @@ impl Peripheral {
                             .response
                             .send(Response::Success(value.clone().into()))
                             .unwrap();
-                        info!("GATT server responded with \"{}\"", value);
+                        info!("Descriptor responded with \"{}\"", value);
                     }
                     Event::WriteRequest(write_request) => {
                         let new_value = String::from_utf8(write_request.data).unwrap();
                         info!(
-                            "GATT server got a write request with offset {} and data {}!",
+                            "Descriptor got a write request with offset {} and data {}!",
                             write_request.offset, new_value,
                         );
                         *descriptor_value.lock().unwrap() = new_value;

@@ -27,7 +27,7 @@ fn main() {
     "#;
     let mut server_hive = Hive::new_from_str("SERVE", props_str);
 
-    server_hive.get_mut_property("turn").unwrap().on_changed.connect(move |value|{
+    server_hive.get_mut_property("turn", None).unwrap().on_changed.connect(move |value|{
         println!("<<<< TURN: {:?}", value);
     });
 

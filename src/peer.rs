@@ -1,10 +1,9 @@
-#![allow(unused_imports)]
 
+use log::{debug};
 use async_std::{
     io::BufReader,
     net::TcpStream,
     prelude::*,
-    sync::Arc,
     task,
 };
 // use futures::{SinkExt, AsyncReadExt, AsyncWriteExt};
@@ -14,7 +13,7 @@ use futures::channel::mpsc::UnboundedSender;
 
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::peripheral::Peripheral;
-use crate::signal::Signal;
+
 
 #[cfg(not(feature = "bluetooth"))]
 pub struct Peripheral {}
@@ -87,7 +86,7 @@ impl Peer {
     pub async fn send(&self, msg: &str) {
         let s = self.stream.as_ref().unwrap();
         let stream = &s.clone();
-        println!("Send to peer {}: {}", self.name, msg);
+        debug!("Send to peer {}: {}", self.name, msg);
         Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
     }
 
@@ -97,9 +96,6 @@ impl Peer {
         let msg_length: u32 = message.len() as u32;
         bytes.append(&mut msg_length.to_be_bytes().to_vec());
         bytes.append(&mut message.as_bytes().to_vec());
-        // let mut h = stream.clone();
-
-        // stream.do_write(&bytes);//.await;
         stream.write(&bytes).await.expect("Failed to write to stream");
         // stream.flush().await;
         Result::Ok(true)
@@ -114,28 +110,6 @@ impl Peer {
 
  properties: |p|=(properties)
  */
-// TODO, why do I not need this? why is writing to the stream
-// async fn write_loop(receiver: Option<UnboundedReceiver<SocketEvent>>, stream: Arc<TcpStream>){
-//     match receiver {
-//         Some(mut r) => {
-//             task::spawn(async move{
-//                 while let Some(event) = r.next().await {
-//                     match event {
-//                         SocketEvent::Message{from, msg} => {
-//                             println!("<<< send to streem 3: {:?}, {:?}", stream.peer_addr().unwrap().to_string(), msg);
-//                             send(stream.clone(),msg.as_ref()).await;
-//                         },
-//                         _ => {
-//                             println!("<<<< WHY AM I HERE?: {:?}", event);
-//                         }
-//                     }
-//
-//                 }
-//             });
-//         },
-//         _ => {}
-//     }
-// }
 
 async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream) {
     let mut reader = BufReader::new(&*stream);
