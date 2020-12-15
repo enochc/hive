@@ -503,34 +503,15 @@ impl Hive {
             debug!("<<< Whats this? {}", msg);
         }else {
             let (msg_type, message) = msg.split_at(3);
-            debug!("<<< {:?}, {:?}", msg_type,message);
             match msg_type {
                 PROPERTIES => {
-                    debug!("WFT!!: {:?}, {:?}", msg_type, PROPERTIES);
-                    debug!("MESSAGE: {}", message);
-
                     let map:toml::Value = toml::from_str(message).unwrap();
-                    debug!("FFF {:?}", map);
-
-
-                    // let value: toml::Value = match toml::from_str(message){
-                    //     Ok(t) => t.into,
-                    //     Err(e) => {
-                    //
-                    //         eprintln!("ERROR: {:?}, {:?}",e, message);
-                    //         println!("something")
-                    //     },
-                    // };
-                    // debug!("value: {:?}", value);
-                    //
                     self.parse_properties(&map);
                 },
                 PROPERTY => {
                     let p_toml: toml::Value = toml::from_str(message).unwrap();
                     let property = Property::from_table(p_toml.as_table().unwrap());
-                    // let broadcast_message = property_to_sock_str(property.as_ref(), true);
                     self.set_property(property.unwrap());
-
                     self.broadcast(Some(msg), from).await;
                 },
                 DELETE => {
