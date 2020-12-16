@@ -232,4 +232,7 @@ pub struct BluetoothGATTDescriptor<'a> {
 impl<'a> BluetoothGATTDescriptor<'a> {
     pub fn new(_session: &'a BluetoothSession, _object_path: String) -> BluetoothGATTDescriptor {unimplemented!()}
     pub fn read_value(&self, _offset: Option<u16>) -> Result<Vec<u8>, Box<dyn Error>> {unimplemented!()}
+    pub fn write_value(&self, values: Vec<u8>, offset: Option<u16>) -> Result<(), Box<dyn Error>> {unimplemented!()}
+    pub fn get_uuid(&self) -> Result<String, Box<Error>> {unimplemented!()}
+    pub fn get_id(&self) -> String { unimplemented!() }
 }

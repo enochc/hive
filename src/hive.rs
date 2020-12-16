@@ -74,9 +74,13 @@ fn spawn_bluetooth_listener(do_advertise:bool, sender: Sender<SocketEvent>, ble_
 }
 
 #[cfg(feature="bluetooth")]
-fn spawn_bluetooth_central(ble_name:String) -> Result<()> {
-    let central = Central::new(&ble_name);
-    central.connect();
+fn spawn_bluetooth_central(ble_name:String, sender: Sender<SocketEvent>) -> Result<()> {
+
+    task::block_on(async move{
+        let mut central = Central::new(&ble_name, sender);
+        central.connect().await;
+    });
+
     Ok(())
 }
 
@@ -213,7 +217,10 @@ impl Hive {
                 Ok(addr) => {
                     let se = SocketEvent::NewPeer {
                         name: addr.to_string(),
-                        stream,
+                        stream:Some(stream),
+                        peripheral: None,
+                        central: None,
+                        address: None,
                     };
                     sender.send(se).await.expect("failed to send message");
                 },
@@ -256,7 +263,7 @@ impl Hive {
         if self.bt_connect_to.is_some(){
             info!("Connect bluetooth to :{:?}", self.bt_connect_to);
             let name = self.bt_connect_to.as_ref().unwrap().clone();
-            spawn_bluetooth_central(name).expect("Failed to spawn bluetooth central");
+            spawn_bluetooth_central(name, self.sender.clone()).expect("Failed to spawn bluetooth central");
             self.connected.store(true, Ordering::Relaxed);
         }
 
@@ -280,7 +287,10 @@ impl Hive {
                                 Ok(_addr) => {
                                     let se = SocketEvent::NewPeer {
                                         name:String::from(""),
-                                        stream: s,
+                                        stream: Some(s),
+                                        peripheral: None,
+                                        central: None,
+                                        address: None
                                     };
                                     send_chan_clone.clone().send(se).await.expect("failed to send peer");
                                     tx_clone.send(true).await.expect("Failed to send connected signal");
@@ -356,12 +366,14 @@ impl Hive {
         while !self.sender.is_closed() {
             match self.receiver.next().await {
 
-                Some(SocketEvent::NewPeer { name, stream }) => {
+                Some(SocketEvent::NewPeer { name, stream, .. }) => {
                     let p = Peer::new(
                         name,
-                        Some(stream),
+                        stream,
                         None,
-                        self.sender.clone());
+                        None,
+                        self.sender.clone(),
+                        None,);
                     if is_server {
                         self.send_properties(&p).await;
                     }

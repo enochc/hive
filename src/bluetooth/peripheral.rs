@@ -18,19 +18,26 @@ use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
 use crate::bluetooth::my_blurz::set_discoverable;
-use crate::bluetooth::{SERVICE_ID, HIVE_CHAR_ID};
+use crate::bluetooth::{SERVICE_ID, HIVE_CHAR_ID, HIVE_DESC_ID};
 
 
 use std::error::Error;
 use crate::hive::Sender;
 use crate::peer::SocketEvent;
+use std::fmt::{Debug, Formatter};
 
 pub struct Peripheral{
     pub peripheral: Peripheral_device,
     ble_name: String,
     event_sender: Sender<SocketEvent>
 }
-
+impl Debug for Peripheral {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.debug_struct("Peripheral")
+            .field("name", &self.ble_name)
+            .finish()
+    }
+}
 
 
 impl Peripheral {
@@ -65,7 +72,7 @@ impl Peripheral {
             {
                 let mut descriptors = HashSet::<Descriptor>::new();
                 descriptors.insert(Descriptor::new(
-                    Uuid::from_sdp_short_uuid(HIVE_CHAR_ID),
+                    Uuid::from_sdp_short_uuid(HIVE_DESC_ID),
                     descriptor::Properties::new(
                         Some(descriptor::Read(descriptor::Secure::Insecure(
                             sender_descriptor_clone.clone(),

@@ -8,21 +8,30 @@ use async_std::{
 };
 // use futures::{SinkExt, AsyncReadExt, AsyncWriteExt};
 use futures::SinkExt;
-// use futures::channel::mpsc;
-use futures::channel::mpsc::UnboundedSender;
+use futures::channel::mpsc::{UnboundedSender};
 
 #[cfg(feature = "bluetooth")]
-use crate::bluetooth::peripheral::Peripheral;
+use crate::bluetooth::{peripheral::Peripheral, central::Central};
+
+
 
 
 #[cfg(not(feature = "bluetooth"))]
+#[derive(Debug)]
 pub struct Peripheral {}
+
+#[cfg(not(feature = "bluetooth"))]
+#[derive(Debug)]
+pub struct Central {}
 
 #[derive(Debug)]
 pub enum SocketEvent {
     NewPeer {
         name: String,
-        stream: TcpStream,
+        stream: Option<TcpStream>,
+        peripheral: Option<Peripheral>,
+        central: Option<Central>,
+        address: Option<String>,
     },
     Message {
         from: String,
@@ -38,6 +47,7 @@ pub struct Peer {
     pub stream: Option<TcpStream>,
     pub update_peers: bool,
     peripheral: Option<Peripheral>,
+    central: Option<Central>,
     address: Option<String>,
 }
 
@@ -62,32 +72,51 @@ impl Peer {
     pub fn new(name: String,
                stream: Option<TcpStream>,
                peripheral: Option<Peripheral>,
-               sender: UnboundedSender<SocketEvent>) -> Peer {
+               central:Option<Central>,
+               sender: UnboundedSender<SocketEvent>,
+               address: Option<String>) -> Peer {
 
-        let arc_str = stream.unwrap();
-        let addr = arc_str.peer_addr().unwrap().to_string();
+        let mut addr = String::from("");
+        return if stream.is_some() {
+            let arc_str = stream.unwrap();
+            addr = arc_str.peer_addr().unwrap().to_string();
+            let peer = Peer {
+                name,
+                stream: Some(arc_str.clone()),
+                update_peers: false,
+                peripheral,
+                central,
+                address: Some(addr),
+            };
 
-        let peer = Peer {
-            name,
-            stream: Some(arc_str.clone()),
-            update_peers: false,
-            peripheral,
-            address: Some(addr),
-        };
+            // Start read loop
+            let send_clone = sender.clone();
 
-        // Start read loop
-        let send_clone = sender.clone();
-
-        task::spawn(async move {
-            read_loop(send_clone, &arc_str).await;
-        });
-        return peer;
+            task::spawn(async move {
+                read_loop(send_clone, &arc_str).await;
+            });
+            peer
+        } else {
+            Peer {
+                name,
+                stream,
+                update_peers: false,
+                peripheral,
+                central,
+                address,
+            }
+        }
     }
     pub async fn send(&self, msg: &str) {
-        let s = self.stream.as_ref().unwrap();
-        let stream = &s.clone();
-        debug!("Send to peer {}: {}", self.name, msg);
-        Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
+        if self.stream.is_some(){
+            let s = self.stream.as_ref().unwrap();
+            let stream = &s.clone();
+            debug!("Send to peer {}: {}", self.name, msg);
+            Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
+        } else if self.central.is_some() {
+            unimplemented!("cant send: {:?}" ,msg);
+        }
+
     }
 
 
