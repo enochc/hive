@@ -67,55 +67,49 @@ impl Central {
             connected: Arc::new(AtomicBool::new(false)),
         };
     }
-    pub async fn send(&mut self, msg: &str) {
+    pub async fn send(& self, msg: &str) {
+        debug!("SEND <<<< {:?}", msg);
         if self.desc_sender.is_some() {
-            self.desc_sender.as_ref().unwrap().send(String::from(msg)).await.expect("Failed to send messamge!");
+            self.desc_sender.as_ref().unwrap().send(String::from(msg)).await.expect("Failed to send message!");
         }
     }
     pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let session: BluetoothSession = BluetoothSession::create_session(None).unwrap();
-
-        // #[cfg(target_os = "linux")]
-        {
-            // thread::spawn(move || {
-            async_std::task::spawn(async move{
-                loop {
-                    for event in BluetoothSession::create_session(None).unwrap().incoming(1000).map(BluetoothEvent::from) {
-                        if event.is_some() {
-                            let event = event.unwrap();
-                            match event {
-                                BluetoothEvent::Value { value, object_path } => {
-                                    let str_val = String::from_utf8(value.to_vec());
-                                    info!("{:?} VALUE: << {:?}", object_path, str_val)
-                                }
-                                BluetoothEvent::None => {}
-                                _ => info!("EVENT: {:?}", event),
+        async_std::task::spawn(async move{
+            loop {
+                for event in BluetoothSession::create_session(None).unwrap().incoming(1000).map(BluetoothEvent::from) {
+                    if event.is_some() {
+                        let event = event.unwrap();
+                        match event {
+                            BluetoothEvent::Value { value, object_path } => {
+                                let str_val = String::from_utf8(value.to_vec());
+                                info!("{:?} VALUE: << {:?}", object_path, str_val)
                             }
+                            BluetoothEvent::None => {}
+                            _ => info!("EVENT: {:?}", event),
                         }
                     }
                 }
-            });
-        }
-
-
-        let adapter = BluetoothAdapter::init(&session);
-        if let Err(err) = adapter {
-            // Thanks blurz for implementing usable error types
-            let s = err.to_string();
-
-            // On adapter not found, wait and try to connect to it again
-            // maybe the user inserted the adapter later on
-            if s.contains("Bluetooth adapter not found") {
-                debug!("{:?}", err);
-                std::process::exit(1);
-            } else {
-                // Every other error should be treated as fatal error
-                debug!("Bluetooth error: {}", err);
-                std::process::exit(1);
             }
-        }
+        });
 
-        let adapter = adapter?;
+        let adapter = match BluetoothAdapter::init(&session) {
+            Err(err) =>{
+                let s = err.to_string();
+                //todo
+                // On adapter not found, wait and try to connect to it again
+                // maybe the user inserted the adapter later on
+                if s.contains("Bluetooth adapter not found") {
+                    debug!("{:?}", err);
+                    std::process::exit(1);
+                } else {
+                    // Every other error should be treated as fatal error
+                    debug!("Bluetooth error: {}", err);
+                    std::process::exit(1);
+                }
+            },
+            Ok(a) => a
+        };
 
         let get_device = || {
             for p in adapter.get_device_list().expect("Failed to get devices") {
@@ -196,15 +190,14 @@ impl Central {
         }
         if hive_device.is_some() {
             // B8:27:EB:6D:A3:66
-            // debug!("<< moving on...my id: {:?}, {:?}", adapter.get_name(), adapter.get_address());
+            debug!("<< moving on...my id: {:?}, {:?}", adapter.get_name(), adapter.get_address());
             let device = hive_device.unwrap();
             let services = device.get_gatt_services()?;
-            // debug!("<<<< SERVICES: {:?}", device.get_service_data());
-            // debug!("<< connected:{:?}", device.is_connected());
-            // debug!("<< paired:{:?}", device.is_paired());
-            // debug!("<< services: {:?}", services);
+            debug!("<< SERVICES:  {:?}", device.get_service_data());
+            debug!("<< connected: {:?}", device.is_connected());
+            debug!("<< paired:    {:?}", device.is_paired());
+            debug!("<< services:  {:?}", services);
 
-            // let services = try!(device.get_gatt_services());
             for service in services {
                 let s = BluetoothGATTService::new(&session, service.clone());
                 let uuid = s.get_uuid()?;
@@ -217,30 +210,13 @@ impl Central {
                 if my_service {
                     let characteristics = s.get_gatt_characteristics().expect("Failed get characteristics");
                     for characteristic in characteristics {
-                        // let sess = session.clone();
                         let c = Characteristic::new(&session, characteristic.clone());
                         let hive_char_id = Uuid::from_sdp_short_uuid(HIVE_CHAR_ID);
-                        // let char_id = Uuid::from_str(&c.get_uuid().unwrap());
-                        // debug!("<<<< char char: {:?}", char_id);
-                        // debug!("<<<< hive char: {:?}", hive_char_id);
                         if hive_char_id == Uuid::from_str(&c.get_uuid()?)? {
-                            debug!("Found Characteristic!!!!!");
-                            // let h = hive_device?.get_address()?;
-                            let se = SocketEvent::NewPeer {
-                                name: device.get_name().unwrap(),
-                                stream: None,
-                                peripheral: None,
-                                central: Some(self.clone()),
-                                address: Some(device.get_address()?),
-                            };
-                            let mut sender = &self.sender;
-                            sender.send(se).await.expect("failed to send peer");
-
-                            debug!("<< {:?} == {:?}", c.get_value(), c);
-                            debug!("<< {:?}", c.get_uuid());
-                            debug!("<< characteristic: {:?}", String::from_utf8(c.read_value(None).unwrap()));
-                            let msg = "you whats up mama?".to_string().into_bytes();
-                            c.write_value(msg, None).expect("Failed to write to characteristic");
+                            debug!("<< Found Characteristic {:?}, {:?}, {:?}", c, c.get_value(), c.get_uuid());
+                            // debug!("<< characteristic: {:?}", String::from_utf8(c.read_value(None).unwrap()));
+                            // let msg = "you whats up mama?".to_string().into_bytes();
+                            // c.write_value(msg, None).expect("Failed to write to characteristic");
 
                             let descriptors = c.get_gatt_descriptors().expect("Failed to get descriptors");
                             for descriptor in descriptors {
@@ -260,13 +236,23 @@ impl Central {
                                         let c = Characteristic::new(&session, cc);
                                         c.start_notify().expect("failed to start notify");
                                         while !sender_clone.is_closed(){
-                                            async_std::task::sleep(Duration::from_secs(1));//.await;
+                                            std::thread::sleep(Duration::from_secs(1));
                                         }
                                         debug!("<< STOPPING");
 
                                         c.stop_notify().expect("failed to cancel bt notify");
                                         sender_clone2.close_channel();
                                     });
+
+                                    let se = SocketEvent::NewPeer {
+                                        name: device.get_name().unwrap(),
+                                        stream: None,
+                                        peripheral: None,
+                                        central: Some(self.clone()),
+                                        address: Some(device.get_address()?),
+                                    };
+                                    let mut sender = &self.sender;
+                                    sender.send(se).await.expect("failed to send peer");
 
                                     // loop here forever to send messages via descriptor updates
                                     while !tx.is_closed(){
@@ -307,7 +293,7 @@ pub fn scan_for_devices(bt_session: &BluetoothSession,
 }
 
 
-// todo this was expirimental work, might just remove it
+// todo this was experimental work, might just remove it
 // #[cfg(target_os = "linux")]
 // use bluetooth_serial_port::{BtAddr, BtProtocol, BtSocket};
 //

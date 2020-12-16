@@ -368,15 +368,21 @@ impl Hive {
         while !self.sender.is_closed() {
             match self.receiver.next().await {
 
-                Some(SocketEvent::NewPeer { name, stream, .. }) => {
+                Some(SocketEvent::NewPeer {
+                         name,
+                         stream,
+                         address,
+                         central,
+                         peripheral,
+                     }) => {
                     let p = Peer::new(
                         name,
                         stream,
-                        None,
-                        None,
+                        peripheral,
+                        central,
                         self.sender.clone(),
-                        None,);
-                    debug!("<<<< NEW PEER: {:?}", p);
+                        address,);
+                    debug!("<<<< NEW PEER: {:?}", p.name);
                     if is_server {
                         self.send_properties(&p).await;
                     }
@@ -464,7 +470,7 @@ impl Hive {
         return None
     }
 
-    async fn send_properties(&self, peer:&Peer){
+    async fn send_properties(&self, peer: &Peer){
         let str = properties_to_sock_str(&self.properties);
         peer.send(str.as_str()).await;
     }

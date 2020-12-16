@@ -107,13 +107,19 @@ impl Peer {
             }
         }
     }
-    pub async fn send(&self, msg: &str) {
+    pub async fn send(& self, msg: &str) {
+        debug!("SEND starts here <<<< {:?}", msg);
         if self.stream.is_some(){
             let s = self.stream.as_ref().unwrap();
             let stream = &s.clone();
             debug!("Send to peer {}: {}", self.name, msg);
             Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
         } else if self.central.is_some() {
+            debug!("SEND to bt");
+            let sender = self.central.as_ref().unwrap();
+            sender.send(msg).await;
+            // self.central.as_ref().as_mut().expect("failed to get central").send(msg);
+        } else {
             unimplemented!("cant send: {:?}" ,msg);
         }
 
