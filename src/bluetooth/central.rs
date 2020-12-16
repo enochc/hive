@@ -18,7 +18,7 @@ use blurz::{
 };
 use bluster::SdpShortUuid;
 use bytes::{BufMut, BytesMut};
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::channel::mpsc::{ UnboundedSender};
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
 use log::{debug, info};
@@ -35,13 +35,13 @@ use crate::bluetooth::blurz_cross::{BluetoothAdapter,
                                     BluetoothGATTDescriptor as Descriptor,
                                     BluetoothGATTService,
                                     BluetoothSession,
-                                    BtAddr,
-                                    BtProtocol,
-                                    BtSocket,
+                                    // BtProtocol,
+                                    // BtSocket,
 };
 use crate::hive::Sender;
 use crate::peer::SocketEvent;
 use async_std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const UUID_REGEX: &str = r"([0-9a-f]{8})-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}";
 lazy_static! {
@@ -54,13 +54,8 @@ pub struct Central {
     connect_to_name: String,
     sender: Sender<SocketEvent>,
     desc_sender: Option<UnboundedSender<String>>,
+    pub connected: Arc<AtomicBool>,
 }
-
-// lazy_static! {
-//   // static ref RE: Regex = Regex::new(UUID_REGEX).unwrap();
-//   static ref session:Arc<BluetoothSession> = Arc::new(BluetoothSession::create_session(None).unwrap());
-// }
-// static session:BluetoothSession = BluetoothSession::create_session(None).unwrap();
 
 
 impl Central {
@@ -69,14 +64,15 @@ impl Central {
             connect_to_name: String::from(name),
             sender,
             desc_sender: None,
+            connected: Arc::new(AtomicBool::new(false)),
         };
     }
     pub async fn send(&mut self, msg: &str) {
         if self.desc_sender.is_some() {
-            self.desc_sender.as_ref().unwrap().send(String::from(msg)).await;
+            self.desc_sender.as_ref().unwrap().send(String::from(msg)).await.expect("Failed to send messamge!");
         }
     }
-    pub async fn connect(&mut self) {
+    pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let session: BluetoothSession = BluetoothSession::create_session(None).unwrap();
 
         // #[cfg(target_os = "linux")]
@@ -119,10 +115,10 @@ impl Central {
             }
         }
 
-        let adapter = adapter.unwrap();
+        let adapter = adapter?;
 
         let get_device = || {
-            for p in adapter.get_device_list().unwrap() {
+            for p in adapter.get_device_list().expect("Failed to get devices") {
                 let d = BluetoothDevice::new(&session, String::from(p));
                 match d.get_address() {
                     Ok(addr) => {
@@ -149,7 +145,7 @@ impl Central {
         let mut hive_device: Option<BluetoothDevice> = None;
         match get_device() {
             Some(d) => {
-                if d.is_connected().unwrap() {
+                if d.is_connected()? {
                     debug!("FOUND paired device");
                     hive_device = Some(d);
                 } else {
@@ -162,7 +158,7 @@ impl Central {
             }
             _ => {
                 'scan_loop: for _ in 0..5 {
-                    scan_for_devices(&session, adapter.clone()).expect("Failed to scan for devices");
+                    scan_for_devices(&session, adapter.clone())?;
                     let device = get_device();
                     if device.is_some() {
                         let d = device.unwrap();
@@ -174,7 +170,7 @@ impl Central {
 
                             let conn = d.connect(5000);
                             debug!("CONNECTED:: {:?}, {:?}", conn, d.is_connected());
-                            if d.is_connected().unwrap() {
+                            if d.is_connected()? {
                                 hive_device = Some(d);
                                 break 'connect_loop;
                             }
@@ -202,7 +198,7 @@ impl Central {
             // B8:27:EB:6D:A3:66
             // debug!("<< moving on...my id: {:?}, {:?}", adapter.get_name(), adapter.get_address());
             let device = hive_device.unwrap();
-            let services = device.get_gatt_services().unwrap();
+            let services = device.get_gatt_services()?;
             // debug!("<<<< SERVICES: {:?}", device.get_service_data());
             // debug!("<< connected:{:?}", device.is_connected());
             // debug!("<< paired:{:?}", device.is_paired());
@@ -211,9 +207,9 @@ impl Central {
             // let services = try!(device.get_gatt_services());
             for service in services {
                 let s = BluetoothGATTService::new(&session, service.clone());
-                let uuid = s.get_uuid().unwrap();
+                let uuid = s.get_uuid()?;
                 let ff = Uuid::from_sdp_short_uuid(SERVICE_ID);
-                let tp_serv = Uuid::from_str(&uuid).unwrap();
+                let tp_serv = Uuid::from_str(&uuid)?;
                 let my_service = tp_serv == ff;
                 let mut buf = BytesMut::with_capacity(16);
                 buf.put_u16(SERVICE_ID);
@@ -227,14 +223,15 @@ impl Central {
                         // let char_id = Uuid::from_str(&c.get_uuid().unwrap());
                         // debug!("<<<< char char: {:?}", char_id);
                         // debug!("<<<< hive char: {:?}", hive_char_id);
-                        if hive_char_id == Uuid::from_str(&c.get_uuid().unwrap()).unwrap() {
+                        if hive_char_id == Uuid::from_str(&c.get_uuid()?)? {
                             debug!("Found Characteristic!!!!!");
+                            // let h = hive_device?.get_address()?;
                             let se = SocketEvent::NewPeer {
                                 name: device.get_name().unwrap(),
                                 stream: None,
                                 peripheral: None,
                                 central: Some(self.clone()),
-                                address: None,
+                                address: Some(device.get_address()?),
                             };
                             let mut sender = &self.sender;
                             sender.send(se).await.expect("failed to send peer");
@@ -261,9 +258,9 @@ impl Central {
                                     async_std::task::spawn(async move{
                                         let session: BluetoothSession = BluetoothSession::create_session(None).unwrap();
                                         let c = Characteristic::new(&session, cc);
-                                        let notify = c.start_notify().expect("failed to start notify");
+                                        c.start_notify().expect("failed to start notify");
                                         while !sender_clone.is_closed(){
-                                            async_std::task::sleep(Duration::from_secs(1));
+                                            async_std::task::sleep(Duration::from_secs(1));//.await;
                                         }
                                         debug!("<< STOPPING");
 
@@ -271,19 +268,22 @@ impl Central {
                                         sender_clone2.close_channel();
                                     });
 
+                                    // loop here forever to send messages via descriptor updates
                                     while !tx.is_closed(){
+                                        self.connected.store(true, Ordering::Relaxed);
                                         debug!("<< Looping over send");
-                                        // loop here forever to send messages via descriptor updates
                                         let msg = rx.next().await;
                                         match msg {
                                             Some(m) => {
                                                 debug!("<<< Send message: {:?}", m);
-                                                d.write_value(m.into_bytes(), None);
+                                                d.write_value(m.into_bytes(), None)?;
 
                                             },
                                             _=>{}
                                         };
                                     }
+                                    self.connected.store(false, Ordering::Relaxed);
+                                    debug!("Central stopped");
                                 }
                             }
                         }
@@ -291,6 +291,7 @@ impl Central {
                 }
             }
         }
+        Ok(())
     }
 }
 

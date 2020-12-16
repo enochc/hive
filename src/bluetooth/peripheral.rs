@@ -42,7 +42,7 @@ impl Debug for Peripheral {
 
 impl Peripheral {
 
-    pub async fn new(ble_name:&str, mut event_sender: Sender<SocketEvent>)->Peripheral {
+    pub async fn new(ble_name:&str, event_sender: Sender<SocketEvent>)->Peripheral {
         let peripheral = Peripheral_device::new().await.expect("Failed to initialize peripheral");
         let name = String::from(ble_name);
         return Peripheral{peripheral, ble_name: name, event_sender}
@@ -215,9 +215,8 @@ impl Peripheral {
 
         };
 
-        let mut sender_characteristic_clone = sender_characteristic.clone();
+        let sender_characteristic_clone = sender_characteristic.clone();
         let mut sender_descriptor_clone = sender_descriptor.clone();
-        // let mut advertising_clone = advertising.clone();
         let fut_stop = async {
             // we pretty much wait here for a long time
             while !self.event_sender.is_closed() {
@@ -225,7 +224,6 @@ impl Peripheral {
             }
             &sender_characteristic_clone.clone().close_channel();
             &sender_descriptor_clone.close_channel();
-            // advertising_clone.store(false, atomic::Ordering::Relaxed);
         };
 
         let fut = futures::future::join4(characteristic_handler, descriptor_handler, main_fut, fut_stop);

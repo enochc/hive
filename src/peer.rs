@@ -42,6 +42,7 @@ pub enum SocketEvent {
     },
 }
 
+#[derive(Debug)]
 pub struct Peer {
     pub name: String,
     pub stream: Option<TcpStream>,
@@ -76,10 +77,9 @@ impl Peer {
                sender: UnboundedSender<SocketEvent>,
                address: Option<String>) -> Peer {
 
-        let mut addr = String::from("");
         return if stream.is_some() {
             let arc_str = stream.unwrap();
-            addr = arc_str.peer_addr().unwrap().to_string();
+            let addr = arc_str.peer_addr().unwrap().to_string();
             let peer = Peer {
                 name,
                 stream: Some(arc_str.clone()),

@@ -74,13 +74,14 @@ fn spawn_bluetooth_listener(do_advertise:bool, sender: Sender<SocketEvent>, ble_
 }
 
 #[cfg(feature="bluetooth")]
-fn spawn_bluetooth_central(ble_name:String, sender: Sender<SocketEvent>) -> Result<()> {
-
-    task::block_on(async move{
-        let mut central = Central::new(&ble_name, sender);
-        central.connect().await;
+async fn spawn_bluetooth_central(ble_name:String, sender: Sender<SocketEvent>) -> Result<()> {
+    std::thread::spawn( move||{
+        async_std::task::block_on(async {
+                let mut central = Central::new(&ble_name, sender);
+                central.connect().await.expect("Failed to connect bt Central");
+        });
+        println!("Bluetooth no longer listening");
     });
-
     Ok(())
 }
 
@@ -263,7 +264,8 @@ impl Hive {
         if self.bt_connect_to.is_some(){
             info!("Connect bluetooth to :{:?}", self.bt_connect_to);
             let name = self.bt_connect_to.as_ref().unwrap().clone();
-            spawn_bluetooth_central(name, self.sender.clone()).expect("Failed to spawn bluetooth central");
+            spawn_bluetooth_central(name, self.sender.clone()).await
+                .expect("Failed to spawn bluetooth central");
             self.connected.store(true, Ordering::Relaxed);
         }
 
@@ -274,7 +276,7 @@ impl Hive {
             let send_chan = self.sender.clone();
             let (tx, mut rx) = mpsc::unbounded();
             let mut connected = false;
-            /* loop indefinately to connect to remote server */
+            /* loop indefinitely to connect to remote server */
             while !connected{
                 let addr = address.clone();
                 let send_chan_clone = send_chan.clone();
@@ -374,6 +376,7 @@ impl Hive {
                         None,
                         self.sender.clone(),
                         None,);
+                    debug!("<<<< NEW PEER: {:?}", p);
                     if is_server {
                         self.send_properties(&p).await;
                     }
