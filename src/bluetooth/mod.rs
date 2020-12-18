@@ -1,3 +1,4 @@
+
 pub mod my_blurz;
 
 #[cfg(not(target_os="linux"))]
@@ -11,3 +12,11 @@ pub const HIVE_CHAR_ID:u16 = 0x1235;
 pub const HIVE_DESC_ID:u16 = 0x1236;
 //todo this needs to be learned then saves somewhere
 pub const HIVE_UUID: &str = "B8:27:EB:1F:38:F0";
+
+pub struct HiveMessage {
+}
+
+impl HiveMessage {
+    pub const CONNECTED:u16 = 0x9876 as u16;
+
+}

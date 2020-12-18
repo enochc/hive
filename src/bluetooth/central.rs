@@ -25,7 +25,7 @@ use log::{debug, info};
 use regex::Regex;
 use uuid::Uuid;
 
-use crate::bluetooth::{HIVE_CHAR_ID, HIVE_UUID, SERVICE_ID, HIVE_DESC_ID};
+use crate::bluetooth::{HIVE_CHAR_ID, HIVE_UUID, SERVICE_ID, HIVE_DESC_ID, HiveMessage};
 #[cfg(not(target_os = "linux"))]
 use crate::bluetooth::blurz_cross::{BluetoothAdapter,
                                     BluetoothDevice,
@@ -43,6 +43,7 @@ use crate::peer::SocketEvent;
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+
 const UUID_REGEX: &str = r"([0-9a-f]{8})-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}";
 lazy_static! {
   static ref RE: Regex = Regex::new(UUID_REGEX).unwrap();
@@ -53,29 +54,25 @@ lazy_static! {
 pub struct Central {
     connect_to_name: String,
     sender: Sender<SocketEvent>,
-    desc_sender: Option<UnboundedSender<String>>,
+    desc_sender: Option<UnboundedSender<BytesMut>>,
     pub connected: Arc<AtomicBool>,
+    pub found_device: bool,
 }
-
 
 impl Central {
     pub fn new(name: &str, sender: Sender<SocketEvent>) -> Central {
+        Central::listen_for_events();
         return Central {
             connect_to_name: String::from(name),
             sender,
             desc_sender: None,
             connected: Arc::new(AtomicBool::new(false)),
+            found_device: false,
         };
     }
-    pub async fn send(& self, msg: &str) {
-        debug!("SEND <<<< {:?}", msg);
-        if self.desc_sender.is_some() {
-            self.desc_sender.as_ref().unwrap().send(String::from(msg)).await.expect("Failed to send message!");
-        }
-    }
-    pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let session: BluetoothSession = BluetoothSession::create_session(None).unwrap();
+    pub fn listen_for_events(){
         async_std::task::spawn(async move{
+            debug!("<<<<< LOPING OVER RECEIVER");
             loop {
                 for event in BluetoothSession::create_session(None).unwrap().incoming(1000).map(BluetoothEvent::from) {
                     if event.is_some() {
@@ -83,15 +80,34 @@ impl Central {
                         match event {
                             BluetoothEvent::Value { value, object_path } => {
                                 let str_val = String::from_utf8(value.to_vec());
-                                info!("{:?} VALUE: << {:?}", object_path, str_val)
+                                info!("<<<< {:?} VALUE: << {:?}", object_path, str_val);
+                            }
+                            BluetoothEvent::Connected{object_path, connected} => {
+
+                                info!("<<<< CONNECTED: {:?} {:?}", connected, object_path);
+                                // let str = &*mydevice_id_clone.lock().unwrap();
+                                // if object_path.eq(str){
+                                //     debug!("<<<<<<<< THIS IS MY DEVICE");
+                                // }
                             }
                             BluetoothEvent::None => {}
-                            _ => info!("EVENT: {:?}", event),
+                            _ => info!("<<<< EVENT: {:?}", event),
                         }
                     }
                 }
             }
         });
+    }
+    pub async fn send(& self, msg: BytesMut) {
+        debug!("SEND <<<< {:?}", msg);
+        if self.desc_sender.is_some() {
+            self.desc_sender.as_ref().unwrap().send(msg).await.expect("Failed to send message!");
+        }
+    }
+
+    pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.found_device = false;
+        let session: BluetoothSession = BluetoothSession::create_session(None).unwrap();
 
         let adapter = match BluetoothAdapter::init(&session) {
             Err(err) =>{
@@ -144,10 +160,18 @@ impl Central {
                     hive_device = Some(d);
                 } else {
                     let conn = d.connect(5000);
-                    debug!("<CONNECTED:: {:?}", conn);
+                    debug!("<< CONNECTED:: {:?}", conn);
                     if conn.is_ok() {
                         hive_device = Some(d);
                     }
+                    // else {
+                    //     debug!("waiting for connect");
+                    //     while !d.is_connected()?{
+                    //         debug!(".");
+                    //         thread::sleep(Duration::from_secs(1))
+                    //     }
+                    //
+                    // }
                 }
             }
             _ => {
@@ -162,8 +186,11 @@ impl Central {
                         'connect_loop: loop {
                             counter += 1;
 
+                            // let mut set_device_id = mydevice_id.lock().unwrap();
+                            // *set_device_id = d.get_id();
                             let conn = d.connect(5000);
                             debug!("CONNECTED:: {:?}, {:?}", conn, d.is_connected());
+
                             if d.is_connected()? {
                                 hive_device = Some(d);
                                 break 'connect_loop;
@@ -193,30 +220,29 @@ impl Central {
             debug!("<< moving on...my id: {:?}, {:?}", adapter.get_name(), adapter.get_address());
             let device = hive_device.unwrap();
             let services = device.get_gatt_services()?;
-            debug!("<< SERVICES:  {:?}", device.get_service_data());
+
             debug!("<< connected: {:?}", device.is_connected());
             debug!("<< paired:    {:?}", device.is_paired());
             debug!("<< services:  {:?}", services);
-
+            //let mut found = false;
             for service in services {
                 let s = BluetoothGATTService::new(&session, service.clone());
+
                 let uuid = s.get_uuid()?;
                 let ff = Uuid::from_sdp_short_uuid(SERVICE_ID);
                 let tp_serv = Uuid::from_str(&uuid)?;
-                let my_service = tp_serv == ff;
+                self.found_device = tp_serv == ff;
+                debug!("<< SERVICE: {:?}, {:?}",s, self.found_device);
                 let mut buf = BytesMut::with_capacity(16);
                 buf.put_u16(SERVICE_ID);
 
-                if my_service {
+                if self.found_device {
                     let characteristics = s.get_gatt_characteristics().expect("Failed get characteristics");
                     for characteristic in characteristics {
                         let c = Characteristic::new(&session, characteristic.clone());
                         let hive_char_id = Uuid::from_sdp_short_uuid(HIVE_CHAR_ID);
                         if hive_char_id == Uuid::from_str(&c.get_uuid()?)? {
                             debug!("<< Found Characteristic {:?}, {:?}, {:?}", c, c.get_value(), c.get_uuid());
-                            // debug!("<< characteristic: {:?}", String::from_utf8(c.read_value(None).unwrap()));
-                            // let msg = "you whats up mama?".to_string().into_bytes();
-                            // c.write_value(msg, None).expect("Failed to write to characteristic");
 
                             let descriptors = c.get_gatt_descriptors().expect("Failed to get descriptors");
                             for descriptor in descriptors {
@@ -227,7 +253,7 @@ impl Central {
                                 let hive_desc_id = Uuid::from_sdp_short_uuid(HIVE_DESC_ID);
                                 if d.get_uuid().unwrap() == hive_desc_id.to_string(){
                                     debug!("<<<< MY DESCRIPTOR");
-                           
+
                                     let sender_clone = self.sender.clone();
                                     let sender_clone2 = tx.clone();
                                     let cc = c.get_id();
@@ -243,6 +269,14 @@ impl Central {
                                         c.stop_notify().expect("failed to cancel bt notify");
                                         sender_clone2.close_channel();
                                     });
+                                    // Send connect message
+                                    let conn_message = HiveMessage::CONNECTED;
+                                    let mut bytes = BytesMut::new();//::from(conn_message);
+                                    bytes.put_u16(conn_message);
+                                    bytes.put_slice(adapter.get_address()?.as_bytes());
+                                    bytes.put_slice(format!(",{:?}", adapter.get_name()?).as_bytes());
+                                    c.write_value(bytes.to_vec(), None)?;
+                                    // self.send(bytes).await;
 
                                     let se = SocketEvent::NewPeer {
                                         name: device.get_name().unwrap(),
@@ -254,15 +288,16 @@ impl Central {
                                     let mut sender = &self.sender;
                                     sender.send(se).await.expect("failed to send peer");
 
+                                    self.connected.store(true, Ordering::Relaxed);
+
+                                    debug!("<< Looping over send");
                                     // loop here forever to send messages via descriptor updates
                                     while !tx.is_closed(){
-                                        self.connected.store(true, Ordering::Relaxed);
-                                        debug!("<< Looping over send");
                                         let msg = rx.next().await;
                                         match msg {
                                             Some(m) => {
                                                 debug!("<<< Send message: {:?}", m);
-                                                d.write_value(m.into_bytes(), None)?;
+                                                d.write_value(m.to_vec(), None)?;
 
                                             },
                                             _=>{}
@@ -276,6 +311,13 @@ impl Central {
                     }
                 }
             }
+            if !self.found_device{
+                // our service wasn't found, not sure what entirely causes this, try removing
+                // the device and search again.
+                // adapter.remove_device(device.get_id())?;
+            }
+        }else {
+            debug!("Failed to find device.");
         }
         Ok(())
     }

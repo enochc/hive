@@ -1,4 +1,10 @@
-use log::{debug,info};
+
+use std::collections::HashSet;
+use std::error::Error;
+use std::fmt::{Debug, Formatter};
+use std::sync::{Arc, atomic, Mutex};
+use std::time::Duration;
+
 // use btleplug::api::{UUID, Central, CentralEvent, BDAddr, AdapterManager, Peripheral};
 use bluster::{
     gatt::{
@@ -11,26 +17,29 @@ use bluster::{
     },
     Peripheral as Peripheral_device, SdpShortUuid,
 };
+// use bluster::gatt::event::Event::NotifySubscribe;
+use bluster::gatt::event::NotifySubscribe;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{channel::mpsc::channel, prelude::*};
-use std::sync::{Arc, atomic, Mutex};
-use std::collections::HashSet;
-use std::thread;
-use std::time::Duration;
+use futures::channel::mpsc;
+use log::{ info};
 use uuid::Uuid;
+
+use crate::bluetooth::{HIVE_CHAR_ID, HIVE_DESC_ID, HiveMessage, SERVICE_ID};
 use crate::bluetooth::my_blurz::set_discoverable;
-use crate::bluetooth::{SERVICE_ID, HIVE_CHAR_ID, HIVE_DESC_ID};
-
-
-use std::error::Error;
-use crate::hive::Sender;
+use crate::hive::{Receiver, Sender};
 use crate::peer::SocketEvent;
-use std::fmt::{Debug, Formatter};
 
-pub struct Peripheral{
-    pub peripheral: Peripheral_device,
+#[derive(Clone)]
+pub struct Peripheral {
+    // pub peripheral: Peripheral_device,
+    // sender: Sender<Bytes>,
+    // receiver: Arc<Receiver<Bytes>>,
     ble_name: String,
-    event_sender: Sender<SocketEvent>
+    event_sender: Sender<SocketEvent>,
+
 }
+
 impl Debug for Peripheral {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_struct("Peripheral")
@@ -41,19 +50,67 @@ impl Debug for Peripheral {
 
 
 impl Peripheral {
+    pub async fn new(ble_name: &str, event_sender: Sender<SocketEvent>) -> Peripheral {
 
-    pub async fn new(ble_name:&str, event_sender: Sender<SocketEvent>)->Peripheral {
-        let peripheral = Peripheral_device::new().await.expect("Failed to initialize peripheral");
+        // let peripheral = Peripheral_device::new().await.expect("Failed to initialize peripheral");
         let name = String::from(ble_name);
-        return Peripheral{peripheral, ble_name: name, event_sender}
+
+        return Peripheral { ble_name: name, event_sender }
     }
 
-    pub async fn run(&self, do_advertise:bool) -> Result<(), Box<dyn Error>> {
-        let ( sender_characteristic, receiver_characteristic) = channel(1);
-        let ( sender_descriptor, receiver_descriptor) = channel(1);
+    async fn get_peripheral() -> Peripheral_device {
+        return Peripheral_device::new().await.expect("Failed to initialize peripheral");
+    }
+    pub async fn process(mut bytes: BytesMut, mut event_sender: &Sender<SocketEvent>, perf_sender: Sender<Bytes>) -> Result<(), Box<dyn std::error::Error>> {
+        // let mut sender = self.event_sender.clone();
+        match bytes.get_u16() {
+            HiveMessage::CONNECTED => {
+                let msg = String::from_utf8(bytes.to_vec()).unwrap();
+                println!("<<<<<<<<< CONNECTED: {:?}", msg);
+                // let ss = msg.split(",").collect().unwrap();
+                let vec: Vec<&str> = msg.split(",").collect();
+                let event = SocketEvent::NewPeer {
+                    name: vec.get(0).unwrap().to_string(),
+                    stream: None,
+                    peripheral: Some(perf_sender),
+                    central: None,
+                    address: Some(vec.get(1).unwrap().to_string()),
+                };
+                event_sender.send(event).await?;
+            },
+            _ => { eprintln!("Unknown message received, failed to process") }
+        }
+        Ok(())
+    }
+
+    pub async fn run(&mut self, do_advertise: bool) -> Result<(), Box<dyn Error>> {
+        let (sender_characteristic, receiver_characteristic) = channel(1);
+        let (sender_descriptor, receiver_descriptor) = channel(1);
 
         let sender_characteristic_clone = sender_characteristic.clone();
         let sender_descriptor_clone = sender_descriptor.clone();
+
+        let (bytes_tx, mut bytes_rx): (Sender<Bytes>, Receiver<Bytes>) = mpsc::unbounded();
+
+        let subscriptions: Arc<Mutex<Vec<NotifySubscribe>>> = Arc::new(Mutex::new(vec![]));//Vec::new();
+        let subs_clone = subscriptions.clone();
+
+        async_std::task::spawn(async move {
+            while let Some(bytes) = bytes_rx.next().await {
+                let s = &*subs_clone.lock().unwrap();
+                for (x, sub) in s.iter().enumerate() {
+                    if sub.notification.is_closed() {
+                        subs_clone.lock().unwrap().remove(x);
+                    } else {
+                        sub.clone()
+                            .notification
+                            .try_send(bytes.to_vec())
+                            .unwrap();
+                    }
+                }
+            }
+        });
+
 
         let mut characteristics: HashSet<Characteristic> = HashSet::new();
         characteristics.insert(Characteristic::new(
@@ -87,6 +144,9 @@ impl Peripheral {
             },
         ));
 
+        let sender_clone = bytes_tx.clone();
+        let event_sender_clone = self.event_sender.clone();
+
         let characteristic_handler = async {
             let characteristic_value = Arc::new(Mutex::new(String::from("hi")));
             let notifying = Arc::new(atomic::AtomicBool::new(false));
@@ -106,12 +166,18 @@ impl Peripheral {
                         info!("Characteristic responded with \"{}\"", value);
                     }
                     Event::WriteRequest(write_request) => {
-                        let new_value = String::from_utf8(write_request.data).unwrap();
+                        let mut bm = BytesMut::new();
+                        bm.put_slice(&write_request.data);
                         info!(
-                            "Characteristic got a write request with offset {} and data {}!",
-                            write_request.offset, new_value,
+                            "Characteristic got a write request with offset {} and data {:?}!",
+                            write_request.offset, bm
                         );
-                        *characteristic_value.lock().unwrap() = new_value;
+                        //HiveMessage::process(bm);
+                        Peripheral::process(
+                            bm,
+                            &event_sender_clone,
+                            sender_clone.clone()).await.expect("Failed to precess message");
+
                         write_request
                             .response
                             .send(Response::Success(vec![]))
@@ -121,22 +187,26 @@ impl Peripheral {
                         info!("Characteristic got a notify subscription!");
                         let notifying = Arc::clone(&notifying);
                         notifying.store(true, atomic::Ordering::Relaxed);
-                        thread::spawn(move || {
-                            let mut count = 0;
-                            loop {
-                                if !(&notifying).load(atomic::Ordering::Relaxed) {
-                                    break;
-                                };
-                                count += 1;
-                                debug!("Characteristic notifying \"hi {}\"!", count);
-                                notify_subscribe
-                                    .clone()
-                                    .notification
-                                    .try_send(format!("hi {}", count).into())
-                                    .unwrap();
-                                thread::sleep(Duration::from_secs(2));
-                            }
-                        });
+                        // let mut self_clone = self.clone();
+                        let mut s = subscriptions.lock().unwrap();
+                        s.push(notify_subscribe);
+                        // subscriptions.push(notify_subscribe);
+
+
+                        // loop {
+                        // if !(&notifying).load(atomic::Ordering::Relaxed) {
+                        //     break;
+                        // };
+                        // count += 1;
+                        // debug!("Characteristic notifying \"hi {}\"!", count);
+                        // notify_subscribe
+                        //     .clone()
+                        //     .notification
+                        //     .try_send(format!("hi {}", count).into())
+                        //     .unwrap();
+                        // thread::sleep(Duration::from_secs(2));
+                        // }
+                        // });
                     }
                     Event::NotifyUnsubscribe => {
                         info!("Characteristic got a notify unsubscribe!");
@@ -180,39 +250,41 @@ impl Peripheral {
             }
         };
 
-        // self.peripheral.unregister_gatt().await;
-        self.peripheral.add_service(&Service::new(
+        let peripheral = Peripheral::get_peripheral().await;
+
+        peripheral.add_service(&Service::new(
             Uuid::from_sdp_short_uuid(SERVICE_ID),
             true,
             characteristics,
         )).unwrap();
 
 
+        let self_clone = self.clone();
+        let ble_name_clone = self_clone.ble_name.clone();
         let main_fut = async move {
             info!("ONE");
 
-            let powered = self.peripheral.is_powered().await;
+            let powered = peripheral.is_powered().await;
             info!(":::::: {:?}", powered);
-            while !self.peripheral.is_powered().await.expect("Failed to check if powered") {}
+            while !peripheral.is_powered().await.expect("Failed to check if powered") {}
             info!("Peripheral powered on");
-            self.peripheral.register_gatt().await.unwrap();
+            peripheral.register_gatt().await.unwrap();
 
             if do_advertise {
                 set_discoverable(true).expect("Failed to set discoverable");
-                self.peripheral.start_advertising(&self.ble_name, &[]).await
+                peripheral.start_advertising(&ble_name_clone, &[]).await
                     .expect("Failed to start_advertising");
-                while !self.peripheral.is_advertising().await.unwrap() {}
+                while !peripheral.is_advertising().await.unwrap() {}
                 info!("Peripheral started advertising");
 
-                while !self.event_sender.is_closed(){
+                while !self_clone.event_sender.is_closed() {
                     tokio::time::delay_for(Duration::from_secs(1)).await;
                 }
 
-                self.peripheral.stop_advertising().await.unwrap();
+                peripheral.stop_advertising().await.unwrap();
                 set_discoverable(false).expect("failed to stop being discovered");
                 info!("Peripheral stopped advertising");
             }
-
         };
 
         let sender_characteristic_clone = sender_characteristic.clone();

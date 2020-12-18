@@ -6,14 +6,14 @@ use async_std::{
     prelude::*,
     task,
 };
-// use futures::{SinkExt, AsyncReadExt, AsyncWriteExt};
-use futures::SinkExt;
+
+use futures::{SinkExt};
 use futures::channel::mpsc::{UnboundedSender};
 
 #[cfg(feature = "bluetooth")]
-use crate::bluetooth::{peripheral::Peripheral, central::Central};
-
-
+use crate::bluetooth::{central::Central};
+use bytes::{BytesMut, BufMut, Bytes};
+use crate::hive::Sender;
 
 
 #[cfg(not(feature = "bluetooth"))]
@@ -24,12 +24,15 @@ pub struct Peripheral {}
 #[derive(Debug)]
 pub struct Central {}
 
+// #[cfg(not(feature = "bluetooth"))]
+// impl Central{pub async fn send(&self, msg:&str){}}
+
 #[derive(Debug)]
 pub enum SocketEvent {
     NewPeer {
         name: String,
         stream: Option<TcpStream>,
-        peripheral: Option<Peripheral>,
+        peripheral: Option<Sender<Bytes>>,
         central: Option<Central>,
         address: Option<String>,
     },
@@ -47,10 +50,12 @@ pub struct Peer {
     pub name: String,
     pub stream: Option<TcpStream>,
     pub update_peers: bool,
-    peripheral: Option<Peripheral>,
+    peripheral: Option<Sender<Bytes>>,
     central: Option<Central>,
     address: Option<String>,
 }
+
+
 
 fn as_u32_be(array: &[u8; 4]) -> u32 {
     ((array[0] as u32) << 24) +
@@ -72,7 +77,7 @@ impl Peer {
 
     pub fn new(name: String,
                stream: Option<TcpStream>,
-               peripheral: Option<Peripheral>,
+               peripheral: Option<Sender<Bytes>>,
                central:Option<Central>,
                sender: UnboundedSender<SocketEvent>,
                address: Option<String>) -> Peer {
@@ -114,11 +119,24 @@ impl Peer {
             let stream = &s.clone();
             debug!("Send to peer {}: {}", self.name, msg);
             Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
+
         } else if self.central.is_some() {
-            debug!("SEND to bt");
-            let sender = self.central.as_ref().unwrap();
-            sender.send(msg).await;
+            #[cfg(feature = "bluetooth")]
+                {
+                    debug!("SEND to bt");
+                    let mut buff = BytesMut::new();
+                    buff.put_slice(msg.as_bytes());
+                    let sender = self.central.as_ref().unwrap();
+                    sender.send(buff).await;
+                }
             // self.central.as_ref().as_mut().expect("failed to get central").send(msg);
+        }else if self.peripheral.is_some(){
+            let mut buff = BytesMut::new();
+            buff.put_slice(msg.as_bytes());
+            let b = buff.freeze();
+            // let buff_clone = buff.clone();
+            self.peripheral.as_ref().unwrap()
+                .send(b.clone()).await.expect("failed to send something somewhere");
         } else {
             unimplemented!("cant send: {:?}" ,msg);
         }
