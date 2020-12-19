@@ -6,7 +6,7 @@ fn main() {
     let mut h = Hive::new("examples/properties.toml");//Hive::parse_properties(&config);
 
     // the set functions require a mutable reference to the property
-    let p = h.get_mut_property("thingvalue", None);
+    let p = h.get_mut_property("thingvalue");
     match p {
         Some(p) => {
             p.on_changed.connect(|v|{

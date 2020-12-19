@@ -11,7 +11,7 @@ use hive::init_logging;
 use log::{debug, info, error};
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::time::Duration;
+use std::time::Duration;
 
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
