@@ -2,7 +2,7 @@
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, atomic, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 // use btleplug::api::{UUID, Central, CentralEvent, BDAddr, AdapterManager, Peripheral};
@@ -30,13 +30,15 @@ use crate::bluetooth::my_blurz::set_discoverable;
 use crate::hive::{Receiver, Sender};
 use crate::peer::SocketEvent;
 
-#[derive(Clone)]
+// #[derive(Clone)]
 pub struct Peripheral {
     // pub peripheral: Peripheral_device,
     // sender: Sender<Bytes>,
     // receiver: Arc<Receiver<Bytes>>,
     ble_name: String,
     event_sender: Sender<SocketEvent>,
+    //TODO this feels silly, do a really need a mutex?
+    address: Mutex<String>,
 
 }
 
@@ -55,33 +57,35 @@ impl Peripheral {
         // let peripheral = Peripheral_device::new().await.expect("Failed to initialize peripheral");
         let name = String::from(ble_name);
 
-        return Peripheral { ble_name: name, event_sender }
+        return Peripheral { ble_name: name, event_sender, address:Mutex::new(String::new()) }
     }
 
     async fn get_peripheral() -> Peripheral_device {
         return Peripheral_device::new().await.expect("Failed to initialize peripheral");
     }
-    pub async fn process(mut bytes: BytesMut, mut event_sender: &Sender<SocketEvent>, perf_sender: Sender<Bytes>) -> Result<(), Box<dyn std::error::Error>> {
-        // let mut sender = self.event_sender.clone();
-        match bytes.get_u16() {
-            HiveMessage::CONNECTED => {
-                let msg = String::from_utf8(bytes.to_vec()).unwrap();
-                println!("<<<<<<<<< CONNECTED: {:?}", msg);
-                // let ss = msg.split(",").collect().unwrap();
-                let vec: Vec<&str> = msg.split(",").collect();
-                let event = SocketEvent::NewPeer {
-                    name: vec.get(0).unwrap().to_string(),
-                    stream: None,
-                    peripheral: Some(perf_sender),
-                    central: None,
-                    address: Some(vec.get(1).unwrap().to_string()),
-                };
-                event_sender.send(event).await?;
-            },
-            _ => { eprintln!("Unknown message received, failed to process") }
-        }
-        Ok(())
-    }
+    // pub async fn process(mut bytes: BytesMut,
+    //                      mut event_sender: &Sender<SocketEvent>,
+    //                      perf_sender: Sender<Bytes>) -> Result<(), Box<dyn std::error::Error>> {
+    //     // let mut sender = self.event_sender.clone();
+    //     match bytes.get_u16() {
+    //         HiveMessage::CONNECTED => {
+    //             let msg = String::from_utf8(bytes.to_vec()).unwrap();
+    //             println!("<<<<<<<<< CONNECTED: {:?}", msg);
+    //             // let ss = msg.split(",").collect().unwrap();
+    //             let vec: Vec<&str> = msg.split(",").collect();
+    //             let event = SocketEvent::NewPeer {
+    //                 name: vec.get(0).unwrap().to_string(),
+    //                 stream: None,
+    //                 peripheral: Some(perf_sender),
+    //                 central: None,
+    //                 address: Some(vec.get(1).unwrap().to_string()),
+    //             };
+    //             event_sender.send(event).await?;
+    //         },
+    //         _ => { eprintln!("Unknown message received, failed to process") }
+    //     }
+    //     Ok(())
+    // }
 
     pub async fn run(&mut self, do_advertise: bool) -> Result<(), Box<dyn Error>> {
         let (sender_characteristic, receiver_characteristic) = channel(1);
@@ -145,11 +149,10 @@ impl Peripheral {
         ));
 
         let sender_clone = bytes_tx.clone();
-        let event_sender_clone = self.event_sender.clone();
+        let mut event_sender_clone = self.event_sender.clone();
 
         let characteristic_handler = async {
             let characteristic_value = Arc::new(Mutex::new(String::from("hi")));
-            let notifying = Arc::new(atomic::AtomicBool::new(false));
             let mut rx = receiver_characteristic;
             while let Some(event) = rx.next().await {
                 match event {
@@ -172,11 +175,26 @@ impl Peripheral {
                             "Characteristic got a write request with offset {} and data {:?}!",
                             write_request.offset, bm
                         );
-                        //HiveMessage::process(bm);
-                        Peripheral::process(
-                            bm,
-                            &event_sender_clone,
-                            sender_clone.clone()).await.expect("Failed to precess message");
+
+                        match bm.get_u16() {
+                            HiveMessage::CONNECTED => {
+                                let msg = String::from_utf8(bm.to_vec()).unwrap();
+                                println!("<<<<<<<<< CONNECTED: {:?}", msg);
+                                let vec: Vec<&str> = msg.split(",").collect();
+                                let a = vec.get(1).unwrap().to_string();
+                                let mut addr = self.address.lock().unwrap();//.clone();
+                                *addr = a.clone();
+                                let event = SocketEvent::NewPeer {
+                                    name: vec.get(0).unwrap().to_string(),
+                                    stream: None,
+                                    peripheral: Some(sender_clone.clone()),
+                                    central: None,
+                                    address: Some(a),
+                                };
+                                &event_sender_clone.send(event).await.expect("Failed to send event");
+                            },
+                            _ => { eprintln!("Unknown message received, failed to process") }
+                        }
 
                         write_request
                             .response
@@ -185,36 +203,17 @@ impl Peripheral {
                     }
                     Event::NotifySubscribe(notify_subscribe) => {
                         info!("Characteristic got a notify subscription!");
-                        let notifying = Arc::clone(&notifying);
-                        notifying.store(true, atomic::Ordering::Relaxed);
-                        // let mut self_clone = self.clone();
-                        let mut s = subscriptions.lock().unwrap();
-                        s.push(notify_subscribe);
-                        // subscriptions.push(notify_subscribe);
+                        subscriptions.lock().unwrap().push(notify_subscribe);
 
-
-                        // loop {
-                        // if !(&notifying).load(atomic::Ordering::Relaxed) {
-                        //     break;
-                        // };
-                        // count += 1;
-                        // debug!("Characteristic notifying \"hi {}\"!", count);
-                        // notify_subscribe
-                        //     .clone()
-                        //     .notification
-                        //     .try_send(format!("hi {}", count).into())
-                        //     .unwrap();
-                        // thread::sleep(Duration::from_secs(2));
-                        // }
-                        // });
                     }
                     Event::NotifyUnsubscribe => {
                         info!("Characteristic got a notify unsubscribe!");
-                        notifying.store(false, atomic::Ordering::Relaxed);
                     }
                 };
             }
         };
+
+        let mut event_sender_clone = self.event_sender.clone();
 
         let descriptor_handler = async {
             let descriptor_value = Arc::new(Mutex::new(String::from("hi")));
@@ -239,7 +238,14 @@ impl Peripheral {
                             "Descriptor got a write request with offset {} and data {}!",
                             write_request.offset, new_value,
                         );
-                        *descriptor_value.lock().unwrap() = new_value;
+                        // *descriptor_value.lock().unwrap() = new_value;
+                        let adr = &*self.address.lock().unwrap();
+                        let se = SocketEvent::Message {
+                            from: adr.clone(),
+                            msg: new_value
+                        };
+                        event_sender_clone.send(se).await.expect("Failed to send event");
+                        //self.event_sender.send()
                         write_request
                             .response
                             .send(Response::Success(vec![]))
@@ -259,8 +265,8 @@ impl Peripheral {
         )).unwrap();
 
 
-        let self_clone = self.clone();
-        let ble_name_clone = self_clone.ble_name.clone();
+        let ble_name_clone = self.ble_name.clone();
+        let event_sender_clone = self.event_sender.clone();
         let main_fut = async move {
             info!("ONE");
 
@@ -277,7 +283,7 @@ impl Peripheral {
                 while !peripheral.is_advertising().await.unwrap() {}
                 info!("Peripheral started advertising");
 
-                while !self_clone.event_sender.is_closed() {
+                while !event_sender_clone.is_closed() {
                     tokio::time::delay_for(Duration::from_secs(1)).await;
                 }
 

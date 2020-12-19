@@ -369,7 +369,7 @@ impl Hive {
         if self.connected.load(Ordering::Relaxed) {
 
             //This is where we sit for a long time and just receive events
-            self.receive_events(true).await;
+            self.receive_events(self.is_sever()).await;
         }
         debug!("<<<<<<  Hive DONE");
     }
@@ -432,7 +432,10 @@ impl Hive {
         debug!("name {:?}", &self.name);
 
         // Add self to peers list
-        let myadr = self.listen_port.as_ref().expect("No port").clone();
+        let no_port = String::from("No port");
+        let myadr = self.listen_port.as_ref().or_else(||{
+            Some(&no_port)
+        }).expect("No port").clone();
         let myname = String::from(&self.name);
         peers_string.push_str(&format!("{}|{}", myname, myadr));
 
