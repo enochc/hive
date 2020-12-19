@@ -19,14 +19,15 @@ fn main() {
     println!("<< println");
     debug!("<< debug");
     let props_str = r#"
-    listen = "192.168.5.45:3000"
+    #listen = "192.168.5.45:3000"
+    name= "listener"
     bt_listen = "Hive_Peripheral"
     [Properties]
     turn = 0
     speed = 1000
     pt = 2
     "#;
-    let mut server_hive = Hive::new_from_str("SERVE", props_str);
+    let mut server_hive = Hive::new_from_str(props_str);
 
     use simple_signal::{self, Signal};
 

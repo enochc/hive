@@ -11,6 +11,7 @@ use hive::init_logging;
 use log::{debug, info, error};
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::time::Duration;
 
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
@@ -20,18 +21,33 @@ fn main() {
     debug!("<< debug");
     let props_str = r#"
     bt_connect = "Hive_Peripheral"
-    [Properties]
-    turn = 0
-    speed = 1000
-    pt = 2
+    name = "bt_client"
     "#;
-    let mut server_hive = Hive::new_from_str("SERVE", props_str);
+    let mut server_hive = Hive::new_from_str( props_str);
 
-    server_hive.get_mut_property("turn", None).unwrap().on_changed.connect(move |value|{
-        println!("<<<< TURN: {:?}", value);
+    let mut p = server_hive.get_mut_property("pt").unwrap();
+
+    p.on_changed.connect(move |value|{
+        println!("<<<< <<<< <<<< <<<< pt: {:?}", value);
     });
 
-    task::block_on(async {server_hive.run().await});
+    let handler = server_hive.get_handler();
+
+    task::spawn(async move {
+        server_hive.run().await;
+    });
+    sleep(Duration::from_secs(2));
+
+
+    // task::spawn(async move {
+    //     handler.send_property_value("pt", Some(&666.into())).await;
+    // });
+    println!("sleeping...");
+    sleep(Duration::from_secs(10));
+
+
+
+    // task::block_on(async {});
 
     println!("Done!! ");
 

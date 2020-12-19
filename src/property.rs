@@ -141,11 +141,15 @@ impl Property {
  */
 pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> String {
     let mut message = PROPERTIES.to_string();
+    // for p in properties {
     for p in properties {
-        message.push_str(
-            property_to_sock_str(Some(p.1), false).unwrap().as_str()
-        );
-        message.push('\n');
+        if p.1.value.is_some() {
+            message.push_str(
+                property_to_sock_str(Some(p.1), false).unwrap().as_str()
+            );
+            message.push('\n');
+        }
+
     }
     return String::from(message);
 }

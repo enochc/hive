@@ -17,7 +17,7 @@ use toml;
 use crate::bluetooth::central::Central;
 use crate::handler::Handler;
 use crate::peer::{Peer, SocketEvent};
-use crate::property::{properties_to_sock_str, Property, PropertyType};
+use crate::property::{properties_to_sock_str, Property};
 use crate::signal::Signal;
 
 // use usbd_serial::{SerialPort, USB_CLASS_CDC, UsbError};
@@ -28,14 +28,14 @@ pub type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
 // #[derive(Debug)]
 pub struct Hive {
-    pub properties: HashMap<String, Property>,
+    properties: HashMap<String, Property>,
     sender: Sender<SocketEvent>,
     receiver: Receiver<SocketEvent>,
     connect_to: Option<String>,
     bt_connect_to: Option<String>,
     bt_listen: Option<String>,
     listen_port: Option<String>,
-    pub name: Box<str>,
+    pub name: String,
     peers: Vec<Peer>,
     pub message_received: Signal<String>,
     pub connected: Arc<AtomicBool>,
@@ -108,7 +108,7 @@ impl Hive {
         return self.connected.load(Ordering::Relaxed);
     }
 
-    pub fn new_from_str(name: &str, properties: &str) -> Hive {
+    pub fn new_from_str(properties: &str) -> Hive {
         let config: toml::Value = toml::from_str(properties).unwrap();
         let prop = |p: &str| {
             return match config.get(p) {
@@ -117,6 +117,10 @@ impl Hive {
                 _ => None
             };
         };
+        let name = prop("name").or_else(||{
+            Some("Unnamed".to_string())
+        }).unwrap();
+
         let connect_to = prop("connect");
         let listen_port = prop("listen");
         let bt_listen = prop("bt_listen");
@@ -134,7 +138,7 @@ impl Hive {
             bt_connect_to,
             bt_listen,
             listen_port,
-            name: String::from(name).into_boxed_str(),
+            name,
             peers: Vec::new(),
             message_received: Default::default(),
             connected: Arc::new(AtomicBool::new(false)),
@@ -152,32 +156,32 @@ impl Hive {
         return hive;
     }
 
-    pub fn get_handler(&self) -> Handler {
+    pub fn get_handler(& self) -> Handler {
         return Handler {
             sender: self.sender.clone(),
         };
     }
 
-    pub fn new(name: &str, toml_path: &str) -> Hive {
+    pub fn new(toml_path: &str) -> Hive {
         let foo: String = fs::read_to_string(toml_path).unwrap().parse().unwrap();
-        Hive::new_from_str(name, foo.as_str())
+        Hive::new_from_str(foo.as_str())
     }
 
-    pub fn get_mut_property(&mut self, key: &str, def_val: Option<PropertyType>) -> Option<&mut Property> {
-        // property value must be initialized to something if it doesn't currenlty exist
-        // otherwise Hive will treat the property as a delete
-        let val = match def_val {
-            Some(v) => Some(v),
-            None => Some(true.into())
-        };
+    pub fn get_mut_property(&mut self, key: &str) -> Option<&mut Property> {
         if !self.properties.contains_key(key) {
-            let p = Property::new(key, val);
+            let p = Property::new(key, None);
             self.set_property(p);
         }
 
         let op = self.properties.get_mut(key);
         return op;
     }
+
+    pub fn get_property(&self, key: &str) -> Option<&Property> {
+        let op = self.properties.get(key);
+        return op;
+    }
+
     fn has_property(&self, key: &str) -> bool {
         return self.properties.contains_key(key);
     }
@@ -188,7 +192,7 @@ impl Hive {
             /*
             This calls emit on the existing property
              */
-            self.get_mut_property(name, None).unwrap().set_from_prop(property);
+            self.get_mut_property(name).unwrap().set_from_prop(property);
         } else {
 
             // TODO when added for first time, no change event is emitted, EMIT CHANGE!!
@@ -429,7 +433,7 @@ impl Hive {
 
         // Add self to peers list
         let myadr = self.listen_port.as_ref().expect("No port").clone();
-        let myname = String::from(self.name.as_ref());
+        let myname = String::from(&self.name);
         peers_string.push_str(&format!("{}|{}", myname, myadr));
 
         for x in 0..self.peers.len() {
@@ -487,7 +491,7 @@ impl Hive {
      */
     async fn send_header(&self, peer: &Peer) {
         let mut str = HEADER.to_string();
-        str.push_str(format!("NAME={}", self.name).as_ref());
+        str.push_str(&*format!("NAME={}", self.name));//.unwrap()).as_ref();
         peer.send(str.as_ref()).await;
     }
 
@@ -523,15 +527,19 @@ impl Hive {
     }
 
     async fn got_message(&mut self, from: &str, msg: String) {
-        debug!("GOT MESSAGE: {}: {:?}", self.name, msg);
+        debug!("GOT MESSAGE: {:?}: {:?}", self.name, msg);
         if msg.len() < 3 {
             debug!("<<< Whats this? {}", msg);
         } else {
             let (msg_type, message) = msg.split_at(3);
             match msg_type {
                 PROPERTIES => {
-                    let map: toml::Value = toml::from_str(message).unwrap();
-                    self.parse_properties(&map);
+                    match toml::from_str(message) {
+                        Ok(v) => self.parse_properties(&v),
+                        Err(_) =>{
+                            panic!("Failed to parse TOML: {:?}", message)
+                        }
+                    }
                 }
                 PROPERTY => {
                     let p_toml: toml::Value = toml::from_str(message).unwrap();

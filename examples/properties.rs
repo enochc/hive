@@ -15,16 +15,16 @@ fn main() {
 
     p.on_changed.connect(move |v|{
         println!("Inside signal: {:?}", v);
-        //sleep(Duration::from_millis(1000));
+        sleep(Duration::from_millis(1000));
         c1.fetch_add(1, Ordering::SeqCst);
-        println!(" DONE")
+        println!(" DONE 1")
 
     });
 
     p.on_changed.connect(move |v|{
         print!("also Inside signal: {:?}", v);
         c2.fetch_add(1, Ordering::SeqCst);
-        println!(" DONE")
+        println!(" DONE 2")
     });
 
     p.set_str("What");

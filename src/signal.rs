@@ -1,12 +1,9 @@
 use std::sync::{Arc};
 use async_std::task;
-// use async_std::task::JoinHandle;
-// use futures::future::join_all;
+use futures::future::join_all;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use async_std::sync::Mutex;
 use async_std::task::block_on;
-// use futures::channel::mpsc;
-
 
 
 #[derive(Default)]
@@ -32,21 +29,19 @@ impl<T> Signal<T>
     {
         let count = self.counter.load(Ordering::Relaxed);
         println!("EMITTING:: {}", count);
-        // let mut handles: Vec<JoinHandle<bool>> = Vec::new();
-        // let mut handles = FuturesUnordered::new();
-        // Process each slot asynchronously
+        let mut futures = vec![];
+
         for s in self.slots.lock().await.iter() {
             let s_clone = s.clone();
             let val_clone = val.clone();
 
-            // TODO this works with streams example, but sometimes completes early
-            //  for properties example
-            task::spawn(async move{
+            let h = task::spawn(async move{
                 send_emit(s_clone, val_clone).await;
             });
+            futures.push(h);
         }
 
-        // join_all(handles).await;
+        join_all(futures).await;
     }
 
     pub fn connect(&self, slot: impl Fn(T) + Send + Sync + 'static) {

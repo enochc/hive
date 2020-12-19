@@ -3,7 +3,7 @@ use hive::hive::Hive;
 use std::time::Duration;
 
 fn main() {
-    let mut h = Hive::new("Hive","examples/properties.toml");//Hive::parse_properties(&config);
+    let mut h = Hive::new("examples/properties.toml");//Hive::parse_properties(&config);
 
     // the set functions require a mutable reference to the property
     let p = h.get_mut_property("thingvalue", None);
