@@ -12,17 +12,16 @@ use bluster::{
         characteristic::Characteristic,
         descriptor,
         descriptor::Descriptor,
-        event::{Event, Response},
+        event::{Event, Response, NotifySubscribe},
         service::Service,
     },
     Peripheral as Peripheral_device, SdpShortUuid,
 };
-// use bluster::gatt::event::Event::NotifySubscribe;
-use bluster::gatt::event::NotifySubscribe;
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{channel::mpsc::channel, prelude::*};
 use futures::channel::mpsc;
-use log::{ info};
+use log::{ debug, info};
 use uuid::Uuid;
 
 use crate::bluetooth::{HIVE_CHAR_ID, HIVE_DESC_ID, HiveMessage, SERVICE_ID};
@@ -63,29 +62,6 @@ impl Peripheral {
     async fn get_peripheral() -> Peripheral_device {
         return Peripheral_device::new().await.expect("Failed to initialize peripheral");
     }
-    // pub async fn process(mut bytes: BytesMut,
-    //                      mut event_sender: &Sender<SocketEvent>,
-    //                      perf_sender: Sender<Bytes>) -> Result<(), Box<dyn std::error::Error>> {
-    //     // let mut sender = self.event_sender.clone();
-    //     match bytes.get_u16() {
-    //         HiveMessage::CONNECTED => {
-    //             let msg = String::from_utf8(bytes.to_vec()).unwrap();
-    //             println!("<<<<<<<<< CONNECTED: {:?}", msg);
-    //             // let ss = msg.split(",").collect().unwrap();
-    //             let vec: Vec<&str> = msg.split(",").collect();
-    //             let event = SocketEvent::NewPeer {
-    //                 name: vec.get(0).unwrap().to_string(),
-    //                 stream: None,
-    //                 peripheral: Some(perf_sender),
-    //                 central: None,
-    //                 address: Some(vec.get(1).unwrap().to_string()),
-    //             };
-    //             event_sender.send(event).await?;
-    //         },
-    //         _ => { eprintln!("Unknown message received, failed to process") }
-    //     }
-    //     Ok(())
-    // }
 
     pub async fn run(&mut self, do_advertise: bool) -> Result<(), Box<dyn Error>> {
         let (sender_characteristic, receiver_characteristic) = channel(1);
@@ -100,16 +76,22 @@ impl Peripheral {
         let subs_clone = subscriptions.clone();
 
         async_std::task::spawn(async move {
+            debug!("Starting notify loop");
             while let Some(bytes) = bytes_rx.next().await {
+                debug!("notify: {:?}", bytes);
                 let s = &*subs_clone.lock().unwrap();
+                debug!("subs: {:?}", s.len());
                 for (x, sub) in s.iter().enumerate() {
                     if sub.notification.is_closed() {
+                        info!("<< Notification closed, removing notification..");
                         subs_clone.lock().unwrap().remove(x);
                     } else {
+                        info!("<< Send notification: {:?}", bytes);
                         sub.clone()
                             .notification
                             .try_send(bytes.to_vec())
                             .unwrap();
+
                     }
                 }
             }
@@ -162,9 +144,12 @@ impl Peripheral {
                             read_request.offset
                         );
                         let value = characteristic_value.lock().unwrap().clone();
+                        let mut bmut = BytesMut::new();
+                        let conn = HiveMessage::CONNECTED;
+                        bmut.put_u16(conn);
                         read_request
                             .response
-                            .send(Response::Success(value.clone().into()))
+                            .send(Response::Success(bmut.to_vec()))
                             .unwrap();
                         info!("Characteristic responded with \"{}\"", value);
                     }
@@ -180,18 +165,21 @@ impl Peripheral {
                             HiveMessage::CONNECTED => {
                                 let msg = String::from_utf8(bm.to_vec()).unwrap();
                                 println!("<<<<<<<<< CONNECTED: {:?}", msg);
-                                let vec: Vec<&str> = msg.split(",").collect();
-                                let a = vec.get(1).unwrap().to_string();
-                                let mut addr = self.address.lock().unwrap();//.clone();
-                                *addr = a.clone();
-                                let event = SocketEvent::NewPeer {
-                                    name: vec.get(0).unwrap().to_string(),
-                                    stream: None,
-                                    peripheral: Some(sender_clone.clone()),
-                                    central: None,
-                                    address: Some(a),
-                                };
-                                &event_sender_clone.send(event).await.expect("Failed to send event");
+                                if msg.len() <=0 {info!("no name or address")} else {
+                                    let vec: Vec<&str> = msg.split(",").collect();
+                                    let a = vec.get(1).unwrap().to_string();
+                                    let mut addr = self.address.lock().unwrap();//.clone();
+                                    *addr = a.clone();
+                                    let event = SocketEvent::NewPeer {
+                                        name: vec.get(0).unwrap().to_string(),
+                                        stream: None,
+                                        peripheral: Some(sender_clone.clone()),
+                                        central: None,
+                                        address: a,
+                                    };
+                                    &event_sender_clone.send(event).await.expect("Failed to send event");
+                                }
+
                             },
                             _ => { eprintln!("Unknown message received, failed to process") }
                         }
@@ -245,11 +233,11 @@ impl Peripheral {
                             msg: new_value
                         };
                         event_sender_clone.send(se).await.expect("Failed to send event");
-                        //self.event_sender.send()
+
                         write_request
                             .response
                             .send(Response::Success(vec![]))
-                            .unwrap();
+                            .expect("Failed to send response to descriptor write");
                     }
                     _ => info!("Event not supported for Descriptors!"),
                 };

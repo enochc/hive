@@ -8,12 +8,20 @@ use async_std::{
 };
 
 use futures::{SinkExt};
-use futures::channel::mpsc::{UnboundedSender};
+use futures::channel::mpsc::{UnboundedSender, SendError};
 
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::{central::Central};
 use bytes::{BytesMut, BufMut, Bytes};
-use crate::hive::Sender;
+use crate::hive::{Sender, ACK, HI, HELLO};
+use std::time::{Duration, SystemTime};
+use async_std::sync::{Arc, RwLock};
+
+use std::fmt::{Debug};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::Relaxed;
+
+const ACH_DURATION:u64 = 30;
 
 
 #[cfg(not(feature = "bluetooth"))]
@@ -24,8 +32,6 @@ pub struct Peripheral {}
 #[derive(Debug)]
 pub struct Central {}
 
-// #[cfg(not(feature = "bluetooth"))]
-// impl Central{pub async fn send(&self, msg:&str){}}
 
 #[derive(Debug)]
 pub enum SocketEvent {
@@ -34,7 +40,7 @@ pub enum SocketEvent {
         stream: Option<TcpStream>,
         peripheral: Option<Sender<Bytes>>,
         central: Option<Central>,
-        address: Option<String>,
+        address: String,
     },
     Message {
         from: String,
@@ -50,11 +56,14 @@ pub struct Peer {
     pub name: String,
     pub stream: Option<TcpStream>,
     pub update_peers: bool,
-    peripheral: Option<Sender<Bytes>>,
+    pub peripheral: Option<Sender<Bytes>>,
     central: Option<Central>,
-    address: Option<String>,
+    pub address: String,
+    last_ack_sent: SystemTime,
+    last_ack_received: RwLock<SystemTime>,
+    ack_check: Arc<AtomicBool>,
+    event_sender: UnboundedSender<SocketEvent>,
 }
-
 
 
 fn as_u32_be(array: &[u8; 4]) -> u32 {
@@ -65,14 +74,39 @@ fn as_u32_be(array: &[u8; 4]) -> u32 {
 }
 
 impl Peer {
+    pub fn toString(&self)->String {
+        return format!("{:?},{:?}", self.name, self.address)
+    }
+    pub async fn ack(&mut self){
+        // send ack if it's been over 60 seconds
+        let since_last_ack = std::time::SystemTime::now().duration_since(self.last_ack_sent).unwrap();
+        debug!("since last ack: {:?}",since_last_ack);
+        if since_last_ack > Duration::from_secs(ACH_DURATION) {
+            debug!("SEND ACK");
+            self.send(ACK).await;
+            self.last_ack_sent = std::time::SystemTime::now();
+        }
+        // we just received a message, it's as good as receiving an ack
+        *self.last_ack_received.write().await = std::time::SystemTime::now();
+    }
+    pub async fn ack_ack(&mut self){
+        debug!("<<<<<<<  RECEIVED AN ACK from {:?}", self.name);
+        // let bool = *self.ack_check.load(Relaxed);
+        if self.ack_check.load(Relaxed){//.read().await {
+            self.ack_check.store(false, Relaxed);//.await = false;
+        }
+
+        *self.last_ack_received.write().await = std::time::SystemTime::now();
+    }
     pub fn set_name(&mut self, name: &str) {
         self.name = String::from(name);
     }
     pub fn address(&self) -> String {
-        return match self.address.clone() {
-            Some(t) => t,
-            _ => String::from("")
-        };
+        // return match self.address.clone() {
+        //     Some(t) => t,
+        //     _ => String::from("")
+        // };
+        return self.address.clone()
     }
 
     pub fn new(name: String,
@@ -80,7 +114,8 @@ impl Peer {
                peripheral: Option<Sender<Bytes>>,
                central:Option<Central>,
                sender: UnboundedSender<SocketEvent>,
-               address: Option<String>) -> Peer {
+               address: String) -> Peer {
+
 
         return if stream.is_some() {
             let arc_str = stream.unwrap();
@@ -91,7 +126,11 @@ impl Peer {
                 update_peers: false,
                 peripheral,
                 central,
-                address: Some(addr),
+                address: addr,
+                last_ack_sent: std::time::SystemTime::now(),
+                last_ack_received: RwLock::new(std::time::SystemTime::now()),
+                ack_check: Arc::new(AtomicBool::new(false)),
+                event_sender: sender.clone()
             };
 
             // Start read loop
@@ -109,11 +148,64 @@ impl Peer {
                 peripheral,
                 central,
                 address,
+                last_ack_sent: std::time::SystemTime::now(),
+                last_ack_received: RwLock::new(std::time::SystemTime::now()),
+                ack_check: Arc::new(AtomicBool::new(false)),
+                event_sender: sender,
             }
         }
+
+    }
+    pub fn receive_hello(&self){
+        debug!("<<HELLO {:?}", self.toString());
+        self.ack_check.store(false, Relaxed);
+    }
+    // when  hi is received, we send a hello
+    pub async fn send_hello(&self){
+        debug!("<< SEND HELLO {:?}", self.toString());
+        self.send(HELLO).await;
+    }
+    pub async fn wave(&self){
+        let name_clone = self.toString().clone();
+        let mut perf_clone = self.peripheral.as_ref().unwrap().clone();
+        let ack_check_clone = self.ack_check.clone();
+        let mut sender_clone = self.event_sender.clone();
+        let adr_clone = self.address.clone();
+        async_std::task::spawn(async move{
+            'wave_loop:loop{
+                debug!("<<Hi {:?}", name_clone);
+
+                task::sleep(Duration::from_secs(5)).await;
+                match perf_clone.send(Bytes::from(HI)).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        debug!("<< Error sending:: {:?}",e);
+                        break 'wave_loop;
+                    }
+                }
+                ack_check_clone.store(true,Relaxed);
+                task::sleep(Duration::from_secs(5)).await; // sleep 5 seconds for reply
+                if ack_check_clone.load(Relaxed) {
+                    // No hellp
+                    debug!("<<<<<<<<<<< KILL THIS PEAR IS DEAD:: {:?}",name_clone);
+                    // TODO fix this, I can' close the peripheral or all future peripherals are dead.
+                    // I need to somehow map the notify_subscribe channel from the peripheral, and close that
+                    // match per_clone.clone() {
+                    //     None => {}
+                    //     Some(ss) => {
+                    //         debug!("<< Closing peer");
+                    //         ss.close_channel()
+                    //     }
+                    // }
+                    sender_clone.send(SocketEvent::Hangup {from:adr_clone.clone()}).await.expect("failed to send hangup");
+                }
+
+            }
+        });
+
     }
     pub async fn send(& self, msg: &str) {
-        debug!("SEND starts here <<<< {:?}", msg);
+        debug!("SEND starts here {:?}", msg);
         if self.stream.is_some(){
             let s = self.stream.as_ref().unwrap();
             let stream = &s.clone();
@@ -123,23 +215,49 @@ impl Peer {
         } else if self.central.is_some() {
             #[cfg(feature = "bluetooth")]
                 {
-                    debug!("SEND to bt");
+                    debug!("SEND to bt {:?} from {:?}", msg, self.name);
                     let mut buff = BytesMut::new();
                     buff.put_slice(msg.as_bytes());
                     let sender = self.central.as_ref().unwrap();
                     sender.send(buff).await;
                 }
-            // self.central.as_ref().as_mut().expect("failed to get central").send(msg);
         }else if self.peripheral.is_some(){
+            debug!("Send via bt peripheral");
             let mut buff = BytesMut::new();
             buff.put_slice(msg.as_bytes());
             let b = buff.freeze();
-            // let buff_clone = buff.clone();
             self.peripheral.as_ref().unwrap()
                 .send(b.clone()).await.expect("failed to send something somewhere");
+            debug!("sent...");
         } else {
             unimplemented!("cant send: {:?}" ,msg);
         }
+        // listen for ack
+        // let lar = *self.last_ack_received.read().await;
+        // let since_last_ack = std::time::SystemTime::now().duration_since(lar).unwrap();
+        // debug!("<< since last ack received: {:?}",since_last_ack);
+        // if since_last_ack > Duration::from_secs(ACH_DURATION+2) {
+        //     debug!("<< LISTEN FOR ACK");
+        //     // let waiting = *self.ack_check.read().await
+        //     if !*self.ack_check.read().await {
+        //         *self.ack_check.write().await = true;
+        //
+        //         let ack_check_clone = self.ack_check.clone();
+        //         let name_clone = self.name.clone();
+        //         task::spawn( async move {
+        //             // let done = cvar.wait(waiting).unwrap();
+        //             while *ack_check_clone.read().await {
+        //                 sleep(Duration::from_secs(1));
+        //                 debug!("<<<<< ...... waiting for ack from {:?}", name_clone);
+        //             }
+        //             debug!("<<<< DONE WAITING");
+        //         });
+        //     }
+        //
+        //     let mut lar = self.last_ack_received.write().await;//.//.//lock().await;
+        //     *lar = std::time::SystemTime::now();
+        // }
+
 
     }
 
@@ -164,7 +282,10 @@ impl Peer {
  properties: |p|=(properties)
  */
 
+
 async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream) {
+
+
     let mut reader = BufReader::new(&*stream);
     let from = match stream.peer_addr() {
         Ok(addr) => addr.to_string(),
@@ -181,7 +302,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream) {
             Ok(read) => {
                 if read == 0 {
                     // end connection, something bad happened, or the client just disconnected.
-                    println!("Read zero bytes");
+                    debug!("Read zero bytes");
                     sender.send(SocketEvent::Hangup { from }).await.expect("Failed to send Hangup");
                     is_running = false;
                 } else {
@@ -191,16 +312,13 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream) {
                     match red {
                         Ok(_t) => {
                             let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
+                            debug!("Read message: {:?}", &msg);
                             let se = SocketEvent::Message {
                                 from,
                                 msg,
                             };
                             if !sender.is_closed() {
                                 sender.send(se).await.expect("Failed to send message");
-                                // process message to hive, then send ack
-                                // let stream = stream.clone();
-                                // println!("<< SEND ACK");
-                                // Peer::send_on_stream(stream, ACK).await.expect("failed to send Ack");
                             }
                         }
                         Err(e) => {

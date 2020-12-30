@@ -42,6 +42,8 @@ use crate::hive::Sender;
 use crate::peer::SocketEvent;
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use futures::executor::block_on;
 
 
 const UUID_REGEX: &str = r"([0-9a-f]{8})-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}";
@@ -57,20 +59,30 @@ pub struct Central {
     desc_sender: Option<UnboundedSender<BytesMut>>,
     pub connected: Arc<AtomicBool>,
     pub found_device: bool,
+    char_object_path: Arc<Mutex<String>>,
+    peer_address: Arc<Mutex<String>>
 }
 
 impl Central {
     pub fn new(name: &str, sender: Sender<SocketEvent>) -> Central {
-        Central::listen_for_events();
-        return Central {
+        let central = Central {
             connect_to_name: String::from(name),
             sender,
             desc_sender: None,
             connected: Arc::new(AtomicBool::new(false)),
             found_device: false,
+            char_object_path : Arc::from(Mutex::new(String::from(""))),
+            peer_address : Arc::from(Mutex::new(String::from(""))),
         };
+        central.listen_for_events();
+        return central;
     }
-    pub fn listen_for_events(){
+
+
+    pub fn listen_for_events(&self){
+        let char_path_clone = self.char_object_path.clone();
+        let peer_address_clone = self.peer_address.clone();
+        let mut sender_clone = self.sender.clone();
         async_std::task::spawn(async move{
             debug!("<<<<< LOPING OVER RECEIVER");
             loop {
@@ -80,7 +92,19 @@ impl Central {
                         match event {
                             BluetoothEvent::Value { value, object_path } => {
                                 let str_val = String::from_utf8(value.to_vec());
+
                                 info!("<<<< {:?} VALUE: << {:?}", object_path, str_val);
+                                let chr = &*char_path_clone.lock().unwrap().clone();
+                                if object_path == chr {
+                                    let str = &*peer_address_clone.lock().unwrap();
+                                    let se = SocketEvent::Message {
+                                        from: str.clone(),
+                                        msg: str_val.unwrap(),
+                                    };
+                                    block_on(sender_clone.send(se)).unwrap();
+                                    // sender_clone.send(se).await.expect("failed to send message");
+                                }
+
                             }
                             BluetoothEvent::Connected{object_path, connected} => {
 
@@ -257,9 +281,11 @@ impl Central {
                                     let sender_clone = self.sender.clone();
                                     let sender_clone2 = tx.clone();
                                     let cc = c.get_id();
+                                    *self.char_object_path.lock().unwrap() = cc.clone();
                                     async_std::task::spawn(async move{
                                         let session: BluetoothSession = BluetoothSession::create_session(None).unwrap();
                                         let c = Characteristic::new(&session, cc);
+
                                         c.start_notify().expect("failed to start notify");
                                         while !sender_clone.is_closed(){
                                             std::thread::sleep(Duration::from_secs(1));
@@ -273,17 +299,17 @@ impl Central {
                                     let conn_message = HiveMessage::CONNECTED;
                                     let mut bytes = BytesMut::new();//::from(conn_message);
                                     bytes.put_u16(conn_message);
+                                    bytes.put_slice(format!("{},", adapter.get_name()?).as_bytes());
                                     bytes.put_slice(adapter.get_address()?.as_bytes());
-                                    bytes.put_slice(format!(",{:?}", adapter.get_name()?).as_bytes());
                                     c.write_value(bytes.to_vec(), None)?;
-                                    // self.send(bytes).await;
+                                    *self.peer_address.lock().unwrap() = device.get_address()?.clone();
 
                                     let se = SocketEvent::NewPeer {
                                         name: device.get_name().unwrap(),
                                         stream: None,
                                         peripheral: None,
                                         central: Some(self.clone()),
-                                        address: Some(device.get_address()?),
+                                        address: device.get_address()?,
                                     };
                                     let mut sender = &self.sender;
                                     sender.send(se).await.expect("failed to send peer");

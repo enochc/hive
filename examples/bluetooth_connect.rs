@@ -33,17 +33,18 @@ fn main() {
 
     let handler = server_hive.get_handler();
 
-    task::spawn(async move {
-        server_hive.run().await;
-    });
-    sleep(Duration::from_secs(2));
-
-
+    task::block_on(async{server_hive.run().await});
     // task::spawn(async move {
-    //     handler.send_property_value("pt", Some(&666.into())).await;
+    //     server_hive.run().await;
     // });
-    println!("sleeping...");
-    sleep(Duration::from_secs(10));
+    // sleep(Duration::from_secs(2));
+    //
+    //
+    // // task::spawn(async move {
+    // //     handler.send_property_value("pt", Some(&666.into())).await;
+    // // });
+    // println!("sleeping...");
+    // sleep(Duration::from_secs(10));
 
 
 

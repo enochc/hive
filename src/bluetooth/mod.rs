@@ -18,5 +18,5 @@ pub struct HiveMessage {
 
 impl HiveMessage {
     pub const CONNECTED:u16 = 0x9876 as u16;
-
+    // pub const CONNECTED = 0x9876;
 }
