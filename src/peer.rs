@@ -8,20 +8,25 @@ use async_std::{
 };
 
 use futures::{SinkExt};
-use futures::channel::mpsc::{UnboundedSender, SendError};
+use futures::channel::mpsc::{UnboundedSender};
 
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::{central::Central};
+#[cfg(feature = "bluetooth")]
+use bluster::gatt::event::{Response};
+
 use bytes::{BytesMut, BufMut, Bytes};
-use crate::hive::{Sender, ACK, HI, HELLO};
+use crate::hive::{Sender, HI, HELLO};
 use std::time::{Duration, SystemTime};
 use async_std::sync::{Arc, RwLock};
 
 use std::fmt::{Debug};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
+use futures::executor::block_on;
 
-const ACH_DURATION:u64 = 30;
+
+const ACK_DURATION:u64 = 30;
 
 
 #[cfg(not(feature = "bluetooth"))]
@@ -46,6 +51,9 @@ pub enum SocketEvent {
         from: String,
         msg: String,
     },
+    SendBtProps {
+        sender: futures::channel::oneshot::Sender<Response>,
+    },
     Hangup {
         from: String,
     },
@@ -53,14 +61,13 @@ pub enum SocketEvent {
 
 #[derive(Debug)]
 pub struct Peer {
-    pub name: String,
+    name: Arc<RwLock<String>>,
     pub stream: Option<TcpStream>,
     pub update_peers: bool,
     pub peripheral: Option<Sender<Bytes>>,
     central: Option<Central>,
     pub address: String,
-    last_ack_sent: SystemTime,
-    last_ack_received: RwLock<SystemTime>,
+    last_received: Arc<RwLock<SystemTime>>,
     ack_check: Arc<AtomicBool>,
     event_sender: UnboundedSender<SocketEvent>,
 }
@@ -74,38 +81,19 @@ fn as_u32_be(array: &[u8; 4]) -> u32 {
 }
 
 impl Peer {
-    pub fn toString(&self)->String {
-        return format!("{:?},{:?}", self.name, self.address)
+    pub fn is_bt_client(&self) -> bool{
+        return self.peripheral.is_some();
     }
-    pub async fn ack(&mut self){
-        // send ack if it's been over 60 seconds
-        let since_last_ack = std::time::SystemTime::now().duration_since(self.last_ack_sent).unwrap();
-        debug!("since last ack: {:?}",since_last_ack);
-        if since_last_ack > Duration::from_secs(ACH_DURATION) {
-            debug!("SEND ACK");
-            self.send(ACK).await;
-            self.last_ack_sent = std::time::SystemTime::now();
-        }
-        // we just received a message, it's as good as receiving an ack
-        *self.last_ack_received.write().await = std::time::SystemTime::now();
+    pub fn to_string(&self) ->String {
+        return format!("{:?},{:?}", self.get_name(), self.address)
     }
-    pub async fn ack_ack(&mut self){
-        debug!("<<<<<<<  RECEIVED AN ACK from {:?}", self.name);
-        // let bool = *self.ack_check.load(Relaxed);
-        if self.ack_check.load(Relaxed){//.read().await {
-            self.ack_check.store(false, Relaxed);//.await = false;
-        }
 
-        *self.last_ack_received.write().await = std::time::SystemTime::now();
-    }
     pub fn set_name(&mut self, name: &str) {
-        self.name = String::from(name);
+        block_on(async {
+                     *self.name.write().await = String::from(name);
+                 });
     }
     pub fn address(&self) -> String {
-        // return match self.address.clone() {
-        //     Some(t) => t,
-        //     _ => String::from("")
-        // };
         return self.address.clone()
     }
 
@@ -121,14 +109,15 @@ impl Peer {
             let arc_str = stream.unwrap();
             let addr = arc_str.peer_addr().unwrap().to_string();
             let peer = Peer {
-                name,
+                name: Arc::new(RwLock::new(name)),
                 stream: Some(arc_str.clone()),
                 update_peers: false,
                 peripheral,
                 central,
                 address: addr,
-                last_ack_sent: std::time::SystemTime::now(),
-                last_ack_received: RwLock::new(std::time::SystemTime::now()),
+                // last_ack_sent: std::time::SystemTime::now(),
+                // last_ack_received: RwLock::new(std::time::SystemTime::now()),
+                last_received: Arc::new(RwLock::new(std::time::SystemTime::now())),
                 ack_check: Arc::new(AtomicBool::new(false)),
                 event_sender: sender.clone()
             };
@@ -142,65 +131,75 @@ impl Peer {
             peer
         } else {
             Peer {
-                name,
+                name: Arc::new(RwLock::new(name)),
                 stream,
                 update_peers: false,
                 peripheral,
                 central,
                 address,
-                last_ack_sent: std::time::SystemTime::now(),
-                last_ack_received: RwLock::new(std::time::SystemTime::now()),
+                last_received: Arc::new(RwLock::new(std::time::SystemTime::now())),
                 ack_check: Arc::new(AtomicBool::new(false)),
                 event_sender: sender,
             }
         }
 
     }
+    pub fn get_name(&self)->String{
+        let name = &*block_on(self.name.read());
+        return String::from(name);
+    }
     pub fn receive_hello(&self){
-        debug!("<<HELLO {:?}", self.toString());
+        debug!("<< RECEIVED HELLO {:?}", self.to_string());
         self.ack_check.store(false, Relaxed);
+    }
+    pub async fn ack(&self){
+        debug!("<<<< ACK {:?}",self.to_string());
+        // let mut ff = *self.last_received.write().await;
+        *self.last_received.write().await = SystemTime::now();
     }
     // when  hi is received, we send a hello
     pub async fn send_hello(&self){
-        debug!("<< SEND HELLO {:?}", self.toString());
+        debug!("<< SEND HELLO {:?}", self.to_string());
         self.send(HELLO).await;
     }
+
     pub async fn wave(&self){
-        let name_clone = self.toString().clone();
+        let name_clone = self.name.clone();
+        let addr_clone = self.address.clone();
         let mut perf_clone = self.peripheral.as_ref().unwrap().clone();
         let ack_check_clone = self.ack_check.clone();
         let mut sender_clone = self.event_sender.clone();
         let adr_clone = self.address.clone();
+        let last_received_clone = self.last_received.clone();
         async_std::task::spawn(async move{
             'wave_loop:loop{
-                debug!("<<Hi {:?}", name_clone);
-
-                task::sleep(Duration::from_secs(5)).await;
-                match perf_clone.send(Bytes::from(HI)).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        debug!("<< Error sending:: {:?}",e);
+                debug!("<< << <<< << << << << send Hi {:?}, {}", name_clone.read().await, addr_clone);
+                task::sleep(Duration::from_secs(ACK_DURATION)).await;
+                let since_last_comm= SystemTime::now().duration_since(*last_received_clone.read().await);
+                debug!("<<<<<<< SINCE {:?}", since_last_comm);
+                if since_last_comm.unwrap() > Duration::from_secs(ACK_DURATION){
+                    let mut bytes = BytesMut::from(HI);
+                    bytes.put_slice(name_clone.read().await.as_bytes());
+                    
+                    match perf_clone.send(bytes.into()).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            debug!("<<<<<< Error sending:: {:?}",e);
+                            break 'wave_loop;
+                        }
+                    }
+                    ack_check_clone.store(true,Relaxed);
+                    task::sleep(Duration::from_secs(5)).await; // sleep 5 seconds for reply
+                    if ack_check_clone.load(Relaxed) {
+                        // No hello
+                        debug!("<<<<<<<<<<< KILL THIS PEAR IS DEAD:: {:?}",name_clone.read().await);
+                        sender_clone.send(SocketEvent::Hangup {from:adr_clone.clone()}).await.expect("failed to send hangup");
                         break 'wave_loop;
                     }
                 }
-                ack_check_clone.store(true,Relaxed);
-                task::sleep(Duration::from_secs(5)).await; // sleep 5 seconds for reply
-                if ack_check_clone.load(Relaxed) {
-                    // No hellp
-                    debug!("<<<<<<<<<<< KILL THIS PEAR IS DEAD:: {:?}",name_clone);
-                    // TODO fix this, I can' close the peripheral or all future peripherals are dead.
-                    // I need to somehow map the notify_subscribe channel from the peripheral, and close that
-                    // match per_clone.clone() {
-                    //     None => {}
-                    //     Some(ss) => {
-                    //         debug!("<< Closing peer");
-                    //         ss.close_channel()
-                    //     }
-                    // }
-                    sender_clone.send(SocketEvent::Hangup {from:adr_clone.clone()}).await.expect("failed to send hangup");
-                }
 
             }
+            debug!("<< Done Waving <<< {:?}", name_clone.read().await)
         });
 
     }
@@ -209,7 +208,7 @@ impl Peer {
         if self.stream.is_some(){
             let s = self.stream.as_ref().unwrap();
             let stream = &s.clone();
-            debug!("Send to peer {}: {}", self.name, msg);
+            debug!("Send to peer {}: {}", self.name.read().await, msg);
             Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
 
         } else if self.central.is_some() {

@@ -50,8 +50,8 @@ pub(crate) const PEER_MESSAGE: &str = "|s|";
 pub(crate) const HEADER: &str = "|H|";
 pub(crate) const PEER_MESSAGE_DIV: &str = "|=|";
 pub(crate) const REQUEST_PEERS: &str = "<p|";
-pub(crate) const ACK: &str = "<<|";
 pub(crate) const HI: &str = "hi|";
+pub(crate) const HANGUP: &str = "...";
 pub(crate) const HELLO: &str = "hey";
 
 #[cfg(feature = "bluetooth")]
@@ -189,6 +189,7 @@ impl Hive {
     }
 
     fn set_property(&mut self, property: Property) {
+        debug!("SET PROPERTY:: {:?}={:?}",property.get_name(), property.value);
         let name = property.get_name().clone();
         if self.has_property(name) {
             /*
@@ -371,13 +372,13 @@ impl Hive {
         if self.connected.load(Ordering::Relaxed) {
 
             //This is where we sit for a long time and just receive events
-            self.receive_events(self.is_sever()).await;
+            self.receive_events().await;
         }
         debug!("<<<<<<  Hive DONE");
     }
 
 
-    async fn receive_events(&mut self, is_server: bool) {
+    async fn receive_events(&mut self) {
         while !self.sender.is_closed() {
             match self.receiver.next().await {
                 Some(SocketEvent::NewPeer {
@@ -397,19 +398,23 @@ impl Hive {
                             self.sender.clone(),
                             address, );
 
-                        debug!("<<<< NEW PEER: {:?}", p.name);
-                        if p.peripheral.is_some() {
-                            p.wave().await;
-                        }
+                        debug!("<<<< NEW PEER: {:?}", p.get_name());
+                        // if were a bluetooth peripheral, then we want to keep track of all our
+                        // connected remote peers to verify that they're still there
+                        // if p.peripheral.is_some() {
+                        //     p.wave().await;
+                        // }
 
-                        if is_server {
+                        // is_server isn't quite right, bluetooth does an independent properties request
+                        // we auto send all the servers via TCP because it prevents un additional request
+                        if self.listen_port.is_some() {
                             self.send_properties(&p).await;
                         }
                         // Send the header with my "peer name"
                         self.send_header(&p).await;
                         self.peers.push(p);
                     } else {
-                        debug!("<<< Existing peer reconnected: {:?}",has_peer.unwrap().toString())
+                        debug!("<<< Existing peer reconnected: {:?}",has_peer.unwrap().to_string())
                     }
 
                     /*
@@ -421,16 +426,25 @@ impl Hive {
                      */
                 }
                 Some(SocketEvent::Message { from, msg }) => {
+                    debug!("<<<<<<<<<<<<<<<<<<, GOT MESSAGE {}, {}", from, msg);
                     self.got_message(from.as_str(), msg).await;
                 }
                 Some(SocketEvent::Hangup { from }) => {
+                    debug!("<<<<<<<<<<<<<<< check to remove pier {:?}", from);
                     for x in 0..self.peers.len() {
                         if self.peers[x].address() == from {
+                            debug!("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< found to remove");
                             self.peers.remove(x);
                             self.notify_peers_change().await;
                             break;
                         }
                     }
+                }
+                Some(SocketEvent::SendBtProps { sender }) => {
+                    debug!("<<<........... HAHAHAHAHAHA {:?}", sender);
+                    let str = properties_to_sock_str(&self.properties);
+                    let resp = bluster::gatt::event::Response::Success(str.into());
+                    sender.send(resp).unwrap();
                 }
                 None => {
                     println!("Received Nothing...");
@@ -455,7 +469,8 @@ impl Hive {
             peers_string.push_str(",");
             let p = &self.peers[x];
             let adr = p.address();
-            let name = &p.name;
+            let name = p.get_name();
+            // let name =
             peers_string.push_str(&format!("{}|{}", name, adr))
         };
         return peers_string;
@@ -488,7 +503,7 @@ impl Hive {
 
     fn get_peer_by_name(&self, name: &str) -> Option<&Peer> {
         for peer in &self.peers {
-            if peer.name == String::from(name) {
+            if peer.get_name() == String::from(name) {
                 return Some(peer);
             }
         }
@@ -531,8 +546,19 @@ impl Hive {
          */
         match msg {
             Some(m) => {
+                // bluetooth clients dont receive independent updates,
+                // bluetooth really is a broadcast and only needs to go out once
+                let mut sent_bt_broadcast = false;
                 for p in &self.peers {
+                    debug!("<<<<<<<<<<<< broadcasting: {:?}, {:?}, {:?}",p.get_name(),p.is_bt_client(), sent_bt_broadcast);
                     if p.address() != except {
+                        if p.is_bt_client()  {
+                            if sent_bt_broadcast {
+                                // I'm a bluetooth client and the broadcast has already been sent next
+                                continue
+                            }
+                            sent_bt_broadcast = true;
+                        }
                         p.send(m.as_str()).await;
                     }
                 }
@@ -547,7 +573,7 @@ impl Hive {
             debug!("<<< Whats this? {}", msg);
         } else {
             let (msg_type, message) = msg.split_at(3);
-            let mut send_ack = false;
+
             match msg_type {
                 HELLO => {
                     debug!("<<< <<< HELLO from {:?}", from);
@@ -555,6 +581,7 @@ impl Hive {
                         None => {}
                         Some(p) => {p.receive_hello();}
                     }
+
                 }
                 HI => {
                     debug!("<<< HI FROM {:?}", from);
@@ -563,18 +590,17 @@ impl Hive {
                         Some(p) => {p.send_hello().await;}
                     }
                 }
-                ACK => {
-                    debug!("<<< GOT AN ACK FROM {:?}", from);
-                    match self.peers.iter_mut().find(| p|p.address() == from){
-                        None => {}
-                        Some(p) => {p.ack_ack().await}
-                    }
+                HANGUP => {
+                    debug!("<<<< hangup from {:?}", from);
+                    let pos = self.peers.iter().position(|p|p.address()==from).unwrap();
+                    self.peers.remove(pos);
+                    self.notify_peers_change().await;
+
                 }
                 PROPERTIES => {
                     match toml::from_str(message) {
                         Ok(v) => {
                             self.parse_properties(&v);
-                            send_ack = true;
                         },
                         Err(_) =>{
                             panic!("Failed to parse TOML: {:?}", message)
@@ -586,7 +612,6 @@ impl Hive {
                     let property = Property::from_table(p_toml.as_table().unwrap());
                     self.set_property(property.unwrap());
                     self.broadcast(Some(msg), from).await;
-                    send_ack = true;
                 }
                 DELETE => {
                     let p = self.properties.remove(&message.to_owned().clone());
@@ -596,7 +621,6 @@ impl Hive {
                 }
                 HEADER => {
                     self.set_headers_from_peer(msg.as_ref(), from).await;
-                    send_ack = true;
                 }
                 PEER_MESSAGE => {
                     let c = message.split(PEER_MESSAGE_DIV);
@@ -612,7 +636,6 @@ impl Hive {
                     if self.name.to_string() == pear_name.to_string() {
                         debug!("Message is for me: {:?}", vec[1]);
                         self.message_received.emit(String::from(vec[1])).await;
-                        send_ack = true;
                     } else {
                         self.send_to_peer(vec[1], pear_name).await;
                     }
@@ -629,11 +652,10 @@ impl Hive {
                 }
                 _ => debug!("<<<<<<<<<<<<  got unknown message {:?},{:?}", msg_type, msg)
             }
-            if send_ack {
-                match self.peers.iter_mut().find(| p|p.address() == from){
-                    None => {}
-                    Some(p) => {p.ack().await}
-                }
+            // do ACK for peer
+            match self.peers.iter_mut().find(| p|p.address() == from){
+                None => {}
+                Some(p) => {p.ack().await;}
             }
 
         }

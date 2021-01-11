@@ -4,6 +4,7 @@ use futures::future::join_all;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use async_std::sync::Mutex;
 use async_std::task::block_on;
+use log::{debug};
 
 
 #[derive(Default)]
@@ -28,7 +29,7 @@ impl<T> Signal<T>
         where T: Sync + Clone + Send + 'static,
     {
         let count = self.counter.load(Ordering::Relaxed);
-        println!("EMITTING:: {}", count);
+        debug!("EMITTING:: {}", count);
         let mut futures = vec![];
 
         for s in self.slots.lock().await.iter() {

@@ -25,7 +25,7 @@ use log::{debug, info};
 use regex::Regex;
 use uuid::Uuid;
 
-use crate::bluetooth::{HIVE_CHAR_ID, HIVE_UUID, SERVICE_ID, HIVE_DESC_ID, HiveMessage};
+use crate::bluetooth::{HIVE_CHAR_ID, HIVE_UUID, SERVICE_ID, HIVE_DESC_ID, HiveMessage, HIVE_PROPS_DESC_ID};
 #[cfg(not(target_os = "linux"))]
 use crate::bluetooth::blurz_cross::{BluetoothAdapter,
                                     BluetoothDevice,
@@ -49,6 +49,8 @@ use futures::executor::block_on;
 const UUID_REGEX: &str = r"([0-9a-f]{8})-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}";
 lazy_static! {
   static ref RE: Regex = Regex::new(UUID_REGEX).unwrap();
+  static ref HIVE_CHAR_UUID:String = Uuid::from_sdp_short_uuid(HIVE_CHAR_ID).to_string();
+  static ref HIVE_PROPS_DESC_UUID: Uuid = Uuid::from_sdp_short_uuid(HIVE_PROPS_DESC_ID);
 }
 
 
@@ -94,15 +96,20 @@ impl Central {
                                 let str_val = String::from_utf8(value.to_vec());
 
                                 info!("<<<< {:?} VALUE: << {:?}", object_path, str_val);
+                                info!("<<<< {:?} ", &char_path_clone.lock().unwrap());
                                 let chr = &*char_path_clone.lock().unwrap().clone();
-                                if object_path == chr {
+                                // descriptors start with the characteristics obeject path
+                                if object_path.starts_with(chr) {
                                     let str = &*peer_address_clone.lock().unwrap();
                                     let se = SocketEvent::Message {
                                         from: str.clone(),
                                         msg: str_val.unwrap(),
                                     };
+                                    info!("<<<<<< SENDING MESSAGE {:?}",se);
                                     block_on(sender_clone.send(se)).unwrap();
                                     // sender_clone.send(se).await.expect("failed to send message");
+                                } else {
+                                    info!("<<<<< not sending message!!!! ");
                                 }
 
                             }
@@ -127,6 +134,26 @@ impl Central {
         if self.desc_sender.is_some() {
             self.desc_sender.as_ref().unwrap().send(msg).await.expect("Failed to send message!");
         }
+    }
+
+    fn fetch_properties(&self, session:&BluetoothSession, descriptors:&Vec<String>)-> Result<(), Box<dyn std::error::Error>>{
+
+        debug!("<<<< fetch properties: {:?}",descriptors);
+        for descriptor in descriptors {
+            let desc = Descriptor::new(session, descriptor.clone());
+            if desc.get_uuid().unwrap() == HIVE_PROPS_DESC_UUID.to_string(){
+                debug!(".<< << << << << {:?}",desc);
+                let _val = match desc.read_value(None){
+                    Ok(_) => {
+                        // Do nothing, the response is captured in the listen_for_events loop
+                    }
+                    Err(e) => {debug!("<< << << << << FAILED: {:?}", e)}
+                };
+
+            }
+            //if desc.get_uuid().unwrap()
+        }
+        return Ok(())
     }
 
     pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -210,15 +237,8 @@ impl Central {
                         'connect_loop: loop {
                             counter += 1;
 
-                            // let mut set_device_id = mydevice_id.lock().unwrap();
-                            // *set_device_id = d.get_id();
                             let conn = d.connect(5000);
                             debug!("CONNECTED:: {:?}, {:?}", conn, d.is_connected());
-
-                            if d.is_connected()? {
-                                hive_device = Some(d);
-                                break 'connect_loop;
-                            }
 
                             match conn {
                                 Ok(_) => {
@@ -264,17 +284,19 @@ impl Central {
                     let characteristics = s.get_gatt_characteristics().expect("Failed get characteristics");
                     for characteristic in characteristics {
                         let c = Characteristic::new(&session, characteristic.clone());
-                        let hive_char_id = Uuid::from_sdp_short_uuid(HIVE_CHAR_ID);
-                        if hive_char_id == Uuid::from_str(&c.get_uuid()?)? {
+
+                        if *HIVE_CHAR_UUID == c.get_uuid()? {
                             debug!("<< Found Characteristic {:?}, {:?}, {:?}", c, c.get_value(), c.get_uuid());
 
                             let descriptors = c.get_gatt_descriptors().expect("Failed to get descriptors");
-                            for descriptor in descriptors {
+
+                            for descriptor in &descriptors {
                                 let d = Descriptor::new(&session, descriptor.clone());
                                 debug!("<< d: {:?}", d);
                                 let (tx, mut rx) = mpsc::unbounded();
                                 self.desc_sender = Some(tx.clone());
                                 let hive_desc_id = Uuid::from_sdp_short_uuid(HIVE_DESC_ID);
+
                                 if d.get_uuid().unwrap() == hive_desc_id.to_string(){
                                     debug!("<<<< MY DESCRIPTOR");
 
@@ -313,8 +335,8 @@ impl Central {
                                     };
                                     let mut sender = &self.sender;
                                     sender.send(se).await.expect("failed to send peer");
-
                                     self.connected.store(true, Ordering::Relaxed);
+                                    self.fetch_properties(&session, &descriptors)?;
 
                                     debug!("<< Looping over send");
                                     // loop here forever to send messages via descriptor updates
@@ -347,6 +369,8 @@ impl Central {
         }
         Ok(())
     }
+
+
 }
 
 pub fn scan_for_devices(bt_session: &BluetoothSession,

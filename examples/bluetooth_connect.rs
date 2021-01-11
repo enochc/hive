@@ -28,7 +28,7 @@ fn main() {
     let mut p = server_hive.get_mut_property("pt").unwrap();
 
     p.on_changed.connect(move |value|{
-        println!("<<<< <<<< <<<< <<<< pt: {:?}", value);
+        debug!("<<<< <<<< <<<< <<<< pt: {:?}", value);
     });
 
     let handler = server_hive.get_handler();
