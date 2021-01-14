@@ -20,7 +20,8 @@ fn main() {
     println!("<< println");
     debug!("<< debug");
     let props_str = r#"
-    bt_connect = "Hive_Peripheral"
+    #bt_connect = "Hive_Peripheral"
+    connect = "192.168.1.13:3000"
     name = "bt_client"
     "#;
     let mut server_hive = Hive::new_from_str( props_str);

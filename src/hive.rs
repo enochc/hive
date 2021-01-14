@@ -337,11 +337,15 @@ impl Hive {
         }
 
         // I'm a server
-        // if self.listen_port.is_some() || self.bt_listen.is_some() {
         if self.is_sever() {
             if self.listen_port.is_some() {
-                let port = self.listen_port.as_ref().unwrap().to_string().clone();
-                info!("{:?} Listening for connections on {:?}", self.name, self.listen_port);
+                let mut port = self.listen_port.as_ref().unwrap().to_string();
+                // port is 000.000.000.000:0000
+                if port.len() <=4 { //only port
+                    let addr = local_ipaddress::get().unwrap();
+                    port = format!("{}:{}",addr, port);
+                }
+                info!("{:?} Listening for connections on {:?}", self.name, port);
                 let send_chan = self.sender.clone();
                 // listen for connections loop
                 let p = port.clone();

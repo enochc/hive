@@ -180,7 +180,7 @@ impl Peer {
                 if since_last_comm.unwrap() > Duration::from_secs(ACK_DURATION){
                     let mut bytes = BytesMut::from(HI);
                     bytes.put_slice(name_clone.read().await.as_bytes());
-                    
+
                     match perf_clone.send(bytes.into()).await {
                         Ok(_) => {}
                         Err(e) => {

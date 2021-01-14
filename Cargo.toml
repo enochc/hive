@@ -19,15 +19,19 @@ log = "0.4.11"
 async-std = "1.8"
 simple-signal = "1.1.1"
 bytes = "0.6"
+local_ipaddress = "0.1"
 #crossbeam = "0.8.0"
 bluster =     {git="https://github.com/dfrankland/bluster", branch="master", optional=true}
 uuid =        {version="0.8.1", optional=true}
 tokio =       {version="0.2", optional=true}
 lazy_static = {version="1.4.0", optional=true}
-regex =       {version="1.4.2", optional=true}
+# regix version limited by serd_hjson / config
+regex =       {version="1.0", optional=true}
 
+
+#blurz = {version="0.4.0", optional=true}
 [target.'cfg(target_os = "linux")'.dependencies]
-blurz = {version="0.4.0", optional=true}
+blurz = {path="../blurz", optional=true}
 
 #libusb = "0.3"
 #usbd-serial = "0.1"

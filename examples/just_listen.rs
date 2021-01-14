@@ -20,6 +20,7 @@ fn main() {
     debug!("<< debug");
     let props_str = r#"
     #listen = "192.168.5.45:3000"
+    listen="3000"
     name= "listener"
     bt_listen = "Hive_Peripheral"
     [Properties]
