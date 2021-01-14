@@ -29,9 +29,9 @@ lazy_static = {version="1.4.0", optional=true}
 regex =       {version="1.0", optional=true}
 
 
-#blurz = {version="0.4.0", optional=true}
 [target.'cfg(target_os = "linux")'.dependencies]
-blurz = {path="../blurz", optional=true}
+blurz = {version="0.4.0", optional=true}
+#blurz = {path="../blurz", optional=true}
 
 #libusb = "0.3"
 #usbd-serial = "0.1"
