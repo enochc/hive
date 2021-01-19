@@ -115,8 +115,6 @@ impl Peer {
                 peripheral,
                 central,
                 address: addr,
-                // last_ack_sent: std::time::SystemTime::now(),
-                // last_ack_received: RwLock::new(std::time::SystemTime::now()),
                 last_received: Arc::new(RwLock::new(std::time::SystemTime::now())),
                 ack_check: Arc::new(AtomicBool::new(false)),
                 event_sender: sender.clone()
