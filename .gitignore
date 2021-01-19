@@ -3,3 +3,5 @@ target
 .idea
 Cargo.lock
 .DS_Store
+libraries/lib
+libraries/usr
