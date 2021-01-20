@@ -1,37 +1,38 @@
 
-use log::{debug};
+use log::{debug, info};
 use async_std::{
     io::BufReader,
     net::TcpStream,
     prelude::*,
     task,
 };
-
-use futures::{SinkExt};
+// use futures::{SinkExt, AsyncReadExt};
+use futures::{SinkExt, AsyncBufReadExt};
 use futures::channel::mpsc::{UnboundedSender};
+use futures::executor::block_on;
 
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::{central::Central};
 #[cfg(feature = "bluetooth")]
 use bluster::gatt::event::{Response};
 
-use bytes::{BytesMut, BufMut, Bytes};
-use crate::hive::{Sender, HI, HELLO};
+use bytes::{BytesMut, BufMut, Bytes, Buf};
+use crate::hive::{Sender, HI, HELLO, HIVE_PROTOCOL, HEADER_NAME};
 use std::time::{Duration, SystemTime};
 use async_std::sync::{Arc, RwLock};
 
 use std::fmt::{Debug};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
-use futures::executor::block_on;
+use futures::io::{Error, ReadExact};
+use std::borrow::BorrowMut;
 
 
 const ACK_DURATION:u64 = 30;
 
-
 #[cfg(not(feature = "bluetooth"))]
 #[derive(Debug)]
-pub struct Peripheral {}
+pub struct Response {}
 
 #[cfg(not(feature = "bluetooth"))]
 #[derive(Debug)]
@@ -73,6 +74,7 @@ pub struct Peer {
 }
 
 
+
 fn as_u32_be(array: &[u8; 4]) -> u32 {
     ((array[0] as u32) << 24) +
         ((array[1] as u32) << 16) +
@@ -88,25 +90,28 @@ impl Peer {
         return format!("{:?},{:?}", self.get_name(), self.address)
     }
 
-    pub fn set_name(&mut self, name: &str) {
-        block_on(async {
-                     *self.name.write().await = String::from(name);
-                 });
+    pub async fn set_name(& self, name: &str) {
+
+        info!("<<<< set name = {:?}", name);
+        *self.name.write().await = String::from(name);
+
     }
     pub fn address(&self) -> String {
         return self.address.clone()
     }
 
     pub fn new(name: String,
-               stream: Option<TcpStream>,
+               mut stream: Option<TcpStream>,
                peripheral: Option<Sender<Bytes>>,
                central:Option<Central>,
                sender: UnboundedSender<SocketEvent>,
-               address: String) -> Peer {
+               address: String,
+               is_tcp_server:bool) -> Peer {
 
+        info!("<<<< WTF {}", name);
 
         return if stream.is_some() {
-            let arc_str = stream.unwrap();
+            let arc_str = stream.as_ref().unwrap().clone();
             let addr = arc_str.peer_addr().unwrap().to_string();
             let peer = Peer {
                 name: Arc::new(RwLock::new(name)),
@@ -122,6 +127,21 @@ impl Peer {
 
             // Start read loop
             let send_clone = sender.clone();
+
+
+            // todo some sort of handshake, is this we web socket? or a hive socket, or something else entirely
+            if is_tcp_server {
+                match stream.as_mut() {
+                    Some(mut s) => {
+                        block_on(async {
+
+                            &peer.handshake(s).await.expect("Shake failed");
+                        });
+                    },
+                    None => {}
+                };
+            };
+
 
             task::spawn(async move {
                 read_loop(send_clone, &arc_str).await;
@@ -142,6 +162,47 @@ impl Peer {
         }
 
     }
+
+    async fn handshake(& self, stream:&mut TcpStream) -> Result<(), std::io::Error>{
+        // let mut strea_clone = stream.clone();
+        let mut reader = BufReader::new(stream.clone());
+
+        let mut str = String::new();
+
+        let thing = AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
+
+        info!("<<< handshake:: {:?}", str);
+
+        if str.starts_with(HIVE_PROTOCOL) {
+            loop {
+
+                let mut bm = BytesMut::new();
+                str = "".to_string();
+                AsyncBufReadExt::read_line(&mut reader, &mut str).await?; //.expect("failed to read line");
+                bm.put_slice(str.as_bytes());
+                let my8 = bm.get_u8();
+                match my8 {
+                    HEADER_NAME =>{
+                        // trim off the newline char
+                        bm.truncate(bm.len()-1);
+                        let name = String::from_utf8(bm.to_vec()).unwrap();
+                        self.set_name(&name).await;
+                        // bm = BytesMut::from("header reply");
+                        // stream.write(bm.bytes()).await.expect("failed to send handshake response");
+                        break;
+
+                    },
+                    _ => {
+                        info!("<<<<< something else");
+                        break;
+                    }
+                }
+            }
+        };
+        Ok(())
+
+    }
+
     pub fn get_name(&self)->String{
         let name = &*block_on(self.name.read());
         return String::from(name);
@@ -292,7 +353,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream) {
     while is_running {
         let mut sender = sender.clone();
         let mut size_buff = [0; 4];
-
+        // let r = AsyncReadExt::read(&mut reader, &mut size_buff).await;
         let r = reader.read(&mut size_buff).await;
         let from = String::from(&from);
         match r {

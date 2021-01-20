@@ -42,11 +42,11 @@ fn main() {
     let mut server_hive = Hive::new_from_str(props_str);
     let prop = server_hive.get_mut_property("thermostatName").unwrap();
     server_hive.get_mut_property("thermostatName", ).unwrap().on_changed.connect(move |value| {
-        println!("++++ 222222222 SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
+        info!("++++ 222222222 SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
         count1.fetch_add(1, Ordering::SeqCst);
     });
     server_hive.message_received.connect(move |message|{
-        println!("++++ ----------  MESSAGE {}", message);
+        info!("++++ ----------  MESSAGE {}", message);
         count4.fetch_add(1, Ordering::SeqCst);
     });
 
@@ -60,16 +60,16 @@ fn main() {
 
     let mut client_hive = Hive::new_from_str("connect = \"127.0.0.1:3000\"\nname=\"client1\"");
     client_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(move |value| {
-        println!("++++ 1111111 CLIENT THERMOSTAT NAME CHANGED: {:?}", value);
+        info!("++++ 1111111 CLIENT THERMOSTAT NAME CHANGED: {:?}", value);
         count3.fetch_add(1, Ordering::SeqCst);
     });
     client_hive.message_received.connect(move |message| {
-        println!("++++ ------------- MESSAGE {}", message);
+        info!("++++ ------------- MESSAGE {}", message);
         count2.fetch_add(1, Ordering::SeqCst);
     });
 
     client_hive.get_mut_property("thingvalue").unwrap().on_changed.connect(move |value|{
-        println!(" ++++ 1111111 CLIENT thing value::::::::::::::::::::: {:?}", value);
+        info!(" ++++ 1111111 CLIENT thing value::::::::::::::::::::: {:?}", value);
         count5.fetch_add(1, Ordering::SeqCst);
     });
 
@@ -90,6 +90,7 @@ fn main() {
         task::sleep(Duration::from_millis(500)).await;
         let sleep_dur = Duration::from_millis(50);
         if server_connected.load(Ordering::Relaxed) {  //+2 on prop initialization
+            // task::sleep(Duration::from_secs(1)).await;
             server_hand.send_to_peer("client1", "hey you").await; //+ 1
             task::sleep(sleep_dur).await;
             clone_hand.send_to_peer("Server", "hey mr man").await; // + 1

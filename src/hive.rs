@@ -10,8 +10,12 @@ use async_std::{
 };
 use futures::{SinkExt, StreamExt};
 use futures::channel::mpsc;
+use futures::AsyncWriteExt;
+
 use log::{debug, error, info};
 use toml;
+
+
 
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::central::Central;
@@ -19,6 +23,7 @@ use crate::handler::Handler;
 use crate::peer::{Peer, SocketEvent};
 use crate::property::{properties_to_sock_str, Property};
 use crate::signal::Signal;
+use bytes::{BytesMut, BufMut, Buf};
 
 // use usbd_serial::{SerialPort, USB_CLASS_CDC, UsbError};
 
@@ -53,6 +58,9 @@ pub(crate) const REQUEST_PEERS: &str = "<p|";
 pub(crate) const HI: &str = "hi|";
 pub(crate) const HANGUP: &str = "...";
 pub(crate) const HELLO: &str = "hey";
+
+pub(crate) const HEADER_NAME:u8 =0x66;
+pub(crate) const HIVE_PROTOCOL: &str = "HVEP";
 
 #[cfg(feature = "bluetooth")]
 fn spawn_bluetooth_listener(do_advertise: bool, sender: Sender<SocketEvent>, ble_name: String) -> Result<()> {
@@ -236,7 +244,7 @@ impl Hive {
             match stream.peer_addr() {
                 Ok(addr) => {
                     let se = SocketEvent::NewPeer {
-                        name: addr.to_string(),
+                        name: "unnamed client".to_string(),
                         stream: Some(stream),
                         peripheral: None,
                         central: None,
@@ -275,7 +283,7 @@ impl Hive {
 
     pub async fn run(&mut self) {//} -> Result<()> {
         self.setup_stop_listener();
-        println!("<< RUN {:?} :: {:?}", self.listen_port, self.bt_connect_to);
+        debug!("<< RUN {:?} :: {:?}", self.listen_port, self.bt_connect_to);
         self.advertising.store(true, Ordering::Relaxed);
 
         // I'm a bluetooth client
@@ -300,21 +308,29 @@ impl Hive {
                 let addr = address.clone();
                 let send_chan_clone = send_chan.clone();
                 let mut tx_clone = tx.clone();
+                let name_clone = self.name.clone();
                 task::spawn(async move {
                     let stream = TcpStream::connect(&addr).await;
                     match stream {
-                        Ok(s) => {
+                        Ok( s) => {
                             match s.peer_addr() {
                                 Ok(_addr) => {
                                     let se = SocketEvent::NewPeer {
-                                        name: String::from(""),
-                                        stream: Some(s),
+                                        name: String::from("unnamed server"),
+                                        stream: Some(s.clone()),
                                         peripheral: None,
                                         central: None,
                                         address: addr,
                                     };
                                     send_chan_clone.clone().send(se).await.expect("failed to send peer");
+
+
+
+
                                     tx_clone.send(true).await.expect("Failed to send connected signal");
+
+
+
                                 }
                                 Err(e) => error!("No peer address: {:?}", e),
                             }
@@ -388,11 +404,15 @@ impl Hive {
                 Some(SocketEvent::NewPeer {
                          name,
                          stream,
-                         address,
-                         central,
                          peripheral,
+                         central,
+                         address,
                      }) => {
                     let has_peer = self.peers.iter().find(|p|p.address==address);
+
+                    let is_tcp_server = self.listen_port.is_some();
+                    let is_tcp_client = self.connect_to.is_some();
+
                     if has_peer.is_none() {
                         let p = Peer::new(
                             name,
@@ -400,9 +420,10 @@ impl Hive {
                             peripheral,
                             central,
                             self.sender.clone(),
-                            address, );
+                            address,
+                            is_tcp_server);
 
-                        debug!("<<<< NEW PEER: {:?}", p.get_name());
+
                         // if were a bluetooth peripheral, then we want to keep track of all our
                         // connected remote peers to verify that they're still there
                         // if p.peripheral.is_some() {
@@ -411,12 +432,41 @@ impl Hive {
 
                         // is_server isn't quite right, bluetooth does an independent properties request
                         // we auto send all the servers via TCP because it prevents un additional request
-                        if self.listen_port.is_some() {
+                        if is_tcp_server {
+
+
+                            // let mut msg_handshake = HEADER.to_string();
+                            // msg_handshake.push_str(self.name.as_str());
+                            // p.send(&msg_handshake).await;
+                            self.send_header(&p).await;
+
                             self.send_properties(&p).await;
                         }
-                        // Send the header with my "peer name"
-                        self.send_header(&p).await;
+
+                        let mut p_stream = p.stream.clone();
+                        info!("<<<< NEW PEER: {:?}", p.get_name());
                         self.peers.push(p);
+
+                        // todo make this work
+                        if is_tcp_client {
+                            let name_cline = self.name.clone();
+                            task::spawn(async move{
+                                match p_stream{
+                                    None => {}
+                                    Some(ref mut st) => {
+                                        info!("<<<< SEND HIVE");
+                                        // send hive header to server
+                                        let mut bm = BytesMut::new();
+                                        bm.put_slice(format!("{}\n",HIVE_PROTOCOL).as_bytes());
+                                        bm.put_u8(HEADER_NAME);
+                                        bm.put_slice(format!("{}\n",name_cline).as_bytes());
+                                        st.write(bm.bytes()).await.expect("write failed");
+                                        st.flush().await.expect("flush failed");
+                                        info!("<<<< SENT HIVE");
+                                    }
+                                }
+                            });
+                        }
                     } else {
                         debug!("<<< Existing peer reconnected: {:?}",has_peer.unwrap().to_string())
                     }
@@ -430,25 +480,29 @@ impl Hive {
                      */
                 }
                 Some(SocketEvent::Message { from, msg }) => {
-                    debug!("<<<<<<<<<<<<<<<<<<, GOT MESSAGE {}, {}", from, msg);
+                    debug!("GOT MESSAGE {}, {}", from, msg);
                     self.got_message(from.as_str(), msg).await;
                 }
                 Some(SocketEvent::Hangup { from }) => {
-                    debug!("<<<<<<<<<<<<<<< check to remove pier {:?}", from);
+                    debug!("check to remove pier {:?}", from);
                     for x in 0..self.peers.len() {
                         if self.peers[x].address() == from {
-                            debug!("<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< found to remove");
+                            debug!("found to remove");
                             self.peers.remove(x);
                             self.notify_peers_change().await;
                             break;
                         }
                     }
                 }
+                #[allow(unused_variables)]
                 Some(SocketEvent::SendBtProps { sender }) => {
-                    debug!("<<<........... HAHAHAHAHAHA {:?}", sender);
-                    let str = properties_to_sock_str(&self.properties);
-                    let resp = bluster::gatt::event::Response::Success(str.into());
-                    sender.send(resp).unwrap();
+                    #[cfg(target_os = "linux")]
+                        {
+                            debug!("<<<........... HAHAHAHAHAHA {:?}", sender);
+                            let str = properties_to_sock_str(&self.properties);
+                            let resp = bluster::gatt::event::Response::Success(str.into());
+                            sender.send(resp).unwrap();
+                        }
                 }
                 None => {
                     println!("Received Nothing...");
@@ -493,7 +547,6 @@ impl Hive {
         }
     }
 
-
     async fn send_to_peer(&self, msg: &str, peer_name: &str) {
         let p = self.get_peer_by_name(peer_name);
         match p {
@@ -501,13 +554,17 @@ impl Hive {
                 let msg = format!("{}{}", PEER_MESSAGE, msg);
                 peer.send(msg.as_str()).await;
             }
-            _ => error!("No peer {}", peer_name)
+            _ => {
+                error!("No peer {} ... {}", peer_name, self.name)
+            }
         }
     }
 
     fn get_peer_by_name(&self, name: &str) -> Option<&Peer> {
         for peer in &self.peers {
+            info!("PEER pname: {} search_ame: {} my_name: {}", peer.get_name(), name, self.name);
             if peer.get_name() == String::from(name) {
+                info!("<< return this peer");
                 return Some(peer);
             }
         }
@@ -524,6 +581,7 @@ impl Hive {
     TODO we could send other init options here such as a property filter etc
      */
     async fn send_header(&self, peer: &Peer) {
+        // todo, this really should just be send_name
         let mut str = HEADER.to_string();
         str.push_str(&*format!("NAME={}", self.name));//.unwrap()).as_ref();
         peer.send(str.as_ref()).await;
@@ -534,7 +592,7 @@ impl Hive {
             if p.address() == from {
                 let vec: Vec<&str> = head.split("NAME=").collect();
                 let name = vec[1];
-                p.set_name(name);
+                p.set_name(name).await;
             }
         }
 

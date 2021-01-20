@@ -1,3 +1,4 @@
+use log::{debug};
 use crate::signal::Signal;
 use std::convert::TryFrom;
 use std::fmt;
@@ -116,18 +117,18 @@ impl Property {
     pub fn set(&mut self, v: PropertyType) -> bool
         where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
-        println!("<<<< set thing {}", v);
+        debug!("<<<< set thing {}", v);
         let v_clone = v.clone();
         let op_v = Some(v);
 
         if !self.value.eq(&op_v) {
             self.value = op_v;
-            println!("<<<< emit change!!");
+            debug!("<<<< emit change!!");
 
             block_on(self.on_changed.emit(Some(v_clone)));
             return true;
         } else {
-            println!("do nothing ");
+            debug!("do nothing ");
             return false;
         }
     }
@@ -141,7 +142,6 @@ impl Property {
  */
 pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> String {
     let mut message = PROPERTIES.to_string();
-    // for p in properties {
     for p in properties {
         if p.1.value.is_some() {
             message.push_str(
