@@ -308,7 +308,6 @@ impl Hive {
                 let addr = address.clone();
                 let send_chan_clone = send_chan.clone();
                 let mut tx_clone = tx.clone();
-                let name_clone = self.name.clone();
                 task::spawn(async move {
                     let stream = TcpStream::connect(&addr).await;
                     match stream {

@@ -24,8 +24,7 @@ use async_std::sync::{Arc, RwLock};
 use std::fmt::{Debug};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
-use futures::io::{Error, ReadExact};
-use std::borrow::BorrowMut;
+// use futures::io::{Error, ReadExact};
 
 
 const ACK_DURATION:u64 = 30;
@@ -132,7 +131,7 @@ impl Peer {
             // todo some sort of handshake, is this we web socket? or a hive socket, or something else entirely
             if is_tcp_server {
                 match stream.as_mut() {
-                    Some(mut s) => {
+                    Some( s) => {
                         block_on(async {
 
                             &peer.handshake(s).await.expect("Shake failed");
@@ -169,16 +168,16 @@ impl Peer {
 
         let mut str = String::new();
 
-        let thing = AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
+        AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
 
         info!("<<< handshake:: {:?}", str);
 
         if str.starts_with(HIVE_PROTOCOL) {
             loop {
-
                 let mut bm = BytesMut::new();
                 str = "".to_string();
-                AsyncBufReadExt::read_line(&mut reader, &mut str).await?; //.expect("failed to read line");
+                AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
+                info!("<< next line:: {:?}", str);
                 bm.put_slice(str.as_bytes());
                 let my8 = bm.get_u8();
                 match my8 {
@@ -187,10 +186,7 @@ impl Peer {
                         bm.truncate(bm.len()-1);
                         let name = String::from_utf8(bm.to_vec()).unwrap();
                         self.set_name(&name).await;
-                        // bm = BytesMut::from("header reply");
-                        // stream.write(bm.bytes()).await.expect("failed to send handshake response");
                         break;
-
                     },
                     _ => {
                         info!("<<<<< something else");
@@ -198,7 +194,24 @@ impl Peer {
                     }
                 }
             }
+        } else if str.starts_with("GET") {
+            let mut count = 0;
+            loop {
+                count += 1;
+                str = "".to_string();
+                let m = AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
+
+                let parts = str.split(":").collect::<Vec<_>>();
+                info!("<< parts: {:?}, {:?}", parts.first().unwrap(), parts.last().unwrap().trim());
+
+                let done = parts.len()<2;
+                if count >30|| m==0 || done {
+                    info!("<<<<<<<<<<<<<<<<<, break");
+                    break;
+                }
+            }
         };
+        info!("<<<<<<<<<<<<<<<<<, shook");
         Ok(())
 
     }
