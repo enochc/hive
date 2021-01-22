@@ -23,7 +23,7 @@ use crate::handler::Handler;
 use crate::peer::{Peer, SocketEvent};
 use crate::property::{properties_to_sock_str, Property};
 use crate::signal::Signal;
-use bytes::{BytesMut, BufMut, Buf};
+use bytes::{BytesMut, BufMut};
 
 // use usbd_serial::{SerialPort, USB_CLASS_CDC, UsbError};
 
@@ -431,14 +431,9 @@ impl Hive {
 
                         // is_server isn't quite right, bluetooth does an independent properties request
                         // we auto send all the servers via TCP because it prevents un additional request
-                        if is_tcp_server {
+                        if is_tcp_server && p.web_sock.is_none() {
 
-
-                            // let mut msg_handshake = HEADER.to_string();
-                            // msg_handshake.push_str(self.name.as_str());
-                            // p.send(&msg_handshake).await;
                             self.send_header(&p).await;
-
                             self.send_properties(&p).await;
                         }
 
@@ -459,7 +454,9 @@ impl Hive {
                                         bm.put_slice(format!("{}\n",HIVE_PROTOCOL).as_bytes());
                                         bm.put_u8(HEADER_NAME);
                                         bm.put_slice(format!("{}\n",name_cline).as_bytes());
-                                        st.write(bm.bytes()).await.expect("write failed");
+                                        // st.write(bm.bytes()).await.expect("write failed");
+                                        st.write(bm.as_ref()).await.expect("write failed");
+
                                         st.flush().await.expect("flush failed");
                                         info!("<<<< SENT HIVE");
                                     }

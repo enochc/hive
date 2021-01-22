@@ -6,7 +6,6 @@ use async_std::{
     prelude::*,
     task,
 };
-// use futures::{SinkExt, AsyncReadExt};
 use futures::{SinkExt, AsyncBufReadExt};
 use futures::channel::mpsc::{UnboundedSender};
 use futures::executor::block_on;
@@ -24,7 +23,8 @@ use async_std::sync::{Arc, RwLock};
 use std::fmt::{Debug};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
-// use futures::io::{Error, ReadExact};
+#[cfg(feature = "websock")]
+use crate::websocket::WebSock;
 
 
 const ACK_DURATION:u64 = 30;
@@ -32,6 +32,10 @@ const ACK_DURATION:u64 = 30;
 #[cfg(not(feature = "bluetooth"))]
 #[derive(Debug)]
 pub struct Response {}
+
+#[cfg(not(feature = "websock"))]
+#[derive(Debug)]
+pub struct WebSock {}
 
 #[cfg(not(feature = "bluetooth"))]
 #[derive(Debug)]
@@ -69,6 +73,7 @@ pub struct Peer {
     pub address: String,
     last_received: Arc<RwLock<SystemTime>>,
     ack_check: Arc<AtomicBool>,
+    pub web_sock: Option<WebSock>,
     event_sender: UnboundedSender<SocketEvent>,
 }
 
@@ -112,7 +117,7 @@ impl Peer {
         return if stream.is_some() {
             let arc_str = stream.as_ref().unwrap().clone();
             let addr = arc_str.peer_addr().unwrap().to_string();
-            let peer = Peer {
+            let mut peer = Peer {
                 name: Arc::new(RwLock::new(name)),
                 stream: Some(arc_str.clone()),
                 update_peers: false,
@@ -121,7 +126,8 @@ impl Peer {
                 address: addr,
                 last_received: Arc::new(RwLock::new(std::time::SystemTime::now())),
                 ack_check: Arc::new(AtomicBool::new(false)),
-                event_sender: sender.clone()
+                event_sender: sender.clone(),
+                web_sock: None,
             };
 
             // Start read loop
@@ -134,17 +140,20 @@ impl Peer {
                     Some( s) => {
                         block_on(async {
 
-                            &peer.handshake(s).await.expect("Shake failed");
+                            &peer.handshake(s, &send_clone).await.expect("Shake failed");
                         });
                     },
                     None => {}
                 };
             };
 
+            // WebSock runs it's own read loop
+            if peer.web_sock.is_none() {
+                task::spawn(async move {
+                    read_loop(send_clone, &arc_str).await;
+                });
+            }
 
-            task::spawn(async move {
-                read_loop(send_clone, &arc_str).await;
-            });
             peer
         } else {
             Peer {
@@ -157,12 +166,13 @@ impl Peer {
                 last_received: Arc::new(RwLock::new(std::time::SystemTime::now())),
                 ack_check: Arc::new(AtomicBool::new(false)),
                 event_sender: sender,
+                web_sock: None
             }
         }
 
     }
 
-    async fn handshake(& self, stream:&mut TcpStream) -> Result<(), std::io::Error>{
+    async fn handshake(&mut self, stream:&mut TcpStream, sender: &UnboundedSender<SocketEvent>) -> Result<(), std::io::Error>{
         // let mut strea_clone = stream.clone();
         let mut reader = BufReader::new(stream.clone());
 
@@ -195,21 +205,14 @@ impl Peer {
                 }
             }
         } else if str.starts_with("GET") {
-            let mut count = 0;
-            loop {
-                count += 1;
-                str = "".to_string();
-                let m = AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
-
-                let parts = str.split(":").collect::<Vec<_>>();
-                info!("<< parts: {:?}, {:?}", parts.first().unwrap(), parts.last().unwrap().trim());
-
-                let done = parts.len()<2;
-                if count >30|| m==0 || done {
-                    info!("<<<<<<<<<<<<<<<<<, break");
-                    break;
+            #[cfg(feature = "websock")]
+                {
+                    info!("<< do websocket");
+                    let sock = WebSock::from_stream(reader, stream.clone(), sender.clone()).await?;
+                    self.web_sock = Some(sock);
                 }
-            }
+
+
         };
         info!("<<<<<<<<<<<<<<<<<, shook");
         Ok(())

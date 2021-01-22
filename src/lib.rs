@@ -1,4 +1,6 @@
 
+#![warn(rust_2018_idioms)]
+
 use log::{Metadata, Level, Record, LevelFilter};
 
 mod hive_macros;
@@ -7,6 +9,9 @@ pub mod signal;
 pub mod hive;
 pub mod peer;
 pub mod handler;
+
+#[cfg(feature = "websock")]
+pub mod websocket;
 
 #[cfg(feature = "bluetooth")]
 pub mod bluetooth;
