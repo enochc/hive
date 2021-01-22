@@ -18,6 +18,7 @@ use bytes::{BytesMut};
 use websocket_codec::protocol::{FrameHeaderCodec, FrameHeader, DataLength};
 use websocket_codec::mask::{Mask, mask_slice};
 use tokio_util::codec::Encoder;
+use websocket_codec::{Message, MessageCodec};
 
 const SEC_KEY:&str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -87,6 +88,7 @@ impl WebSock {
 
 async fn read_loop(sender: &UnboundedSender<SocketEvent>, mut stream: TcpStream) {
     use tokio_util::codec::Decoder;
+    use assert_allocations::assert_allocated_bytes;
 
 
     let mut is_running = true;
@@ -113,9 +115,14 @@ async fn read_loop(sender: &UnboundedSender<SocketEvent>, mut stream: TcpStream)
 
                 if msg.starts_with("hello") {
                     info!("<<<< test send");
-                    let mut bytes = "pnng".as_bytes();
-                    let blob:FrameHeader = FrameHeaderCodec.encode(&mut bytes).unwrap().unwrap();
-                    let mm =AsyncWriteExt::write(&mut stream, "pnng".as_bytes()).await;
+                    let message = Message::text("hi");
+                    let mut bytes = BytesMut::new();
+                    MessageCodec::server()
+                        .encode(&message, &mut bytes)
+                        .expect("didn't expect MessageCodec::encode to return an error");
+
+                    let mm =AsyncWriteExt::write(&mut stream, bytes.as_ref()).await;
+
                 }
             }
             DataLength::Medium(_) => {}
