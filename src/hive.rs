@@ -400,6 +400,7 @@ impl Hive {
     async fn receive_events(&mut self) {
         while !self.sender.is_closed() {
             match self.receiver.next().await {
+
                 Some(SocketEvent::NewPeer {
                          name,
                          stream,
@@ -411,8 +412,9 @@ impl Hive {
 
                     let is_tcp_server = self.listen_port.is_some();
                     let is_tcp_client = self.connect_to.is_some();
-
+                    debug!("<<<< has peer:: {:?}", has_peer);
                     if has_peer.is_none() {
+                        debug!("<<<<< building peer");
                         let p = Peer::new(
                             name,
                             stream,
@@ -421,7 +423,7 @@ impl Hive {
                             self.sender.clone(),
                             address,
                             is_tcp_server);
-
+                        debug!("<<<<< PEER: {:?}", p);
 
                         // if were a bluetooth peripheral, then we want to keep track of all our
                         // connected remote peers to verify that they're still there
@@ -431,9 +433,10 @@ impl Hive {
 
                         // is_server isn't quite right, bluetooth does an independent properties request
                         // we auto send all the servers via TCP because it prevents un additional request
-                        if is_tcp_server && p.web_sock.is_none() {
+                        // if is_tcp_server && p.web_sock.is_none() {
+                        if is_tcp_server {
 
-                            self.send_header(&p).await;
+                            self.send_name(&p).await;
                             self.send_properties(&p).await;
                         }
 
@@ -448,7 +451,7 @@ impl Hive {
                                 match p_stream{
                                     None => {}
                                     Some(ref mut st) => {
-                                        info!("<<<< SEND HIVE");
+                                        info!("<<<< SEND HIVE {:?}",HEADER_NAME);
                                         // send hive header to server
                                         let mut bm = BytesMut::new();
                                         bm.put_slice(format!("{}\n",HIVE_PROTOCOL).as_bytes());
@@ -480,10 +483,10 @@ impl Hive {
                     self.got_message(from.as_str(), msg).await;
                 }
                 Some(SocketEvent::Hangup { from }) => {
-                    debug!("check to remove pier {:?}", from);
+                    debug!("received hangup from {:?}", from);
                     for x in 0..self.peers.len() {
                         if self.peers[x].address() == from {
-                            debug!("found to remove");
+                            debug!("removing peer at index {}",x);
                             self.peers.remove(x);
                             self.notify_peers_change().await;
                             break;
@@ -576,8 +579,7 @@ impl Hive {
     Currently this only responds to new connected peers with the peer name
     TODO we could send other init options here such as a property filter etc
      */
-    async fn send_header(&self, peer: &Peer) {
-        // todo, this really should just be send_name
+    async fn send_name(&self, peer: &Peer) {
         let mut str = HEADER.to_string();
         str.push_str(&*format!("NAME={}", self.name));//.unwrap()).as_ref();
         peer.send(str.as_ref()).await;

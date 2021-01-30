@@ -6,6 +6,7 @@ use async_std::{
     prelude::*,
     task,
 };
+// use futures::{SinkExt, AsyncBufReadExt, AsyncReadExt};
 use futures::{SinkExt, AsyncBufReadExt};
 use futures::channel::mpsc::{UnboundedSender};
 use futures::executor::block_on;
@@ -25,6 +26,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 #[cfg(feature = "websock")]
 use crate::websocket::WebSock;
+
 
 
 const ACK_DURATION:u64 = 30;
@@ -112,9 +114,8 @@ impl Peer {
                address: String,
                is_tcp_server:bool) -> Peer {
 
-        info!("<<<< WTF {}", name);
-
         return if stream.is_some() {
+            debug!("<< 1");
             let arc_str = stream.as_ref().unwrap().clone();
             let addr = arc_str.peer_addr().unwrap().to_string();
             let mut peer = Peer {
@@ -129,6 +130,7 @@ impl Peer {
                 event_sender: sender.clone(),
                 web_sock: None,
             };
+            debug!("<< 2 {:?}", peer);
 
             // Start read loop
             let send_clone = sender.clone();
@@ -139,8 +141,9 @@ impl Peer {
                 match stream.as_mut() {
                     Some( s) => {
                         block_on(async {
-
+                            debug!("<< 3");
                             &peer.handshake(s, &send_clone).await.expect("Shake failed");
+                            debug!("<< 4");
                         });
                     },
                     None => {}
@@ -178,6 +181,14 @@ impl Peer {
 
         let mut str = String::new();
 
+        // let buff = [0u8;1024];
+        // let mut buff = vec![0u8];
+        // let r = ReadExt::read(&mut reader, &mut *buff).await;
+        // let r = reader.read(&mut *buff).await;
+        // let r  = AsyncBufReadExt::read(&mut reader, &mut str).await?;
+        // info!("<<handshake read: {:?} = {:?}",r,  buff);
+
+
         AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
 
         info!("<<< handshake:: {:?}", str);
@@ -211,8 +222,6 @@ impl Peer {
                     let sock = WebSock::from_stream(reader, stream.clone(), sender.clone()).await?;
                     self.web_sock = Some(sock);
                 }
-
-
         };
         info!("<<<<<<<<<<<<<<<<<, shook");
         Ok(())
@@ -281,11 +290,16 @@ impl Peer {
     pub async fn send(& self, msg: &str) {
         debug!("SEND starts here {:?}", msg);
         if self.stream.is_some(){
-            let s = self.stream.as_ref().unwrap();
-            let stream = &s.clone();
-            debug!("Send to peer {}: {}", self.name.read().await, msg);
-            Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
 
+            if self.web_sock.is_some(){
+
+                self.web_sock.as_ref().unwrap().send_message(msg.as_bytes().into()).await;
+            } else {
+                let s = self.stream.as_ref().unwrap();
+                let stream = &s.clone();
+                debug!("Send to peer {}: {}", self.name.read().await, msg);
+                Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
+            }
         } else if self.central.is_some() {
             #[cfg(feature = "bluetooth")]
                 {
@@ -359,7 +373,7 @@ impl Peer {
 
 async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream) {
 
-
+    debug!("<< start tcp socker read loop");
     let mut reader = BufReader::new(&*stream);
     let from = match stream.peer_addr() {
         Ok(addr) => addr.to_string(),

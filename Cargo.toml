@@ -10,7 +10,7 @@ license-file = "LICENSE.txt"
 default = ["websock"]
 #default = []
 bluetooth = ["bluster", "blurz", "uuid", "tokio", "lazy_static", "regex"]
-websock = ["websocket-codec", "base64", "sha-1", "tokio-util", "assert-allocations"]
+websock = ["websocket-codec", "base64", "sha-1", "tokio-util"]
 
 [dependencies]
 futures = "0.3"
@@ -37,16 +37,15 @@ regex =       {version="1.0", optional=true}
 
 # websocket optionals
 #websocket =   "0.26.2"
-#websocket-codec = "0.5.0" # git@github.com:1tgr/rust-websocket-lite.git
-websocket-codec =    {path="../websocket-codec", optional=true}
-assert-allocations = { path="../websocket-codec/assert-allocations", optional=true }
-base64 =             {version="0.13.0", optional=true}
-sha-1 =              {version="0.8", optional=true}
-tokio-util =         {version="0.6.2", optional=true}
+# git@github.com:1tgr/rust-websocket-lite.git
+websocket-codec =    { verstion = "0.5.0", optional = true }
+base64 =             { version = "0.13.0", optional = true }
+sha-1 =              { version = "0.8", optional = true }
+tokio-util =         { version = "0.6.2", optional = true }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
-blurz = {version="0.4.0", optional=true}
+blurz = { version = "0.4.0", optional = true }
 # bluz is depebdent on dbus which requires libdbus-1-dev
 
 #libusb = "0.3"
