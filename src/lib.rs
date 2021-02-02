@@ -39,8 +39,8 @@ impl log::Log for SimpleLogger {
 }
 pub static LOGGER: SimpleLogger = SimpleLogger;
 pub fn init_logging(){
-    log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Trace)).expect("failed to init logger");
-    // log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Info)).expect("failed to init logger");
+    // log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Trace)).expect("failed to init logger");
+    log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Info)).expect("failed to init logger");
 }
 
 // use futures::channel::mpsc::{UnboundedSender};

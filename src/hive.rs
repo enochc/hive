@@ -483,10 +483,10 @@ impl Hive {
                     self.got_message(from.as_str(), msg).await;
                 }
                 Some(SocketEvent::Hangup { from }) => {
-                    debug!("received hangup from {:?}", from);
+                    info!("received hangup from {:?}", from);
                     for x in 0..self.peers.len() {
                         if self.peers[x].address() == from {
-                            debug!("removing peer at index {}",x);
+                            info!("removing peer at index {}",x);
                             self.peers.remove(x);
                             self.notify_peers_change().await;
                             break;
@@ -534,16 +534,14 @@ impl Hive {
     }
 
     async fn notify_peers_change(&mut self) {
+        use futures::future::join_all;
         let peer_str = format!("{}{}", REQUEST_PEERS, self.peer_string());
-        for p in &self.peers {
-            if p.update_peers {
-                let stream = p.stream.clone().unwrap();
-                let msg = peer_str.clone();
-                task::spawn(async  move{
-                    Peer::send_on_stream(&stream, &msg).await.unwrap();
-                });
-            }
-        }
+
+        let mut futures = vec![];
+        self.peers.iter().filter(|p|{ p.update_peers }).for_each(|p|{
+            futures.push(p.send(peer_str.clone()))
+        });
+        join_all(futures).await;
     }
 
     async fn send_to_peer(&self, msg: &str, peer_name: &str) {
@@ -551,7 +549,7 @@ impl Hive {
         match p {
             Some(peer) => {
                 let msg = format!("{}{}", PEER_MESSAGE, msg);
-                peer.send(msg.as_str()).await;
+                peer.send(msg).await;
             }
             _ => {
                 error!("No peer {} ... {}", peer_name, self.name)
@@ -572,7 +570,7 @@ impl Hive {
 
     async fn send_properties(&self, peer: &Peer) {
         let str = properties_to_sock_str(&self.properties);
-        peer.send(str.as_str()).await;
+        peer.send(str).await;
     }
 
     /*
@@ -582,7 +580,7 @@ impl Hive {
     async fn send_name(&self, peer: &Peer) {
         let mut str = HEADER.to_string();
         str.push_str(&*format!("NAME={}", self.name));//.unwrap()).as_ref();
-        peer.send(str.as_ref()).await;
+        peer.send(str).await;
     }
 
     async fn set_headers_from_peer(&mut self, head: &str, from: &str) {
@@ -619,7 +617,7 @@ impl Hive {
                             }
                             sent_bt_broadcast = true;
                         }
-                        p.send(m.as_str()).await;
+                        p.send(m.clone()).await;
                     }
                 }
             }
@@ -704,7 +702,7 @@ impl Hive {
                     let peer_str = format!("{}{}", REQUEST_PEERS, self.peer_string());
                     for p in self.peers.as_mut_slice() {
                         if p.address() == from {
-                            p.send(&peer_str).await;
+                            p.send(peer_str).await;
                             p.update_peers = true;
                             break;
                         }

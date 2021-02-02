@@ -244,7 +244,7 @@ impl Peer {
     // when  hi is received, we send a hello
     pub async fn send_hello(&self){
         debug!("<< SEND HELLO {:?}", self.to_string());
-        self.send(HELLO).await;
+        self.send(HELLO.into()).await;
     }
 
     pub async fn wave(&self){
@@ -287,18 +287,19 @@ impl Peer {
         });
 
     }
-    pub async fn send(& self, msg: &str) {
+
+    pub async fn send(& self, msg:String) {
         debug!("SEND starts here {:?}", msg);
         if self.stream.is_some(){
 
             if self.web_sock.is_some(){
-
+                info!("Sending message to web client at {:?} = {:?}",self.address, msg);
                 self.web_sock.as_ref().unwrap().send_message(msg.as_bytes().into()).await;
             } else {
                 let s = self.stream.as_ref().unwrap();
                 let stream = &s.clone();
                 debug!("Send to peer {}: {}", self.name.read().await, msg);
-                Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
+                self.send_on_stream(&msg).await.expect("failed to send to Peer");
             }
         } else if self.central.is_some() {
             #[cfg(feature = "bluetooth")]
@@ -320,43 +321,17 @@ impl Peer {
         } else {
             unimplemented!("cant send: {:?}" ,msg);
         }
-        // listen for ack
-        // let lar = *self.last_ack_received.read().await;
-        // let since_last_ack = std::time::SystemTime::now().duration_since(lar).unwrap();
-        // debug!("<< since last ack received: {:?}",since_last_ack);
-        // if since_last_ack > Duration::from_secs(ACH_DURATION+2) {
-        //     debug!("<< LISTEN FOR ACK");
-        //     // let waiting = *self.ack_check.read().await
-        //     if !*self.ack_check.read().await {
-        //         *self.ack_check.write().await = true;
-        //
-        //         let ack_check_clone = self.ack_check.clone();
-        //         let name_clone = self.name.clone();
-        //         task::spawn( async move {
-        //             // let done = cvar.wait(waiting).unwrap();
-        //             while *ack_check_clone.read().await {
-        //                 sleep(Duration::from_secs(1));
-        //                 debug!("<<<<< ...... waiting for ack from {:?}", name_clone);
-        //             }
-        //             debug!("<<<< DONE WAITING");
-        //         });
-        //     }
-        //
-        //     let mut lar = self.last_ack_received.write().await;//.//.//lock().await;
-        //     *lar = std::time::SystemTime::now();
-        // }
 
 
     }
 
 
-    pub async fn send_on_stream(mut stream: &TcpStream, message: &str) -> Result<bool, std::io::Error> {
+    async fn send_on_stream(&self, message: &str) -> Result<bool, std::io::Error> {
         let mut bytes = Vec::new();
         let msg_length: u32 = message.len() as u32;
         bytes.append(&mut msg_length.to_be_bytes().to_vec());
         bytes.append(&mut message.as_bytes().to_vec());
-        stream.write(&bytes).await.expect("Failed to write to stream");
-        // stream.flush().await;
+        self.stream.as_ref().unwrap().write(&bytes).await.expect("Failed to write to stream");
         Result::Ok(true)
     }
 }

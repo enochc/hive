@@ -39,6 +39,7 @@ regex =       {version="1.0", optional=true}
 #websocket =   "0.26.2"
 # git@github.com:1tgr/rust-websocket-lite.git
 websocket-codec =    { verstion = "0.5.0", optional = true }
+#websocket-codec =    { path = "../websocket-codec", optional = true }
 base64 =             { version = "0.13.0", optional = true }
 sha-1 =              { version = "0.8", optional = true }
 tokio-util =         { version = "0.6.2", optional = true }

@@ -95,8 +95,8 @@ impl Central {
                             BluetoothEvent::Value { value, object_path } => {
                                 let str_val = String::from_utf8(value.to_vec());
 
-                                info!("<<<< {:?} VALUE: << {:?}", object_path, str_val);
-                                info!("<<<< {:?} ", &char_path_clone.lock().unwrap());
+                                debug!("{:?} VALUE: << {:?}", object_path, str_val);
+                                debug!("{:?} ", &char_path_clone.lock().unwrap());
                                 let chr = &*char_path_clone.lock().unwrap().clone();
                                 // descriptors start with the characteristics obeject path
                                 if object_path.starts_with(chr) {
@@ -115,14 +115,14 @@ impl Central {
                             }
                             BluetoothEvent::Connected{object_path, connected} => {
 
-                                info!("<<<< CONNECTED: {:?} {:?}", connected, object_path);
+                                info!("CONNECTED: {:?} {:?}", connected, object_path);
                                 // let str = &*mydevice_id_clone.lock().unwrap();
                                 // if object_path.eq(str){
                                 //     debug!("<<<<<<<< THIS IS MY DEVICE");
                                 // }
                             }
                             BluetoothEvent::None => {}
-                            _ => info!("<<<< EVENT: {:?}", event),
+                            _ => info!("EVENT: {:?}", event),
                         }
                     }
                 }
