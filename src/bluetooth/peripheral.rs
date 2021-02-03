@@ -1,39 +1,34 @@
-
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-// use btleplug::api::{UUID, Central, CentralEvent, BDAddr, AdapterManager, Peripheral};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+use futures::{channel::mpsc::channel, prelude::*};
+use futures::channel::mpsc;
+use log::{debug, info};
+use uuid::Uuid;
+
 use bluster::{
     gatt::{
         characteristic,
         characteristic::Characteristic,
         descriptor,
         descriptor::Descriptor,
-        event::{Event, Response, NotifySubscribe},
+        event::{Event, NotifySubscribe, Response},
         service::Service,
     },
     Peripheral as Peripheral_device, SdpShortUuid,
 };
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use futures::{channel::mpsc::channel, prelude::*};
-use futures::channel::mpsc;
-use log::{ debug, info};
-use uuid::Uuid;
-
-use crate::bluetooth::{HIVE_CHAR_ID, HIVE_DESC_ID, HiveMessage, SERVICE_ID, HIVE_PROPS_DESC_ID};
+use crate::bluetooth::{HIVE_CHAR_ID, HIVE_DESC_ID, HIVE_PROPS_DESC_ID, HiveMessage, SERVICE_ID};
 use crate::bluetooth::my_blurz::set_discoverable;
 use crate::hive::{Receiver, Sender};
 use crate::peer::SocketEvent;
 
 // #[derive(Clone)]
 pub struct Peripheral {
-    // pub peripheral: Peripheral_device,
-    // sender: Sender<Bytes>,
-    // receiver: Arc<Receiver<Bytes>>,
     ble_name: String,
     event_sender: Sender<SocketEvent>,
     //TODO this feels silly, do a really need a mutex?
@@ -52,11 +47,9 @@ impl Debug for Peripheral {
 
 impl Peripheral {
     pub async fn new(ble_name: &str, event_sender: Sender<SocketEvent>) -> Peripheral {
-
-        // let peripheral = Peripheral_device::new().await.expect("Failed to initialize peripheral");
         let name = String::from(ble_name);
 
-        return Peripheral { ble_name: name, event_sender, address:Mutex::new(String::new()) }
+        return Peripheral { ble_name: name, event_sender, address: Mutex::new(String::new()) };
     }
 
     async fn get_peripheral() -> Peripheral_device {
@@ -74,7 +67,7 @@ impl Peripheral {
 
         let (bytes_tx, mut bytes_rx): (Sender<Bytes>, Receiver<Bytes>) = mpsc::unbounded();
 
-        let subscription:Arc<RwLock<Option<NotifySubscribe>>> = Arc::new(RwLock::new(None));
+        let subscription: Arc<RwLock<Option<NotifySubscribe>>> = Arc::new(RwLock::new(None));
         let sub_clone = subscription.clone();
 
         async_std::task::spawn(async move {
@@ -82,13 +75,13 @@ impl Peripheral {
             while let Some(bytes) = bytes_rx.next().await {
                 debug!("notify: {:?}", bytes);
                 let op = &*sub_clone.read().unwrap();
-                match op{
+                match op {
                     Some(m) => {
                         m.clone()
                             .notification
                             .try_send(bytes.to_vec())
                             .unwrap();
-                    },
+                    }
                     None => {}
                 }
             }
@@ -112,29 +105,29 @@ impl Peripheral {
             {
                 let mut descriptors = HashSet::<Descriptor>::new();
                 descriptors.insert(Descriptor::new(
-                        Uuid::from_sdp_short_uuid(HIVE_DESC_ID),
+                    Uuid::from_sdp_short_uuid(HIVE_DESC_ID),
+                    descriptor::Properties::new(
+                        Some(descriptor::Read(descriptor::Secure::Insecure(
+                            sender_descriptor_clone.clone(),
+                        ))),
+                        Some(descriptor::Write(descriptor::Secure::Insecure(
+                            sender_descriptor_clone,
+                        ))),
+                    ),
+                    Some("Hive_Desc".as_bytes().to_vec()),
+                ));
+                descriptors.insert(
+                    Descriptor::new(
+                        Uuid::from_sdp_short_uuid(HIVE_PROPS_DESC_ID),
                         descriptor::Properties::new(
                             Some(descriptor::Read(descriptor::Secure::Insecure(
-                                sender_descriptor_clone.clone(),
+                                sender_properties_descriptor_clone.clone(),
                             ))),
                             Some(descriptor::Write(descriptor::Secure::Insecure(
-                                sender_descriptor_clone,
+                                sender_properties_descriptor_clone,
                             ))),
                         ),
-                        Some("Hive_Desc".as_bytes().to_vec()),
-                ));
-                    descriptors.insert(
-                        Descriptor::new(
-                            Uuid::from_sdp_short_uuid(HIVE_PROPS_DESC_ID),
-                            descriptor::Properties::new(
-                                Some(descriptor::Read(descriptor::Secure::Insecure(
-                                    sender_properties_descriptor_clone.clone(),
-                                ))),
-                                Some(descriptor::Write(descriptor::Secure::Insecure(
-                                    sender_properties_descriptor_clone,
-                                ))),
-                            ),
-                            Some("Hive_Prios_Desc".as_bytes().to_vec()),
+                        Some("Hive_Prios_Desc".as_bytes().to_vec()),
                     )
                 );
                 descriptors
@@ -176,7 +169,7 @@ impl Peripheral {
                             HiveMessage::CONNECTED => {
                                 let msg = String::from_utf8(bm.to_vec()).unwrap();
                                 println!("<<<<<<<<< CONNECTED: {:?}", msg);
-                                if msg.len() <=0 {info!("no name or address")} else {
+                                if msg.len() <= 0 { info!("no name or address") } else {
                                     let vec: Vec<&str> = msg.split(",").collect();
                                     let a = vec.get(1).unwrap().to_string();
                                     let mut addr = self.address.lock().unwrap();//.clone();
@@ -190,8 +183,7 @@ impl Peripheral {
                                     };
                                     &event_sender_clone.send(event).await.expect("Failed to send event");
                                 }
-
-                            },
+                            }
                             _ => { eprintln!("Unknown message received, failed to process") }
                         }
 
@@ -202,9 +194,7 @@ impl Peripheral {
                     }
                     Event::NotifySubscribe(notify_subscribe) => {
                         info!("Characteristic got a notify subscription!");
-                        // subscriptions.lock().unwrap().push(notify_subscribe);
                         *subscription.write().unwrap() = Some(notify_subscribe)
-
                     }
                     Event::NotifyUnsubscribe => {
                         info!("Characteristic got a notify unsubscribe!");
@@ -217,23 +207,19 @@ impl Peripheral {
 
         let props_descriptor_handler = async {
             let mut rx = receiver_properties_descriptor;
-            // let mut sender_properties_descriptor_clone = sender_properties_descriptor.clone();
             let mut event_sender_clone = self.event_sender.clone();
             while let Some(event) = rx.next().await {
                 match event {
                     Event::ReadRequest(read_request) => {
-                        info!("read properties {:?}",read_request);
+                        info!("read properties {:?}", read_request);
                         let event = SocketEvent::SendBtProps {
                             sender: read_request.response//sender_properties_descriptor.clone()
                         };
                         event_sender_clone.send(event).await.expect("Failed to send read_props event");
-
-                    },
+                    }
                     Event::WriteRequest(write_request) => {
                         info!("write properties {:?}, NOPE!!", write_request.data);
-
-
-                    },
+                    }
                     _ => info!("Event not supported for Descriptors!"),
                 }
             }
@@ -257,16 +243,15 @@ impl Peripheral {
                         info!("Descriptor responded with \"{}\"", value);
                     }
                     Event::WriteRequest(write_request) => {
-                        let new_value = String::from_utf8(write_request.data).unwrap();
+                        let new_value = Bytes::from(write_request.data);
                         info!(
-                            "Descriptor got a write request with offset {} and data {}!",
+                            "Descriptor got a write request with offset {} and data {:?}!",
                             write_request.offset, new_value,
                         );
-                        // *descriptor_value.lock().unwrap() = new_value;
                         let adr = &*self.address.lock().unwrap();
                         let se = SocketEvent::Message {
                             from: adr.clone(),
-                            msg: new_value
+                            msg: new_value,
                         };
                         event_sender_clone.send(se).await.expect("Failed to send event");
 

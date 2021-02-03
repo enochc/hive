@@ -17,11 +17,11 @@ use blurz::{
     BluetoothSession,
 };
 use bluster::SdpShortUuid;
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, BytesMut, Bytes};
 use futures::channel::mpsc::{ UnboundedSender};
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
-use log::{debug, info};
+use log::{debug, info, trace};
 use regex::Regex;
 use uuid::Uuid;
 
@@ -86,16 +86,17 @@ impl Central {
         let peer_address_clone = self.peer_address.clone();
         let mut sender_clone = self.sender.clone();
         async_std::task::spawn(async move{
-            debug!("<<<<< LOPING OVER RECEIVER");
+            debug!("LOPING OVER RECEIVER");
             loop {
                 for event in BluetoothSession::create_session(None).unwrap().incoming(1000).map(BluetoothEvent::from) {
                     if event.is_some() {
                         let event = event.unwrap();
+                        let tmp;
                         match event {
                             BluetoothEvent::Value { value, object_path } => {
-                                let str_val = String::from_utf8(value.to_vec());
-
-                                debug!("{:?} VALUE: << {:?}", object_path, str_val);
+                                tmp = String::from_utf8(value.to_vec());
+                                let bytes = Bytes::from(tmp.unwrap());
+                                trace!("{:?} VALUE: << {:?}", object_path, bytes);
                                 debug!("{:?} ", &char_path_clone.lock().unwrap());
                                 let chr = &*char_path_clone.lock().unwrap().clone();
                                 // descriptors start with the characteristics obeject path
@@ -103,13 +104,12 @@ impl Central {
                                     let str = &*peer_address_clone.lock().unwrap();
                                     let se = SocketEvent::Message {
                                         from: str.clone(),
-                                        msg: str_val.unwrap(),
+                                        msg: bytes,
                                     };
-                                    info!("<<<<<< SENDING MESSAGE {:?}",se);
+                                    info!("SENDING MESSAGE {:?}",se);
                                     block_on(sender_clone.send(se)).unwrap();
-                                    // sender_clone.send(se).await.expect("failed to send message");
                                 } else {
-                                    info!("<<<<< not sending message!!!! ");
+                                    info!("not sending message!!!! ");
                                 }
 
                             }
@@ -122,7 +122,7 @@ impl Central {
                                 // }
                             }
                             BluetoothEvent::None => {}
-                            _ => info!("EVENT: {:?}", event),
+                            _ => debug!("EVENT: {:?}", event),
                         }
                     }
                 }
@@ -138,16 +138,15 @@ impl Central {
 
     fn fetch_properties(&self, session:&BluetoothSession, descriptors:&Vec<String>)-> Result<(), Box<dyn std::error::Error>>{
 
-        debug!("<<<< fetch properties: {:?}",descriptors);
+        debug!("fetch properties: {:?}",descriptors);
         for descriptor in descriptors {
             let desc = Descriptor::new(session, descriptor.clone());
             if desc.get_uuid().unwrap() == HIVE_PROPS_DESC_UUID.to_string(){
-                debug!(".<< << << << << {:?}",desc);
                 let _val = match desc.read_value(None){
                     Ok(_) => {
                         // Do nothing, the response is captured in the listen_for_events loop
                     }
-                    Err(e) => {debug!("<< << << << << FAILED: {:?}", e)}
+                    Err(e) => {eprintln!(" FAILED: {:?}", e)}
                 };
 
             }
@@ -203,7 +202,7 @@ impl Central {
             return None;
         };
 
-        let mut hive_device: Option<BluetoothDevice> = None;
+        let mut hive_device: Option<BluetoothDevice<'_>> = None;
         match get_device() {
             Some(d) => {
                 if d.is_connected()? {
@@ -374,7 +373,7 @@ impl Central {
 }
 
 pub fn scan_for_devices(bt_session: &BluetoothSession,
-                        adapter: BluetoothAdapter, ) -> Result<(), Box<dyn std::error::Error>> {
+                        adapter: BluetoothAdapter<'_>, ) -> Result<(), Box<dyn std::error::Error>> {
     debug!("<<<< SCANNING FOR DEVICES...");
     let disc_session = DiscoverySession::create_session(bt_session, adapter.get_id())?;
     disc_session.start_discovery()?;

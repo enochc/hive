@@ -95,10 +95,10 @@ fn main() {
             task::sleep(sleep_dur).await;
             clone_hand.send_to_peer("Server", "hey mr man").await; // + 1
             task::sleep(sleep_dur).await;
-            debug!("SENT thermostatName = Before");
+            info!("SENT thermostatName = Before");
             clone_hand.send_property_value("thermostatName", Some(&"Before".into())).await; // +2
             task::sleep(sleep_dur).await;
-            debug!("DELETE thermostatName");
+            info!("DELETE thermostatName");
             server_hand.delete_property("thermostatName").await;
             task::sleep(sleep_dur).await;
             server_hand.send_property_value("thingvalue", Some(&2.into())).await; // +1
@@ -108,7 +108,7 @@ fn main() {
             task::sleep(sleep_dur).await;
 
         } else {
-            println!("server is not connected");
+            info!("server is not connected");
         }
         sender.send(1 as i32).await;
 
@@ -118,7 +118,7 @@ fn main() {
     assert_eq!(counter.load(Ordering::Relaxed), 7);
     client_hand.hangup();
 
-    println!("done with stuff");
+    info!("done with stuff");
 
 }
 

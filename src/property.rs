@@ -1,4 +1,4 @@
-use log::{debug};
+use log::{debug, info};
 use crate::signal::Signal;
 use std::convert::TryFrom;
 use std::fmt;
@@ -6,6 +6,7 @@ use std::borrow::Borrow;
 use crate::hive::{PROPERTIES, PROPERTY, DELETE};
 use std::collections::HashMap;
 use async_std::task::block_on;
+use bytes::{Bytes, BytesMut, BufMut};
 
 pub type PropertyType = toml::Value;
 
@@ -18,7 +19,7 @@ pub struct Property
     pub on_changed: Signal<Option<PropertyType>>,
 }
 impl fmt::Debug for Property {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}={:?}", self.name, self.value)
     }
 }
@@ -117,13 +118,13 @@ impl Property {
     pub fn set(&mut self, v: PropertyType) -> bool
         where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
-        debug!("<<<< set thing {}", v);
+        info!("<<<< set thing {}", v);
         let v_clone = v.clone();
         let op_v = Some(v);
 
         if !self.value.eq(&op_v) {
             self.value = op_v;
-            debug!("<<<< emit change!!");
+            info!("<<<< emit change!!");
 
             block_on(self.on_changed.emit(Some(v_clone)));
             return true;
@@ -140,37 +141,52 @@ impl Property {
 /*
     |P|one=1\ntwo=2\nthree=3
  */
-pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> String {
-    let mut message = PROPERTIES.to_string();
+pub(crate) fn properties_to_bytes(properties: &HashMap<String, Property>) -> Bytes {
+    // let mut bytes = BytesMut::from(&[PROPERTIES]);
+    let mut bytes = BytesMut::new();
+    bytes.put_u8(PROPERTIES);
+    // let mut message = PROPERTIES.to_string();
     for p in properties {
         if p.1.value.is_some() {
-            message.push_str(
-                property_to_sock_str(Some(p.1), false).unwrap().as_str()
+            // message.push_str(
+            //     property_to_bytes(Some(p.1), false).unwrap().as_str()
+            // );
+            bytes.put_slice(
+                &property_to_bytes(Some(p.1), false).unwrap()
             );
-            message.push('\n');
+            // message.push('\n');
+            bytes.put_u8(b'\n');
         }
 
     }
-    return String::from(message);
+    return bytes.freeze()
 }
 /*
     |p|one=1
  */
-pub(crate) fn property_to_sock_str(property:Option<&Property>, inc_head:bool) -> Option<String> {
+pub(crate) fn property_to_bytes(property:Option<&Property>, inc_head:bool) -> Option<Bytes> {
     return match property {
         Some(p) if p.value.is_some() => {
-            let mut message = if inc_head {
-                PROPERTY.to_string()
+            let prop_str = p.to_string();
+            let bytes =  if inc_head {
+                let mut b = BytesMut::with_capacity(prop_str.len()+1);
+                b.put_u8(PROPERTY);
+                b.put_slice(prop_str.as_bytes());
+                b.freeze()
             } else {
-                String::from("")
+                Bytes::from(prop_str)
             };
-            message.push_str(p.to_string().as_str());
-            Some(message)
+            Some(bytes)
         },
         Some(p) => {
-            let mut message = DELETE.to_string();
-            message.push_str(p.get_name());
-            Some(message)
+            info!("... test2 {:?}", inc_head);
+            let p_name = p.get_name();
+            let mut bytes = BytesMut::with_capacity(p_name.len()+1);
+            // let mut message = DELETE.to_string();
+            bytes.put_u8(DELETE);
+            // message.push_str(p.get_name());
+            bytes.put_slice(p_name.as_bytes());
+            Some(bytes.freeze())
         },
         _ => None
     }

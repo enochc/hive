@@ -1,12 +1,12 @@
 
-use log::{debug, info};
 use async_std::{
     io::BufReader,
     net::TcpStream,
     prelude::*,
     task,
 };
-// use futures::{SinkExt, AsyncBufReadExt, AsyncReadExt};
+#[allow(unused_imports)]
+use log::{debug, info, trace};
 use futures::{SinkExt, AsyncBufReadExt};
 use futures::channel::mpsc::{UnboundedSender};
 use futures::executor::block_on;
@@ -17,7 +17,7 @@ use crate::bluetooth::{central::Central};
 use bluster::gatt::event::{Response};
 
 use bytes::{BytesMut, BufMut, Bytes, Buf};
-use crate::hive::{Sender, HI, HELLO, HIVE_PROTOCOL, HEADER_NAME};
+use crate::hive::{Sender, HIVE_PROTOCOL, HEADER_NAME, PONG, PING, Result};
 use std::time::{Duration, SystemTime};
 use async_std::sync::{Arc, RwLock};
 
@@ -55,7 +55,7 @@ pub enum SocketEvent {
     },
     Message {
         from: String,
-        msg: String,
+        msg: Bytes,
     },
     SendBtProps {
         sender: futures::channel::oneshot::Sender<Response>,
@@ -97,8 +97,7 @@ impl Peer {
     }
 
     pub async fn set_name(& self, name: &str) {
-
-        info!("<<<< set name = {:?}", name);
+        debug!("set name = {:?}", name);
         *self.name.write().await = String::from(name);
 
     }
@@ -132,11 +131,8 @@ impl Peer {
             };
             debug!("<< 2 {:?}", peer);
 
-            // Start read loop
             let send_clone = sender.clone();
 
-
-            // todo some sort of handshake, is this we web socket? or a hive socket, or something else entirely
             if is_tcp_server {
                 match stream.as_mut() {
                     Some( s) => {
@@ -175,30 +171,19 @@ impl Peer {
 
     }
 
-    async fn handshake(&mut self, stream:&mut TcpStream, sender: &UnboundedSender<SocketEvent>) -> Result<(), std::io::Error>{
-        // let mut strea_clone = stream.clone();
+    async fn handshake(&mut self, stream:&mut TcpStream, sender: &UnboundedSender<SocketEvent>) -> Result<()>{
+
         let mut reader = BufReader::new(stream.clone());
-
         let mut str = String::new();
-
-        // let buff = [0u8;1024];
-        // let mut buff = vec![0u8];
-        // let r = ReadExt::read(&mut reader, &mut *buff).await;
-        // let r = reader.read(&mut *buff).await;
-        // let r  = AsyncBufReadExt::read(&mut reader, &mut str).await?;
-        // info!("<<handshake read: {:?} = {:?}",r,  buff);
-
-
         AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
-
-        info!("<<< handshake:: {:?}", str);
+        debug!("handshake:: {:?}", str);
 
         if str.starts_with(HIVE_PROTOCOL) {
             loop {
                 let mut bm = BytesMut::new();
                 str = "".to_string();
                 AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
-                info!("<< next line:: {:?}", str);
+                trace!("next line:: {:?}", str);
                 bm.put_slice(str.as_bytes());
                 let my8 = bm.get_u8();
                 match my8 {
@@ -210,7 +195,7 @@ impl Peer {
                         break;
                     },
                     _ => {
-                        info!("<<<<< something else");
+                        trace!("something else");
                         break;
                     }
                 }
@@ -218,12 +203,12 @@ impl Peer {
         } else if str.starts_with("GET") {
             #[cfg(feature = "websock")]
                 {
-                    info!("<< do websocket");
+                    trace!("do websocket");
                     let sock = WebSock::from_stream(reader, stream.clone(), sender.clone()).await?;
                     self.web_sock = Some(sock);
                 }
         };
-        info!("<<<<<<<<<<<<<<<<<, shook");
+        trace!("shook");
         Ok(())
 
     }
@@ -232,22 +217,23 @@ impl Peer {
         let name = &*block_on(self.name.read());
         return String::from(name);
     }
-    pub fn receive_hello(&self){
-        debug!("<< RECEIVED HELLO {:?}", self.to_string());
+    pub fn receive_pong(&self){
+        trace!("RECEIVED PING {:?}", self.to_string());
         self.ack_check.store(false, Relaxed);
     }
     pub async fn ack(&self){
-        debug!("<<<< ACK {:?}",self.to_string());
-        // let mut ff = *self.last_received.write().await;
+        trace!("ACK {:?}",self.to_string());
         *self.last_received.write().await = SystemTime::now();
     }
     // when  hi is received, we send a hello
-    pub async fn send_hello(&self){
-        debug!("<< SEND HELLO {:?}", self.to_string());
-        self.send(HELLO.into()).await;
+    pub async fn send_pong(&self) ->Result<()>{
+        trace!("SEND PONG {:?}", self.to_string());
+        let byte = Bytes::from_static(&[PONG]);
+        self.send(byte).await
     }
 
-    pub async fn wave(&self){
+    /** TODO, clean up, I'm not actually using this anyware, or refactor to a Ping/Pong */
+    pub async fn _wave(&self){
         let name_clone = self.name.clone();
         let addr_clone = self.address.clone();
         let mut perf_clone = self.peripheral.as_ref().unwrap().clone();
@@ -257,18 +243,20 @@ impl Peer {
         let last_received_clone = self.last_received.clone();
         async_std::task::spawn(async move{
             'wave_loop:loop{
-                debug!("<< << <<< << << << << send Hi {:?}, {}", name_clone.read().await, addr_clone);
+                debug!("send Hi {:?}, {}", name_clone.read().await, addr_clone);
                 task::sleep(Duration::from_secs(ACK_DURATION)).await;
                 let since_last_comm= SystemTime::now().duration_since(*last_received_clone.read().await);
-                debug!("<<<<<<< SINCE {:?}", since_last_comm);
+                trace!("<<<<<<< SINCE {:?}", since_last_comm);
                 if since_last_comm.unwrap() > Duration::from_secs(ACK_DURATION){
-                    let mut bytes = BytesMut::from(HI);
-                    bytes.put_slice(name_clone.read().await.as_bytes());
+                    let nc = &*name_clone.read().await;
+                    let mut bytes = BytesMut::with_capacity(nc.len()+1);
+                    bytes.put_u8(PING);
+                    bytes.put_slice(nc.as_bytes());
 
                     match perf_clone.send(bytes.into()).await {
                         Ok(_) => {}
                         Err(e) => {
-                            debug!("<<<<<< Error sending:: {:?}",e);
+                            eprintln!("Error sending:: {:?}",e);
                             break 'wave_loop;
                         }
                     }
@@ -276,61 +264,61 @@ impl Peer {
                     task::sleep(Duration::from_secs(5)).await; // sleep 5 seconds for reply
                     if ack_check_clone.load(Relaxed) {
                         // No hello
-                        debug!("<<<<<<<<<<< KILL THIS PEAR IS DEAD:: {:?}",name_clone.read().await);
+                        debug!("KILL THIS PEER IS DEAD:: {:?}",name_clone.read().await);
                         sender_clone.send(SocketEvent::Hangup {from:adr_clone.clone()}).await.expect("failed to send hangup");
                         break 'wave_loop;
                     }
                 }
 
             }
-            debug!("<< Done Waving <<< {:?}", name_clone.read().await)
+            trace!("Done Waving <<< {:?}", name_clone.read().await)
         });
 
     }
 
-    pub async fn send(& self, msg:String) {
-        debug!("SEND starts here {:?}", msg);
+    pub async fn send(& self, msg:Bytes) -> Result<()> {
+        trace!("SEND starts here {:?}", msg);
         if self.stream.is_some(){
 
             if self.web_sock.is_some(){
-                info!("Sending message to web client at {:?} = {:?}",self.address, msg);
-                self.web_sock.as_ref().unwrap().send_message(msg.as_bytes().into()).await;
+                trace!("Sending message to web client at {:?} = {:?}",self.address, msg);
+                self.web_sock.as_ref().unwrap().send_message(msg).await?;
             } else {
-                let s = self.stream.as_ref().unwrap();
-                let stream = &s.clone();
-                debug!("Send to peer {}: {}", self.name.read().await, msg);
-                self.send_on_stream(&msg).await.expect("failed to send to Peer");
+                trace!("Send to peer {}: {:?}", self.name.read().await, msg);
+                self.send_on_stream(msg).await?;
             }
         } else if self.central.is_some() {
             #[cfg(feature = "bluetooth")]
                 {
-                    debug!("SEND to bt {:?} from {:?}", msg, self.name);
+                    trace!("SEND to bluetooth {:?} from {:?}", msg, self.name);
                     let mut buff = BytesMut::new();
-                    buff.put_slice(msg.as_bytes());
+                    buff.put_slice(msg.as_ref());
                     let sender = self.central.as_ref().unwrap();
                     sender.send(buff).await;
                 }
         }else if self.peripheral.is_some(){
-            debug!("Send via bt peripheral");
-            let mut buff = BytesMut::new();
-            buff.put_slice(msg.as_bytes());
+            trace!("Send via bt peripheral");
+            // let mut buff = BytesMut::new();
+            // buff.put_slice(msg.as_bytes());
+            let mut buff = BytesMut::with_capacity(msg.len());//BytesMut::from(msg.to_vec());
+            buff.put_slice(msg.as_ref());
             let b = buff.freeze();
             self.peripheral.as_ref().unwrap()
                 .send(b.clone()).await.expect("failed to send something somewhere");
-            debug!("sent...");
+            trace!("sent...");
         } else {
             unimplemented!("cant send: {:?}" ,msg);
         }
 
-
+        Ok(())
     }
 
 
-    async fn send_on_stream(&self, message: &str) -> Result<bool, std::io::Error> {
+    async fn send_on_stream(&self, message: Bytes) -> Result<bool> {
         let mut bytes = Vec::new();
         let msg_length: u32 = message.len() as u32;
         bytes.append(&mut msg_length.to_be_bytes().to_vec());
-        bytes.append(&mut message.as_bytes().to_vec());
+        bytes.append(&mut message.to_vec());
         self.stream.as_ref().unwrap().write(&bytes).await.expect("Failed to write to stream");
         Result::Ok(true)
     }
@@ -374,7 +362,8 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream) {
                     let red = reader.read_exact(&mut size_buff).await;
                     match red {
                         Ok(_t) => {
-                            let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
+                            // let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
+                            let msg = Bytes::from(size_buff);
                             debug!("Read message: {:?}", &msg);
                             let se = SocketEvent::Message {
                                 from,

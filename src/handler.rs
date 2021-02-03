@@ -1,14 +1,18 @@
+use bytes::{BufMut, BytesMut};
 use futures::channel::mpsc::UnboundedSender;
 use futures::executor::block_on;
 use futures::SinkExt;
+#[allow(unused_imports)]
+use log::{debug, error, info};
 
-use crate::hive::{PEER_MESSAGE_DIV};
+use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
 use crate::peer::SocketEvent;
-use crate::property::{Property, PropertyType, property_to_sock_str};
+use crate::property::{Property, property_to_bytes, PropertyType};
 
 #[derive(Clone)]
 pub struct Handler {
-    pub (crate) sender: UnboundedSender<SocketEvent>
+    pub (crate) sender: UnboundedSender<SocketEvent>,
+    pub from_name: String,
 }
 
 
@@ -26,31 +30,38 @@ impl Handler {
 
     pub async fn send_property(&mut self, property:Property){
 
-        let message = property_to_sock_str(Some(&property), true)
+        let message = property_to_bytes(Some(&property), true)
             .unwrap();
+        info!("... send_property: {:?}", message);
         let socket_event = SocketEvent::Message {
             from: String::from(""),
-            msg: message.to_string()
+            msg: message
         };
+
         self.sender.send(socket_event).await.expect("Failed to send property");
 
     }
 
     pub async fn delete_property(&mut self, name: &str){
         let p = Property::new(name, None);
-        let message = property_to_sock_str(Some(&p), true).unwrap();
+        let message = property_to_bytes(Some(&p), true).unwrap();
         let socket_event = SocketEvent::Message {
             from: String::from(""),
-            msg: message.to_string()
+            msg: message
         };
         self.sender.send(socket_event).await.unwrap();
     }
 
     pub async fn send_to_peer(&mut self, peer_name:&str, msg:&str){
-        let message = format!("|s|{}{}{}",peer_name,PEER_MESSAGE_DIV, msg);
+        let mut bytes = BytesMut::with_capacity(peer_name.len()+msg.len()+2);
+        bytes.put_u8(PEER_MESSAGE);
+        bytes.put_slice(peer_name.as_bytes());
+        bytes.put_u8(PEER_MESSAGE_DIV.as_bytes()[0]);
+        bytes.put_slice(msg.as_bytes());
+        info!(".... send to peer: {:?}", bytes);
         let socket_event = SocketEvent::Message {
             from: String::from(""),
-            msg: message.to_string()
+            msg: bytes.freeze()
         };
         self.sender.send(socket_event).await.unwrap();
 

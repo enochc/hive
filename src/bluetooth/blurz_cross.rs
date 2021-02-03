@@ -26,7 +26,7 @@ impl From<std::io::Error> for BtError {
     }
 }
 impl std::fmt::Display for BtError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:}", std::error::Error::to_string(self))
     }
 }
@@ -116,7 +116,7 @@ pub struct BluetoothDevice<'a> {
     session: &'a BluetoothSession,
 }
 impl<'a> BluetoothDevice<'a>{
-    pub fn new(_session: &'a BluetoothSession, _object_path: String) -> BluetoothDevice {unimplemented!()}
+    pub fn new(_session: &'a BluetoothSession, _object_path: String) -> BluetoothDevice<'a> {unimplemented!()}
     pub fn is_connected(&self) -> Result<bool, Box<dyn Error>> {unimplemented!()}
     pub fn is_paired(&self) -> Result<bool, Box<dyn Error>> {unimplemented!()}
     pub fn get_name(&self) -> Result<String, Box<dyn Error>> {unimplemented!()}
@@ -150,7 +150,7 @@ pub struct BtSocketConnect<'a> {
 pub struct BtSocket{}
 impl BtSocket{
     pub fn new(_proto: BtProtocol) -> Result<BtSocket, BtError> {unimplemented!()}
-    pub fn connect(&mut self, _addr: BtAddr) -> Result<BtSocketConnect, BtError> {unimplemented!()}
+    pub fn connect(&mut self, _addr: BtAddr) -> Result<BtSocketConnect<'_>, BtError> {unimplemented!()}
     pub fn get_fd(&self) -> i32 {unimplemented!()}
 }
 #[derive(Debug)]
@@ -178,7 +178,7 @@ impl<'a> BluetoothDiscoverySession<'a>{
     pub fn create_session(
         _session: &'a BluetoothSession,
         _adapter: String,
-    ) -> Result<BluetoothDiscoverySession, Box<dyn Error>> {unimplemented!()}
+    ) -> Result<BluetoothDiscoverySession<'a>, Box<dyn Error>> {unimplemented!()}
     pub fn start_discovery(&self) -> Result<(), Box<dyn Error>> {unimplemented!()}
     pub fn stop_discovery(&self) -> Result<(), Box<dyn Error>> {unimplemented!()}
 }
@@ -189,7 +189,7 @@ pub struct BluetoothGATTService<'a> {
     session: &'a BluetoothSession,
 }
 impl<'a> BluetoothGATTService<'a> {
-    pub fn new(_session: &'a BluetoothSession, _object_path: String) -> BluetoothGATTService {unimplemented!()}
+    pub fn new(_session: &'a BluetoothSession, _object_path: String) -> BluetoothGATTService<'a> {unimplemented!()}
     pub fn get_gatt_characteristics(&self) -> Result<Vec<String>, Box<dyn Error>> {unimplemented!()}
     pub fn get_uuid(&self) -> Result<String, Box<dyn Error>> {unimplemented!()}
 }
@@ -205,7 +205,7 @@ pub struct OwnedFd {
 }
 
 impl<'a> BluetoothGATTCharacteristic<'a> {
-    pub fn new(_session: &'a BluetoothSession, _object_path: String) -> BluetoothGATTCharacteristic {unimplemented!()}
+    pub fn new(_session: &'a BluetoothSession, _object_path: String) -> BluetoothGATTCharacteristic<'a> {unimplemented!()}
     pub fn get_gatt_descriptors(&self) -> Result<Vec<String>, Box<dyn Error>> {unimplemented!()}
     pub fn read_value(&self, _offset: Option<u16>) -> Result<Vec<u8>, Box<dyn Error>> {unimplemented!()}
     pub fn write_value(&self, _values: Vec<u8>, _offset: Option<u16>) -> Result<(), Box<dyn Error>> {unimplemented!()}
@@ -230,7 +230,7 @@ pub struct BluetoothGATTDescriptor<'a> {
     session: &'a BluetoothSession,
 }
 impl<'a> BluetoothGATTDescriptor<'a> {
-    pub fn new(_session: &'a BluetoothSession, _object_path: String) -> BluetoothGATTDescriptor {unimplemented!()}
+    pub fn new(_session: &'a BluetoothSession, _object_path: String) -> BluetoothGATTDescriptor<'a> {unimplemented!()}
     pub fn read_value(&self, _offset: Option<u16>) -> Result<Vec<u8>, Box<dyn Error>> {unimplemented!()}
     pub fn write_value(&self, _values: Vec<u8>, _offset: Option<u16>) -> Result<(), Box<dyn Error>> {unimplemented!()}
     pub fn get_uuid(&self) -> Result<String, Box<dyn Error>> {unimplemented!()}

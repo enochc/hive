@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::string::FromUtf8Error;
 
 use async_std::{
     io::BufReader,
@@ -7,18 +6,16 @@ use async_std::{
     task,
 };
 use base64;
-use bytes::{BytesMut, Bytes};
+use bytes::{Bytes, BytesMut};
 use futures::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, SinkExt};
 use futures::channel::mpsc::UnboundedSender;
-use log::{debug, info};
+use log::{debug, info, trace};
 use sha1::{Digest, Sha1};
 use tokio_util::codec::Encoder;
 use websocket_codec::{Message, MessageCodec, Opcode};
-use websocket_codec::protocol::{DataLength, FrameHeader, FrameHeaderCodec};
 
+use crate::hive::Result;
 use crate::peer::SocketEvent;
-use std::error::Error;
-use async_std::net::SocketAddr;
 
 const SEC_KEY: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -29,15 +26,13 @@ pub struct WebSock {
 }
 
 impl WebSock {
-    pub fn address(&self)-> Result<String, std::io::Error> {
-        return match self.stream.peer_addr(){
-            Ok(a) => Ok(a.to_string()),
-            Err(e) => {Result::Err(e)}
-        }
+    pub fn address(&self)-> String {
+        return self.stream.peer_addr()
+            .map_or_else(|_|{"... empty ...".into()}, |x|{x.to_string()});
     }
     pub async fn from_stream(mut reader: BufReader<TcpStream>,
                              mut stream: TcpStream,
-                             mut sender: UnboundedSender<SocketEvent>) -> Result<WebSock, std::io::Error> {
+                             mut sender: UnboundedSender<SocketEvent>) -> Result<WebSock> {
         let mut count = 0;
         let mut str: String;
         let mut headers = HashMap::new();
@@ -48,7 +43,6 @@ impl WebSock {
             let m = AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
             let parts = str.split(":").collect::<Vec<_>>();
             headers.insert(parts.first().unwrap().to_string(), parts.last().unwrap().trim().to_string());
-            // info!("<< parts: {:?}, {:?}", parts.first().unwrap(), parts.last().unwrap().trim());
 
             let done = parts.len() < 2;
             if count > 30 || m == 0 || done {
@@ -59,12 +53,11 @@ impl WebSock {
                 response_string.push_str("Sec-WebSocket-Protocol: hive\r\n");
                 response_string.push_str(&format!("Sec-WebSocket-Accept: {}\r\n\r\n", sec_resp));
 
-
                 AsyncWriteExt::write(&mut stream, response_string.as_bytes()).await?;
                 AsyncWriteExt::flush(&mut stream).await?;
 
                 let from = stream.peer_addr().unwrap().to_string();
-                let mut stream_clone = stream.clone();
+                let stream_clone = stream.clone();
                 let addr = stream.peer_addr().unwrap().to_string();
                 task::spawn(async move {
                     read_loop(&sender, stream_clone, &addr).await;
@@ -88,33 +81,32 @@ impl WebSock {
         let mut kk = String::with_capacity(key.len() + 38);
         kk.push_str(key);
         kk.push_str(SEC_KEY);
-
         let hash = Sha1::digest(kk.as_bytes());
         return base64::encode(hash);
-
         //Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
     }
 
-    pub async fn send_message(&self, msg:&[u8]) {
+    pub async fn send_message(&self, msg: Bytes) ->Result<()> {
 
-        send_message(msg.into(), &self.stream).await;
+        send_message(msg, &self.stream).await
     }
 }
 
-async fn send_message(msg: &[u8], mut stream: &TcpStream) {
-    let message = Message::binary(msg.to_owned());
+async fn send_message(msg: Bytes, mut stream: &TcpStream) -> Result<()> {
+    let message = Message::binary(msg);
 
     let mut bytes = BytesMut::new();
     MessageCodec::server()
-        .encode(&message, &mut bytes)
-        .expect("didn't expect MessageCodec::encode to return an error");
+        .encode(&message, &mut bytes)?;
+        // .expect("didn't expect MessageCodec::encode to return an error");
 
-    AsyncWriteExt::write(&mut stream, bytes.as_ref()).await;
-    info!("really send:: {:?}", stream.peer_addr().unwrap());
-    stream.flush().await;
+    AsyncWriteExt::write(&mut stream, bytes.as_ref()).await?;
+    trace!("really send:: {:?}", stream.peer_addr().unwrap());
+    stream.flush().await?;
+    Ok(())
 }
 
-async fn read_loop(mut sender: &UnboundedSender<SocketEvent>, mut stream: TcpStream, from_string:&String) {
+async fn read_loop(mut sender: &UnboundedSender<SocketEvent>, stream: TcpStream, from_string:&String) {
     use tokio_util::codec::Decoder;
 
     let mut is_running = true;
@@ -125,34 +117,34 @@ async fn read_loop(mut sender: &UnboundedSender<SocketEvent>, mut stream: TcpStr
         let read = AsyncReadExt::read(&mut reader, &mut buffer).await.expect("failed to read from web socket");
         let mut bytes = BytesMut::from(buffer.as_ref());
         let mut mc = MessageCodec::server();
-        info!("reading:: {:?}", read);
+        trace!("reading:: {:?}", read);
         if read == 0 {
-            info!("<<< read 0 from {:?}",stream.peer_addr());
+            trace!("read 0 from {:?}",stream.peer_addr());
             is_running = false;
             continue;
         }
-        let res = mc.decode(&mut bytes); //.unwrap().unwrap();
-        info!("<<< DECODED: {:?}, from {:?}", res, stream.peer_addr().unwrap());
+        let res = mc.decode(&mut bytes);
+        trace!("DECODED: {:?}, from {:?}", res, stream.peer_addr().unwrap());
         match res {
             Ok(t) => {
                 let message = t.unwrap();
                 match message.opcode() {
                     Opcode::Binary => {
-                        info!("<<<< BINARY OPCODE: {:?}", message);
+                        debug!("BINARY OPCODE: {:?}", message);
                     },
                     Opcode::Text => {
-                        let received = message.data().to_vec();
-                        let ret_string = String::from_utf8(received).unwrap();//format!("{:?}",received);
-                        info!("<<<< MESSAGE STRING {:?}", ret_string);
+                        let received = message.data().to_owned();//.to_vec();
+
+                        debug!("MESSAGE {:?}", received);
                         // process message
                         let evnt = SocketEvent::Message {
                             from: from_string.clone(),
-                            msg: ret_string,
+                            msg: received,
                         };
-                        sender.send(evnt).await;
+                        sender.send(evnt).await.expect("failed to send");
                     }
                     Opcode::Close => {
-                        debug!("<<<<<<<, CLOSE");
+                        debug!("CLOSE socket");
                         is_running = false;
                     }
                     o => {
@@ -165,12 +157,7 @@ async fn read_loop(mut sender: &UnboundedSender<SocketEvent>, mut stream: TcpStr
                 is_running = false;
             }
         }
-
-
-        // if read == 0 {
-        //     is_running = false;
-        // }
     }
 
-    info!("<< websock run done");
+    debug!("Web sock run done!");
 }
