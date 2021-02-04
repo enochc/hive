@@ -9,6 +9,7 @@ use base64;
 use bytes::{Bytes, BytesMut};
 use futures::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, SinkExt};
 use futures::channel::mpsc::UnboundedSender;
+#[allow(unused_imports)]
 use log::{debug, info, trace};
 use sha1::{Digest, Sha1};
 use tokio_util::codec::Encoder;
@@ -96,12 +97,12 @@ async fn send_message(msg: Bytes, mut stream: &TcpStream) -> Result<()> {
     let message = Message::binary(msg);
 
     let mut bytes = BytesMut::new();
-    MessageCodec::server()
-        .encode(&message, &mut bytes)?;
+    MessageCodec::server().encode(&message, &mut bytes)?;
         // .expect("didn't expect MessageCodec::encode to return an error");
 
     AsyncWriteExt::write(&mut stream, bytes.as_ref()).await?;
-    trace!("really send:: {:?}", stream.peer_addr().unwrap());
+    // debug!("really send:: {:?}", stream.peer_addr().unwrap());
+    debug!("really send:: {:?}", message);
     stream.flush().await?;
     Ok(())
 }
@@ -117,43 +118,48 @@ async fn read_loop(mut sender: &UnboundedSender<SocketEvent>, stream: TcpStream,
         let read = AsyncReadExt::read(&mut reader, &mut buffer).await.expect("failed to read from web socket");
         let mut bytes = BytesMut::from(buffer.as_ref());
         let mut mc = MessageCodec::server();
-        trace!("reading:: {:?}", read);
+        debug!("reading:: {:?}", read);
         if read == 0 {
-            trace!("read 0 from {:?}",stream.peer_addr());
+            debug!("read 0 from {:?}",stream.peer_addr());
             is_running = false;
             continue;
         }
         let res = mc.decode(&mut bytes);
-        trace!("DECODED: {:?}, from {:?}", res, stream.peer_addr().unwrap());
+        debug!("DECODED: {:?}, from {:?}", res, stream.peer_addr().unwrap());
         match res {
             Ok(t) => {
                 let message = t.unwrap();
                 match message.opcode() {
-                    Opcode::Binary => {
-                        debug!("BINARY OPCODE: {:?}", message);
-                    },
-                    Opcode::Text => {
-                        let received = message.data().to_owned();//.to_vec();
-
-                        debug!("MESSAGE {:?}", received);
-                        // process message
+                    Opcode::Binary | Opcode::Text => {
+                        debug!("OPCODE {:?}: {:?}",message.opcode(), message);
+                        let received = message.data().to_owned();
                         let evnt = SocketEvent::Message {
                             from: from_string.clone(),
                             msg: received,
                         };
                         sender.send(evnt).await.expect("failed to send");
-                    }
+                    },
+                    // Opcode::Text => {
+                    //     let received = message.data().to_owned();
+                    //     debug!("TEXT OPCODE {:?}", received);
+                    //     // process message
+                    //     let evnt = SocketEvent::Message {
+                    //         from: from_string.clone(),
+                    //         msg: received,
+                    //     };
+                    //     sender.send(evnt).await.expect("failed to send");
+                    // }
                     Opcode::Close => {
                         debug!("CLOSE socket");
                         is_running = false;
                     }
                     o => {
-                        info!("Unexpected opcode: {:?}", o)
+                        debug!("Unexpected opcode: {:?}", o)
                     }
                 }
             },
             Err(e) => {
-                info!("ERROR: {:?}", e);
+                debug!("ERROR: {:?}", e);
                 is_running = false;
             }
         }

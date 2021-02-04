@@ -183,7 +183,7 @@ impl Peer {
                 let mut bm = BytesMut::new();
                 str = "".to_string();
                 AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
-                trace!("next line:: {:?}", str);
+                debug!("next line:: {:?}", str);
                 bm.put_slice(str.as_bytes());
                 let my8 = bm.get_u8();
                 match my8 {
@@ -195,7 +195,7 @@ impl Peer {
                         break;
                     },
                     _ => {
-                        trace!("something else");
+                        debug!("something else");
                         break;
                     }
                 }
@@ -203,12 +203,12 @@ impl Peer {
         } else if str.starts_with("GET") {
             #[cfg(feature = "websock")]
                 {
-                    trace!("do websocket");
+                    debug!("do websocket");
                     let sock = WebSock::from_stream(reader, stream.clone(), sender.clone()).await?;
                     self.web_sock = Some(sock);
                 }
         };
-        trace!("shook");
+        debug!("shook");
         Ok(())
 
     }
@@ -218,16 +218,16 @@ impl Peer {
         return String::from(name);
     }
     pub fn receive_pong(&self){
-        trace!("RECEIVED PING {:?}", self.to_string());
+        debug!("RECEIVED PING {:?}", self.to_string());
         self.ack_check.store(false, Relaxed);
     }
     pub async fn ack(&self){
-        trace!("ACK {:?}",self.to_string());
+        debug!("ACK {:?}",self.to_string());
         *self.last_received.write().await = SystemTime::now();
     }
     // when  hi is received, we send a hello
     pub async fn send_pong(&self) ->Result<()>{
-        trace!("SEND PONG {:?}", self.to_string());
+        debug!("SEND PONG {:?}", self.to_string());
         let byte = Bytes::from_static(&[PONG]);
         self.send(byte).await
     }
@@ -246,7 +246,6 @@ impl Peer {
                 debug!("send Hi {:?}, {}", name_clone.read().await, addr_clone);
                 task::sleep(Duration::from_secs(ACK_DURATION)).await;
                 let since_last_comm= SystemTime::now().duration_since(*last_received_clone.read().await);
-                trace!("<<<<<<< SINCE {:?}", since_last_comm);
                 if since_last_comm.unwrap() > Duration::from_secs(ACK_DURATION){
                     let nc = &*name_clone.read().await;
                     let mut bytes = BytesMut::with_capacity(nc.len()+1);

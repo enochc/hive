@@ -414,7 +414,7 @@ impl Hive {
                             self.sender.clone(),
                             address,
                             is_tcp_server);
-                        info!(".... PEER: {:?}", p);
+                        info!(".... PEER: {:?}, {}", p, is_tcp_server);
 
                         // if were a bluetooth peripheral, then we want to keep track of all our
                         // connected remote peers to verify that they're still there
@@ -426,6 +426,7 @@ impl Hive {
                         // we auto send all the servers via TCP because it prevents un additional request
                         // if is_tcp_server && p.web_sock.is_none() {
                         if is_tcp_server {
+                            debug!("......SEND HEADERS");
                             self.send_headers(&p).await?;
                             self.send_properties(&p).await?;
                         }
@@ -526,13 +527,18 @@ impl Hive {
     }
 
     async fn notify_peers_change(&mut self) {
+        debug!("..... notify peers changed");
         use futures::future::join_all;
-        let peer_str = format!("{}{}", PEER_RESPONSE, self.peer_string());
+        let peer_string = self.peer_string();
+        let peer_str = peer_string.as_bytes();
+        let mut bytes = BytesMut::with_capacity(peer_str.len()+1);
+        bytes.put_u8(PEER_RESPONSE);
+        bytes.put_slice(peer_str);
+        let bf = bytes.freeze();
 
         let mut futures = vec![];
         self.peers.iter().filter(|p| { p.update_peers }).for_each(|p| {
-            let bytes = Bytes::from(peer_str.clone());
-            futures.push(p.send(bytes))
+            futures.push(p.send(bf.clone()));
         });
         join_all(futures).await;
     }
@@ -541,7 +547,6 @@ impl Hive {
         let p = self.get_peer_by_name(peer_name);
         match p {
             Some(peer) => {
-                // let msg = format!("{}{}", PEER_MESSAGE, msg);
                 let mut bytes = BytesMut::with_capacity(msg.len() + 1);
                 bytes.put_u8(PEER_MESSAGE);
                 bytes.put_slice(msg.as_bytes());
@@ -579,7 +584,7 @@ impl Hive {
     async fn send_headers(&self, peer: &Peer) -> Result<()> {
         let mut bytes = BytesMut::with_capacity(self.name.len() + 3);
         bytes.put_u8(HEADER);
-        bytes.put_u8(PEER_REQUESTS);
+        //bytes.put_u8(PEER_REQUESTS);
         bytes.put_u8(HEADER_NAME);
         bytes.put_slice(self.name.as_bytes());
         trace!(".... send headers: {:?}", bytes);
