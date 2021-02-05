@@ -143,7 +143,7 @@ impl Peripheral {
             while let Some(event) = rx.next().await {
                 match event {
                     Event::ReadRequest(read_request) => {
-                        info!(
+                        debug!(
                             "Characteristic got a read request with offset {}!",
                             read_request.offset
                         );
@@ -155,12 +155,12 @@ impl Peripheral {
                             .response
                             .send(Response::Success(bmut.to_vec()))
                             .unwrap();
-                        info!("Characteristic responded with \"{}\"", value);
+                        debug!("Characteristic responded with \"{}\"", value);
                     }
                     Event::WriteRequest(write_request) => {
                         let mut bm = BytesMut::new();
                         bm.put_slice(&write_request.data);
-                        info!(
+                        debug!(
                             "Characteristic got a write request with offset {} and data {:?}!",
                             write_request.offset, bm
                         );
@@ -169,7 +169,7 @@ impl Peripheral {
                             HiveMessage::CONNECTED => {
                                 let msg = String::from_utf8(bm.to_vec()).unwrap();
                                 println!("<<<<<<<<< CONNECTED: {:?}", msg);
-                                if msg.len() <= 0 { info!("no name or address") } else {
+                                if msg.len() <= 0 { debug!("no name or address") } else {
                                     let vec: Vec<&str> = msg.split(",").collect();
                                     let a = vec.get(1).unwrap().to_string();
                                     let mut addr = self.address.lock().unwrap();//.clone();
@@ -193,11 +193,11 @@ impl Peripheral {
                             .unwrap();
                     }
                     Event::NotifySubscribe(notify_subscribe) => {
-                        info!("Characteristic got a notify subscription!");
+                        debug!("Characteristic got a notify subscription!");
                         *subscription.write().unwrap() = Some(notify_subscribe)
                     }
                     Event::NotifyUnsubscribe => {
-                        info!("Characteristic got a notify unsubscribe!");
+                        debug!("Characteristic got a notify unsubscribe!");
                     }
                 };
             }
@@ -211,16 +211,16 @@ impl Peripheral {
             while let Some(event) = rx.next().await {
                 match event {
                     Event::ReadRequest(read_request) => {
-                        info!("read properties {:?}", read_request);
+                        debug!("read properties {:?}", read_request);
                         let event = SocketEvent::SendBtProps {
                             sender: read_request.response//sender_properties_descriptor.clone()
                         };
                         event_sender_clone.send(event).await.expect("Failed to send read_props event");
                     }
                     Event::WriteRequest(write_request) => {
-                        info!("write properties {:?}, NOPE!!", write_request.data);
+                        debug!("write properties {:?}, NOPE!!", write_request.data);
                     }
-                    _ => info!("Event not supported for Descriptors!"),
+                    _ => debug!("Event not supported for Descriptors!"),
                 }
             }
         };
@@ -231,7 +231,7 @@ impl Peripheral {
             while let Some(event) = rx.next().await {
                 match event {
                     Event::ReadRequest(read_request) => {
-                        info!(
+                        debug!(
                             "Descriptor got a read request with offset {}!",
                             read_request.offset
                         );
@@ -240,11 +240,11 @@ impl Peripheral {
                             .response
                             .send(Response::Success(value.clone().into()))
                             .unwrap();
-                        info!("Descriptor responded with \"{}\"", value);
+                        debug!("Descriptor responded with \"{}\"", value);
                     }
                     Event::WriteRequest(write_request) => {
                         let new_value = Bytes::from(write_request.data);
-                        info!(
+                        debug!(
                             "Descriptor got a write request with offset {} and data {:?}!",
                             write_request.offset, new_value,
                         );
@@ -260,7 +260,7 @@ impl Peripheral {
                             .send(Response::Success(vec![]))
                             .expect("Failed to send response to descriptor write");
                     }
-                    _ => info!("Event not supported for Descriptors!"),
+                    _ => debug!("Event not supported for Descriptors!"),
                 };
             }
         };
@@ -277,12 +277,12 @@ impl Peripheral {
         let ble_name_clone = self.ble_name.clone();
         let event_sender_clone = self.event_sender.clone();
         let main_fut = async move {
-            info!("ONE");
+            debug!("ONE");
 
             let powered = peripheral.is_powered().await;
-            info!(":::::: {:?}", powered);
+            debug!(":::::: {:?}", powered);
             while !peripheral.is_powered().await.expect("Failed to check if powered") {}
-            info!("Peripheral powered on");
+            debug!("Peripheral powered on");
             peripheral.register_gatt().await.unwrap();
 
             if do_advertise {
@@ -290,7 +290,7 @@ impl Peripheral {
                 peripheral.start_advertising(&ble_name_clone, &[]).await
                     .expect("Failed to start_advertising");
                 while !peripheral.is_advertising().await.unwrap() {}
-                info!("Peripheral started advertising");
+                debug!("Peripheral started advertising");
 
                 while !event_sender_clone.is_closed() {
                     tokio::time::delay_for(Duration::from_secs(1)).await;
@@ -298,7 +298,7 @@ impl Peripheral {
 
                 peripheral.stop_advertising().await.unwrap();
                 set_discoverable(false).expect("failed to stop being discovered");
-                info!("Peripheral stopped advertising");
+                debug!("Peripheral stopped advertising");
             }
         };
 
@@ -325,7 +325,7 @@ impl Peripheral {
         //     block_on(fut);
         // });
         // main_fut.await;
-        info!("<< Peripheral stopped!");
+        debug!("<< Peripheral stopped!");
         Ok(())
     }
 }

@@ -39,40 +39,11 @@ impl log::Log for SimpleLogger {
     fn flush(&self) {}
 }
 pub static LOGGER: SimpleLogger = SimpleLogger;
-pub fn init_logging(){
-    log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Debug)).expect("failed to init logger");
-    // log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Info)).expect("failed to init logger");
+
+pub fn init_logging(level:Option<LevelFilter>){
+    let myLevel = match level {
+        Some(l) => l,
+        None => LevelFilter::Trace
+    };
+    log::set_logger(&LOGGER).map(|()| log::set_max_level(myLevel)).expect("failed to init logger");
 }
-
-// use futures::channel::mpsc::{UnboundedSender};
-// use futures::Future;
-// use futures::{SinkExt, AsyncReadExt, AsyncWriteExt};
-
-// use async_std::{
-//     prelude::*,
-// };
-
-// futures_io::AsyncWrite
-
-// pub trait HiveSocket {
-//     // fn read(bytes:&[u8]){}
-//     fn do_write(& self, bytes:&[u8]) {}
-//     fn do_read(& self, bytes:&[u8]){}
-// }
-//
-// impl HiveSocket for async_std::net::TcpStream {
-//     fn do_write(& self, bytes:&[u8]) {
-//         println!("writing");
-//         async_std::task::block_on(async{
-//             let mut  s = self;
-//             s.write(bytes).await;
-//         });
-//     }
-// }
-
-
-// fn get_toml_config(file_path: &str) -> toml::Value{
-//     let foo: String = fs::read_to_string("examples/properties.toml").unwrap().parse().unwrap();
-//     return toml::from_str(&foo).unwrap();
-// }
-

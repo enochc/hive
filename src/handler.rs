@@ -32,7 +32,7 @@ impl Handler {
 
         let message = property_to_bytes(Some(&property), true)
             .unwrap();
-        info!("... send_property: {:?}", message);
+        info!("... send_property: {:?}, {:?}", message, self.sender.is_closed());
         let socket_event = SocketEvent::Message {
             from: String::from(""),
             msg: message
@@ -58,7 +58,7 @@ impl Handler {
         bytes.put_slice(peer_name.as_bytes());
         bytes.put_u8(PEER_MESSAGE_DIV.as_bytes()[0]);
         bytes.put_slice(msg.as_bytes());
-        info!(".... send to peer: {:?}", bytes);
+        debug!(".... send to peer: {:?}", bytes);
         let socket_event = SocketEvent::Message {
             from: String::from(""),
             msg: bytes.freeze()

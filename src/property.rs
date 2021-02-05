@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use log::{debug, info};
 use crate::signal::Signal;
 use std::convert::TryFrom;
@@ -118,13 +119,13 @@ impl Property {
     pub fn set(&mut self, v: PropertyType) -> bool
         where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
-        info!("<<<< set thing {}", v);
+        debug!("<<<< set thing {}", v);
         let v_clone = v.clone();
         let op_v = Some(v);
 
         if !self.value.eq(&op_v) {
             self.value = op_v;
-            info!("<<<< emit change!!");
+            debug!("<<<< emit change!!");
 
             block_on(self.on_changed.emit(Some(v_clone)));
             return true;
@@ -179,7 +180,7 @@ pub(crate) fn property_to_bytes(property:Option<&Property>, inc_head:bool) -> Op
             Some(bytes)
         },
         Some(p) => {
-            info!("... test2 {:?}", inc_head);
+            debug!("... test2 {:?}", inc_head);
             let p_name = p.get_name();
             let mut bytes = BytesMut::with_capacity(p_name.len()+1);
             // let mut message = DELETE.to_string();

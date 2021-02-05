@@ -12,13 +12,13 @@ use async_std::task::block_on;
 use std::thread::sleep;
 use std::time::Duration;
 use hive::init_logging;
-use log::{debug, info, error};
+use log::{debug, info, error, LevelFilter};
 
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 #[test]
 fn main() {
-    init_logging();
+    init_logging(Some(LevelFilter::Debug));
     let counter = Arc::new(AtomicUsize::new(0));
     let count1 = counter.clone();
     let count2 = counter.clone();
@@ -42,11 +42,11 @@ fn main() {
     let mut server_hive = Hive::new_from_str(props_str);
     let prop = server_hive.get_mut_property("thermostatName").unwrap();
     server_hive.get_mut_property("thermostatName", ).unwrap().on_changed.connect(move |value| {
-        info!("++++ 222222222 SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
+        debug!("++++ 222222222 SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
         count1.fetch_add(1, Ordering::SeqCst);
     });
     server_hive.message_received.connect(move |message|{
-        info!("++++ ----------  MESSAGE {}", message);
+        debug!("++++ ----------  MESSAGE {}", message);
         count4.fetch_add(1, Ordering::SeqCst);
     });
 
@@ -60,16 +60,16 @@ fn main() {
 
     let mut client_hive = Hive::new_from_str("connect = \"127.0.0.1:3000\"\nname=\"client1\"");
     client_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(move |value| {
-        info!("++++ 1111111 CLIENT THERMOSTAT NAME CHANGED: {:?}", value);
+        debug!("++++ 1111111 CLIENT THERMOSTAT NAME CHANGED: {:?}", value);
         count3.fetch_add(1, Ordering::SeqCst);
     });
     client_hive.message_received.connect(move |message| {
-        info!("++++ ------------- MESSAGE {}", message);
+        debug!("++++ ------------- MESSAGE {}", message);
         count2.fetch_add(1, Ordering::SeqCst);
     });
 
     client_hive.get_mut_property("thingvalue").unwrap().on_changed.connect(move |value|{
-        info!(" ++++ 1111111 CLIENT thing value::::::::::::::::::::: {:?}", value);
+        debug!(" ++++ 1111111 CLIENT thing value::::::::::::::::::::: {:?}", value);
         count5.fetch_add(1, Ordering::SeqCst);
     });
 
@@ -95,10 +95,10 @@ fn main() {
             task::sleep(sleep_dur).await;
             clone_hand.send_to_peer("Server", "hey mr man").await; // + 1
             task::sleep(sleep_dur).await;
-            info!("SENT thermostatName = Before");
+            debug!("SENT thermostatName = Before");
             clone_hand.send_property_value("thermostatName", Some(&"Before".into())).await; // +2
             task::sleep(sleep_dur).await;
-            info!("DELETE thermostatName");
+            debug!("DELETE thermostatName");
             server_hand.delete_property("thermostatName").await;
             task::sleep(sleep_dur).await;
             server_hand.send_property_value("thingvalue", Some(&2.into())).await; // +1
@@ -108,7 +108,7 @@ fn main() {
             task::sleep(sleep_dur).await;
 
         } else {
-            info!("server is not connected");
+            debug!("server is not connected");
         }
         sender.send(1 as i32).await;
 
@@ -118,7 +118,7 @@ fn main() {
     assert_eq!(counter.load(Ordering::Relaxed), 7);
     client_hand.hangup();
 
-    info!("done with stuff");
+    debug!("done with stuff");
 
 }
 

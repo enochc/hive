@@ -106,16 +106,16 @@ impl Central {
                                         from: str.clone(),
                                         msg: bytes,
                                     };
-                                    info!("SENDING MESSAGE {:?}",se);
+                                    debug!("SENDING MESSAGE {:?}",se);
                                     block_on(sender_clone.send(se)).unwrap();
                                 } else {
-                                    info!("not sending message!!!! ");
+                                    debug!("not sending message!!!! ");
                                 }
 
                             }
                             BluetoothEvent::Connected{object_path, connected} => {
 
-                                info!("CONNECTED: {:?} {:?}", connected, object_path);
+                                debug!("CONNECTED: {:?} {:?}", connected, object_path);
                                 // let str = &*mydevice_id_clone.lock().unwrap();
                                 // if object_path.eq(str){
                                 //     debug!("<<<<<<<< THIS IS MY DEVICE");

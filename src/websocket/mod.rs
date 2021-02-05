@@ -20,7 +20,7 @@ use crate::peer::SocketEvent;
 
 const SEC_KEY: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WebSock {
     headers: HashMap<String, String>,
     stream: TcpStream,
@@ -62,9 +62,9 @@ impl WebSock {
                 let addr = stream.peer_addr().unwrap().to_string();
                 task::spawn(async move {
                     read_loop(&sender, stream_clone, &addr).await;
-                    info!("<<< READ DONE, send hangup");
+                    debug!("<<< READ DONE, send hangup");
                     sender.send(SocketEvent::Hangup { from }).await.expect("failed to send hangup");
-                    info!("<<SENT")
+                    debug!("<<SENT")
                 });
 
                 break;
