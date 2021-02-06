@@ -70,12 +70,8 @@ fn main() {
     });
 
 
-    let mut server_hand = server_hive.get_handler();
     let server_connected = server_hive.connected.clone();
-    task::Builder::new().name("SERVER HIVE".to_string()).spawn(async move {
-        server_hive.run().await;
-
-    });
+    let mut server_hand = server_hive.go(true);
 
     let ack_clone = ack.clone();
     let mut client_hive = Hive::new_from_str("connect = \"127.0.0.1:3000\"\nname=\"client1\"");
@@ -104,11 +100,7 @@ fn main() {
         cvar.notify_one();
     });
 
-    let mut client_hand = client_hive.get_handler();
-
-    task::spawn(async move {
-       client_hive.run().await;
-    });
+    let mut client_hand = client_hive.go(true);
 
     let ack_clone = ack.clone();
     simple_signal::set_handler(&[Signal::Int, Signal::Term], {
@@ -123,22 +115,15 @@ fn main() {
 
 
     let mut client_hive_2 = Hive::new_from_str("connect = \"127.0.0.1:3000\"\nname=\"client2\"");
-    // let mut client_2_handler = client_hive_2.get_handler();
-    let mut clone_hand = client_hand.clone();
+    let mut client_2_handler = client_hive_2.go(true);
+
+
+    let mut client_handl_clone = client_hand.clone();
 
     let (mut sender, mut receiver) = mpsc::unbounded();
     task::spawn(async move {
-        client_hive_2.run();
-        // task::sleep(Duration::from_millis(500)).await;
 
-        // if sleep duration is too short, this test will fail, it's dependent on the speed of the
-        // hardware it's running on and how much debugging is happening
-        // I've run it on my macbook pro at 50 milliseconds ok,
-        // with heavy debugging, I need about quite a bit more (500+)
-        // let sleep_dur = Duration::from_millis(1500);
         if server_connected.load(Ordering::Relaxed) {  //+2 on prop initialization
-            // tODO why do I need this pause before the client peer is available by name
-            task::sleep(Duration::from_millis(500)).await;
             let (lock, cvar) = &*ack;
             server_hand.send_to_peer("client1", "hey you").await; //+ 1
             {
@@ -147,7 +132,7 @@ fn main() {
                 cvar.wait(kk).unwrap();
                 debug!("                ACK: {:?}", ack);
             }
-            clone_hand.send_to_peer("Server", "hey mr man").await; // + 1
+            client_handl_clone.send_to_peer("Server", "hey mr man").await; // + 1
             {
                 let kk = lock.lock().unwrap();
                 debug!("!!!!!!!! Waiting for Ack");
@@ -156,7 +141,7 @@ fn main() {
             }
             debug!("SENT thermostatName = Before");
             count6.store(0, Ordering::Relaxed);
-            clone_hand.send_property_value("thermostatName", Some(&"Before".into())).await; // +2
+            client_handl_clone.send_property_value("thermostatName", Some(&"Before".into())).await; // +2
             {
                 let mut done = false;
                 while !done {

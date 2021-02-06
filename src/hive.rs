@@ -23,6 +23,7 @@ use crate::handler::Handler;
 use crate::peer::{Peer, SocketEvent, PeerType};
 use crate::property::{properties_to_bytes, Property};
 use crate::signal::Signal;
+use std::sync::{Condvar, Mutex};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub type Sender<T> = mpsc::UnboundedSender<T>;
@@ -43,6 +44,7 @@ pub struct Hive {
     pub message_received: Signal<String>,
     pub connected: Arc<AtomicBool>,
     advertising: Arc<AtomicBool>,
+    ready: Option<Arc<(Mutex<bool>, Condvar)>>
 }
 
 pub(crate) const PROPERTIES: u8 = 0x10;
@@ -110,12 +112,50 @@ async fn spawn_bluetooth_central(ble_name: String, sender: Sender<SocketEvent>) 
 
 
 impl Hive {
+
     pub fn is_sever(&self) -> bool {
         self.listen_port.is_some() || self.bt_listen.is_some()
     }
 
     pub fn is_connected(&self) -> bool {
         return self.connected.load(Ordering::Relaxed);
+    }
+
+    pub fn go(mut self, wait:bool)->Handler {
+        //This consumes the Hive and returns a handler
+        if wait {
+            self.ready = Some(
+                Arc::new((Mutex::new(false), Condvar::new()))
+            );
+        }
+
+        let handler = self.get_handler();
+        let ready_clone = self.ready.clone();
+        task::spawn(async move {
+            self.run().await.expect("Failed to run Hive");
+        });
+
+        return match ready_clone {
+            None => {
+                handler
+            }
+            Some(r) => {
+                let (lock, cvar) = &*r;
+                let lock = lock.lock().unwrap();
+                cvar.wait(lock).expect("Wait on lock failed");
+
+                handler
+            }
+        }
+    }
+    fn broadcast_ready(&self){
+        match self.ready.clone() {
+            None => {}
+            Some(ready) => {
+                let (lock, cvar) = &*ready;
+                cvar.notify_all();
+            }
+        }
     }
 
     pub fn new_from_str(properties: &str) -> Hive {
@@ -153,6 +193,7 @@ impl Hive {
             message_received: Default::default(),
             connected: Arc::new(AtomicBool::new(false)),
             advertising: Arc::new(AtomicBool::new(false)),
+            ready: None
         };
 
         let properties = config.get("Properties");
@@ -376,6 +417,8 @@ impl Hive {
                         _ => (),
                     }
                 });
+                // Ima TCP listener and I'm listening
+                self.broadcast_ready();
             }
 
             #[cfg(feature = "bluetooth")]
@@ -462,6 +505,9 @@ impl Hive {
                     } else {
                         debug!("<<< Existing peer reconnected: {:?}", has_peer.unwrap().to_string());
                     }
+
+                    // We've connected or been connected to, so were ready by most definitions.
+                    self.broadcast_ready();
 
                 }
                 Some(SocketEvent::Message { from, msg }) => {
@@ -716,13 +762,13 @@ impl Hive {
                     if vec.len() == 1 {
                         // the PEER_MESSAGE_DIV separates the peer name from the message
                         // without the DIV, there is only a message and its for me
-                        debug!("the message was forwarded for me: {:?}", message);
+                        info!("the message was forwarded for me: {:?}", message);
                         self.message_received.emit(String::from(message)).await;
                         return Ok(());
                     }
                     let pear_name = vec[0];
                     if self.name.to_string() == pear_name.to_string() {
-                        debug!("Message is for me: {:?}", vec[1]);
+                        info!("Message is for me: {:?}", vec[1]);
                         self.message_received.emit(String::from(vec[1])).await;
                     } else {
                         self.send_to_peer(vec[1], pear_name).await?;

@@ -119,13 +119,13 @@ impl Property {
     pub fn set(&mut self, v: PropertyType) -> bool
         where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
-        debug!("<<<< set thing {}", v);
+        debug!("set thing {}", v);
         let v_clone = v.clone();
         let op_v = Some(v);
 
         if !self.value.eq(&op_v) {
             self.value = op_v;
-            debug!("<<<< emit change!!");
+            debug!("emit change");
 
             block_on(self.on_changed.emit(Some(v_clone)));
             return true;
