@@ -6,7 +6,7 @@ use futures::{SinkExt, StreamExt};
 use hive::property::Property;
 use futures::executor::block_on;
 use std::thread::sleep;
-use log::{Metadata, Level, Record};
+use log::{Metadata, Level, Record, LevelFilter};
 use hive::init_logging;
 use log::{debug, info, error};
 use async_std::sync::Arc;
@@ -16,7 +16,7 @@ use std::time::Duration;
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 fn main() {
-    init_logging();
+    init_logging(Some(LevelFilter::Debug));
     println!("<< println");
     debug!("<< debug");
     let props_str = r#"

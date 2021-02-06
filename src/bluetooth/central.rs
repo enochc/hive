@@ -21,6 +21,7 @@ use bytes::{BufMut, BytesMut, Bytes};
 use futures::channel::mpsc::{ UnboundedSender};
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
+#[allow(unused_imports)]
 use log::{debug, info, trace};
 use regex::Regex;
 use uuid::Uuid;
@@ -39,7 +40,7 @@ use crate::bluetooth::blurz_cross::{BluetoothAdapter,
                                     // BtSocket,
 };
 use crate::hive::Sender;
-use crate::peer::SocketEvent;
+use crate::peer::{SocketEvent, PeerType};
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -331,6 +332,7 @@ impl Central {
                                         peripheral: None,
                                         central: Some(self.clone()),
                                         address: device.get_address()?,
+                                        ptype: PeerType::BluetoothPeripheral,
                                     };
                                     let mut sender = &self.sender;
                                     sender.send(se).await.expect("failed to send peer");

@@ -8,16 +8,16 @@ use std::thread;
 use hive::init_logging;
 use futures::executor::block_on;
 use async_std::sync::Arc;
-use log::{Level, LevelFilter};
+use log::{LevelFilter};
 
 
-// #[test]
+#[test]
 fn main(){
     init_logging(Some(LevelFilter::Info));
 
     let counter = Arc::new(AtomicUsize::new(0));
-    let count1 = counter.clone();
-    let count2 = counter.clone();
+    let counter1 = counter.clone();
+    let counter2 = counter.clone();
 
     let props_str = r#"
     listen="3000"
@@ -28,12 +28,12 @@ fn main(){
     let mut server_hive = Hive::new_from_str(props_str);
     server_hive.get_mut_property("thing", ).unwrap().on_changed.connect(move |value| {
         info!("SERVER ----------------------- thing changed: {:?}", value);
-        count1.fetch_add(1, Ordering::SeqCst);
+        counter1.fetch_add(1, Ordering::SeqCst);
     });
-    let mut server_hand = server_hive.get_handler();
+    // let mut server_hand = server_hive.get_handler();
 
     task::spawn(async move {
-      server_hive.run().await;
+      server_hive.run().await.expect("failed to run server");
     });
     // give it a moment to spin up
     thread::sleep(Duration::from_millis(50));
@@ -47,7 +47,7 @@ fn main(){
     let mut middle_man = Hive::new_from_str(props_str);
     let mut middle_hand = middle_man.get_handler();
     task::spawn(async move {
-        middle_man.run().await;
+        middle_man.run().await.expect("failed to run middle man");
     });
     // give it a moment to spin up
     thread::sleep(Duration::from_millis(100));
@@ -60,26 +60,25 @@ fn main(){
     let mut client_hive = Hive::new_from_str(props_str);
     client_hive.get_mut_property("thing", ).unwrap().on_changed.connect(move |value| {
         info!("CLIENT!! --------------------- thing changed: {:?}", value);
-        count2.fetch_add(1, Ordering::SeqCst);
+        // this gets changed on initial connection when the property first sinks
+        counter2.fetch_add(1, Ordering::SeqCst);
     });
     let mut client_hand = client_hive.get_handler();
     task::spawn(async move {
-        client_hive.run().await;
+        client_hive.run().await.expect("failed to run client");
     });
 
     // give it a moment to spin up
-    thread::sleep(Duration::from_millis(50));
+    thread::sleep(Duration::from_millis(100));
 
     block_on(async{
         middle_hand.send_property_value("thing", Some(&4.into())).await;
-        thread::sleep(Duration::from_millis(1000));
-        assert_eq!(counter.load(Ordering::Relaxed), 2);
-        client_hand.send_property_value("thing",Some(&5.into())).await;
         thread::sleep(Duration::from_millis(100));
         assert_eq!(counter.load(Ordering::Relaxed), 3);
+        client_hand.send_property_value("thing",Some(&5.into())).await;
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(counter.load(Ordering::Relaxed), 5);
 
     });
-
-    // assert_eq!(counter.load(Ordering::Relaxed), 1);
 
 }

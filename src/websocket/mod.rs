@@ -64,7 +64,7 @@ impl WebSock {
                     read_loop(&sender, stream_clone, &addr).await;
                     debug!("<<< READ DONE, send hangup");
                     sender.send(SocketEvent::Hangup { from }).await.expect("failed to send hangup");
-                    debug!("<<SENT")
+                    debug!("<<SENT");
                 });
 
                 break;
@@ -154,7 +154,7 @@ async fn read_loop(mut sender: &UnboundedSender<SocketEvent>, stream: TcpStream,
                         is_running = false;
                     }
                     o => {
-                        debug!("Unexpected opcode: {:?}", o)
+                        debug!("Unexpected opcode: {:?}", o);
                     }
                 }
             },

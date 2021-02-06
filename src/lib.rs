@@ -1,6 +1,6 @@
 
 #![warn(rust_2018_idioms)]
-
+use chrono::Local;
 use log::{Metadata, Level, Record, LevelFilter};
 
 mod hive_macros;
@@ -31,8 +31,9 @@ impl log::Log for SimpleLogger {
 
     fn log(&self, record: &Record<'_>) {
         if self.enabled(record.metadata()) {
-            println!("{:?}:{:?} {:?} - {}", record.file().unwrap(), record.line().unwrap(), record.level(), record.args());
-            // println!("{:?} - {}", record.level(), record.args());
+            // I currently only care about the minute, second and millisecond
+            let n = Local::now().format("%M:%S.%6f");
+            println!("{} {:?} {:?}:{:?} - {}",n, record.level(), record.file().unwrap(), record.line().unwrap(), record.args());
         }
     }
 
@@ -41,9 +42,9 @@ impl log::Log for SimpleLogger {
 pub static LOGGER: SimpleLogger = SimpleLogger;
 
 pub fn init_logging(level:Option<LevelFilter>){
-    let myLevel = match level {
+    let my_level = match level {
         Some(l) => l,
         None => LevelFilter::Trace
     };
-    log::set_logger(&LOGGER).map(|()| log::set_max_level(myLevel)).expect("failed to init logger");
+    log::set_logger(&LOGGER).map(|()| log::set_max_level(my_level)).expect("failed to init logger");
 }

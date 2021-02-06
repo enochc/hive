@@ -32,7 +32,7 @@ impl Handler {
 
         let message = property_to_bytes(Some(&property), true)
             .unwrap();
-        info!("... send_property: {:?}, {:?}", message, self.sender.is_closed());
+        debug!("... send_property: {:?}, {:?}", message, self.sender.is_closed());
         let socket_event = SocketEvent::Message {
             from: String::from(""),
             msg: message
@@ -63,7 +63,7 @@ impl Handler {
             from: String::from(""),
             msg: bytes.freeze()
         };
-        self.sender.send(socket_event).await.unwrap();
+        self.sender.send(socket_event).await.expect("failed to send to peer");
 
     }
 

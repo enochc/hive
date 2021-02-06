@@ -12,19 +12,17 @@ use async_std::{
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
-use futures::AsyncWriteExt;
 use futures::channel::mpsc;
+#[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 use toml;
 
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::central::Central;
 use crate::handler::Handler;
-use crate::peer::{Peer, SocketEvent};
+use crate::peer::{Peer, SocketEvent, PeerType};
 use crate::property::{properties_to_bytes, Property};
 use crate::signal::Signal;
-use std::mem::transmute_copy;
-use futures::executor::block_on;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub type Sender<T> = mpsc::UnboundedSender<T>;
@@ -36,6 +34,7 @@ pub struct Hive {
     sender: Sender<SocketEvent>,
     receiver: Receiver<SocketEvent>,
     connect_to: Option<String>,
+    #[allow(dead_code)]
     bt_connect_to: Option<String>,
     bt_listen: Option<String>,
     listen_port: Option<String>,
@@ -50,7 +49,7 @@ pub(crate) const PROPERTIES: u8 = 0x10;
 pub(crate) const PROPERTY: u8 = 0x11;
 pub(crate) const DELETE: u8 = 0x12;
 pub(crate) const PEER_MESSAGE: u8 = 0x13;
-pub(crate) const HEADER: u8 = 0x14;
+pub(crate) const HEADER: u8 = 0x72; // "H" utf8 representation
 pub(crate) const PEER_MESSAGE_DIV: &str = "\n";
 pub(crate) const PONG: u8 = 0x61;
 pub(crate) const HANGUP: u8 = 0x62;
@@ -59,8 +58,9 @@ pub(crate) const PING: u8 = 0x63;
 // pub(crate) const NEW_PEER:u8 = 0x64;
 pub(crate) const PEER_REQUESTS: u8 = 0x65;
 pub(crate) const PEER_RESPONSE: u8 = 0x66;
-pub(crate) const HEADER_NAME: u8 = 0x67;
+pub(crate) const HEADER_NAME: u8 = 0x78; // "N" utf8 representation
 pub(crate) const HIVE_PROTOCOL: &str = "HVEP";
+
 
 
 #[cfg(feature = "bluetooth")]
@@ -235,12 +235,12 @@ impl Hive {
      */
 
     // servers run this to accept client connections
-    async fn accept_loop(mut sender: Sender<SocketEvent>, addr: impl ToSocketAddrs, hiveName:String) -> Result<()> {
+    async fn accept_loop(mut sender: Sender<SocketEvent>, addr: impl ToSocketAddrs, hive_name:String) -> Result<()> {
         let listener = TcpListener::bind(addr).await?;
         let mut incoming = listener.incoming();
         while let Some(stream) = incoming.next().await {
             let stream = stream?;
-            info!("{:?} ------------  Accepting from: {}",hiveName, stream.peer_addr()?);
+            debug!("{:?} ------------  Accepting from: {}", hive_name, stream.peer_addr()?);
             match stream.peer_addr() {
                 Ok(addr) => {
                     let se = SocketEvent::NewPeer {
@@ -249,6 +249,7 @@ impl Hive {
                         peripheral: None,
                         central: None,
                         address: addr.to_string(),
+                        ptype: PeerType::TcpClient,
                     };
                     sender.send(se).await.expect("failed to send message");
                 }
@@ -297,7 +298,7 @@ impl Hive {
 
         // I'm a TCP client
         if self.connect_to.is_some() {
-            info!("{} Connect To: {:?}", self.name, self.connect_to);
+            debug!("{} Connect To: {:?}", self.name, self.connect_to);
             let mut address = self.connect_to.as_ref().unwrap().to_string().clone();
             if address.len() <= 4 { //only port
                 let addr = local_ipaddress::get().unwrap();
@@ -324,13 +325,18 @@ impl Hive {
                                         peripheral: None,
                                         central: None,
                                         address: addr,
+                                        ptype: PeerType::TcpServer,
                                     };
                                     send_chan_clone.clone().send(se).await.expect("failed to send peer");
 
 
                                     tx_clone.send(true).await.expect("Failed to send connected signal");
+                                },
+                                Err(e) => {
+                                    let msg = format!("No peer address: {:?}", e);
+                                    warn!("{:?}", msg);
+
                                 }
-                                Err(e) => warn!("No peer address: {:?}", e),
                             }
                         }
                         Err(e) => {
@@ -359,7 +365,7 @@ impl Hive {
                     let addr = local_ipaddress::get().unwrap();
                     port = format!("{}:{}", addr, port);
                 }
-                info!("{:?} Listening for connections on {:?}", self.name, port);
+                debug!("{:?} Listening for connections on {:?}", self.name, port);
                 let send_chan = self.sender.clone();
                 // listen for connections loop
                 let p = port.clone();
@@ -399,7 +405,7 @@ impl Hive {
 
 
     async fn receive_events(&mut self) -> Result<()> {
-        info!("!!!!!!!!!!!!!! receiving for {:?}", self.name);
+        debug!("!!!!!!!!!!!!!! receiving for {:?}", self.name);
         while !self.sender.is_closed() {
             match self.receiver.next().await {
                 Some(SocketEvent::NewPeer {
@@ -408,40 +414,15 @@ impl Hive {
                          peripheral,
                          central,
                          address,
+                         ptype,
                      }) => {
                     let has_peer = self.peers.iter().find(|p| p.address == address);
 
                     let is_tcp_server = self.listen_port.is_some();
                     let is_tcp_client = self.connect_to.is_some();
                     if has_peer.is_none() {
-                        info!("{:?} building peer: {:?}", self.name, name);
-                        let mut stream_clone = stream.clone();
-                        let handshake = || {
-                            if is_tcp_client {
-                                // Send client handshake
-                                let name_cline = self.name.clone();
-                                block_on( async move {
-                                // task::spawn(async move {
-                                    match stream_clone {
-                                        None => {}
-                                        Some(ref mut st) => {
-                                            info!("<<<< SEND HIVE {:?}", HEADER_NAME);
-                                            // send hive header to server
-                                            let mut bm = BytesMut::new();
-                                            bm.put_slice(format!("{}\n", HIVE_PROTOCOL).as_bytes());
-                                            bm.put_u8(HEADER_NAME);
-                                            bm.put_slice(format!("{}\n", name_cline).as_bytes());
-                                            info!(".... HEADER: {:?}", bm);
-                                            // st.write(bm.bytes()).await.expect("write failed");
-                                            st.write(bm.as_ref()).await.expect("write failed");
-
-                                            st.flush().await.expect("flush failed");
-                                            info!("<<<< SENT HIVE");
-                                        }
-                                    }
-                                });
-                            }
-                        };
+                        debug!("----------------------- {:?} building peer: {:?}", self.name, name);
+                        let ptype_clne = ptype.clone();
                         let p = Peer::new(
                             name,
                             stream,
@@ -449,56 +430,26 @@ impl Hive {
                             central,
                             self.sender.clone(),
                             address,
-                            is_tcp_server,
-                            handshake,
                         self.name.clone(),
+                            ptype_clne,
                         ).await;
-                        info!(".... PEER: {:?}, {}", p, is_tcp_server);
+                        debug!(".... PEER: {:?}, {}", p, is_tcp_server);
 
-                        // if were a bluetooth peripheral, then we want to keep track of all our
-                        // connected remote peers to verify that they're still there
-                        // if p.peripheral.is_some() {
-                        //     p.wave().await;
-                        // }
 
-                        // is_server isn't quite right, bluetooth does an independent properties request
-                        // we auto send all the servers via TCP because it prevents un additional request
-                        // if is_tcp_server && p.web_sock.is_none() {
-                        // TODO I'm a server and a client, sends this to the handshake with server
-                        if is_tcp_server {
+                        // we auto send all the peers via TCP because it prevents un additional request
+                        // TODO should this be moved into the Peer handshake
+                        if ptype == PeerType::TcpServer {
                             debug!("......SEND HEADERS");
                             self.send_headers(&p).await?;
+                        } else if ptype == PeerType::TcpClient {
                             self.send_properties(&p).await?;
                         }
 
-                        let mut p_stream = p.stream.clone();
-                        info!("<<<< NEW PEER for {:?}: {:?}",self.name, p.get_name());
+
+                        debug!("<<<< NEW PEER for {:?}: {:?}",self.name, p.get_name());
                         let is_web_sock_peer = p.web_sock.is_some();
                         self.peers.push(p);
 
-                        // if is_tcp_client {
-                        //     // Send client handshake
-                        //     let name_cline = self.name.clone();
-                        //     task::spawn(async move {
-                        //         match p_stream {
-                        //             None => {}
-                        //             Some(ref mut st) => {
-                        //                 debug!("<<<< SEND HIVE {:?}", HEADER_NAME);
-                        //                 // send hive header to server
-                        //                 let mut bm = BytesMut::new();
-                        //                 bm.put_slice(format!("{}\n", HIVE_PROTOCOL).as_bytes());
-                        //                 bm.put_u8(HEADER_NAME);
-                        //                 bm.put_slice(format!("{}\n", name_cline).as_bytes());
-                        //                 debug!(".... HEADER: {:?}", bm);
-                        //                 // st.write(bm.bytes()).await.expect("write failed");
-                        //                 st.write(bm.as_ref()).await.expect("write failed");
-                        //
-                        //                 st.flush().await.expect("flush failed");
-                        //                 debug!("<<<< SENT HIVE");
-                        //             }
-                        //         }
-                        //     });
-                        // } else {
                         if !is_tcp_client {
                             // I'm a server and another tcp hive client connected
                             // a websock sends a separate Header package with it's name, other
@@ -509,7 +460,7 @@ impl Hive {
                             }
                         }
                     } else {
-                        debug!("<<< Existing peer reconnected: {:?}", has_peer.unwrap().to_string())
+                        debug!("<<< Existing peer reconnected: {:?}", has_peer.unwrap().to_string());
                     }
 
                 }
@@ -548,7 +499,6 @@ impl Hive {
 
     fn peer_string(&self) -> String {
         let mut peers_string = String::new();
-        debug!("name {:?}", &self.name);
 
         // Add self to peers list
         let no_port = String::from("No port");
@@ -578,11 +528,13 @@ impl Hive {
         bytes.put_u8(PEER_RESPONSE);
         bytes.put_slice(peer_str);
         let bf = bytes.freeze();
+        // debug!(".. TEST 3: {:?}", bf);
 
         let mut futures = vec![];
         self.peers.iter().filter(|p| { p.update_peers }).for_each(|p| {
             futures.push(p.send(bf.clone()));
         });
+        debug!("send peers update to {:?} peers", futures.len());
         join_all(futures).await;
     }
 
@@ -597,7 +549,8 @@ impl Hive {
                 peer.send(bytes.freeze()).await?;
             }
             _ => {
-                error!("No peer {} ... {}", peer_name, self.name)
+                let err_msg = format!("No peer {} ... {}", peer_name, self.name);
+                panic!("{}", err_msg);
             }
         };
         Ok(())
@@ -614,6 +567,7 @@ impl Hive {
         return None;
     }
 
+    // TODO send properties with handshake
     async fn send_properties(&self, peer: &Peer) -> Result<()> {
         let bts = properties_to_bytes(&self.properties);
         peer.send(bts).await?;
@@ -650,7 +604,7 @@ impl Hive {
                             p.update_peers = true;
                         }
                         _ => {
-                            debug!("unrecognized header: {:?}", head)
+                            debug!("unrecognized header: {:?}", head);
                         }
                     }
                 }
@@ -675,9 +629,9 @@ impl Hive {
                 // bluetooth really is a broadcast and only needs to go out once
                 let mut sent_bt_broadcast = false;
                 for p in &self.peers {
-                    info!("{} broadcasting: {:?}, {:?}, {:?}",self.name, p.get_name(), p.is_bt_client(), m);
+                    debug!("{} broadcasting: {:?}, {:?}, {:?}",self.name, p.get_name(), p.is_bt_client(), m);
                     if p.address() != except {
-                        info!("... TEST 1");
+                        debug!("... TEST 1");
                         if p.is_bt_client() {
                             if sent_bt_broadcast {
                                 // I'm a bluetooth client and the broadcast has already been sent next

@@ -7,6 +7,7 @@ use std::time::Duration;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{channel::mpsc::channel, prelude::*};
 use futures::channel::mpsc;
+#[allow(unused_imports)]
 use log::{debug, info};
 use uuid::Uuid;
 
@@ -25,7 +26,7 @@ use bluster::{
 use crate::bluetooth::{HIVE_CHAR_ID, HIVE_DESC_ID, HIVE_PROPS_DESC_ID, HiveMessage, SERVICE_ID};
 use crate::bluetooth::my_blurz::set_discoverable;
 use crate::hive::{Receiver, Sender};
-use crate::peer::SocketEvent;
+use crate::peer::{SocketEvent, PeerType};
 
 // #[derive(Clone)]
 pub struct Peripheral {
@@ -180,6 +181,7 @@ impl Peripheral {
                                         peripheral: Some(sender_clone.clone()),
                                         central: None,
                                         address: a,
+                                        ptype: PeerType::BluetoothCentral,
                                     };
                                     &event_sender_clone.send(event).await.expect("Failed to send event");
                                 }

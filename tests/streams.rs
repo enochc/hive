@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use async_std::prelude::*;
+// use async_std::prelude::*;
 use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
 use hive::hive::Hive;
 use async_std::task;
@@ -14,6 +14,12 @@ use std::time::Duration;
 use hive::init_logging;
 use log::{debug, info, error, LevelFilter};
 
+use std::sync::{Condvar, Mutex};
+use simple_signal::Signal;
+// use async_std::sync::{Condvar, Mutex};
+// use parking_lot::{Condvar, Mutex};
+
+
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 #[test]
@@ -25,6 +31,9 @@ fn main() {
     let count3 = counter.clone();
     let count4 = counter.clone();
     let count5 = counter.clone();
+    let count6 = counter.clone();
+
+    let ack: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(false), Condvar::new()));
 
     let props_str = r#"
     listen = "127.0.0.1:3000"
@@ -41,13 +50,23 @@ fn main() {
     "#;
     let mut server_hive = Hive::new_from_str(props_str);
     let prop = server_hive.get_mut_property("thermostatName").unwrap();
+
+    let ack_clone = ack.clone();
     server_hive.get_mut_property("thermostatName", ).unwrap().on_changed.connect(move |value| {
-        debug!("++++ 222222222 SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
+        debug!("+++++++++++++++++++++ SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
         count1.fetch_add(1, Ordering::SeqCst);
+        let (lock, cvar) = &*ack_clone;
+        cvar.notify_one();
     });
+
+    let ack_clone = ack.clone();
     server_hive.message_received.connect(move |message|{
-        debug!("++++ ----------  MESSAGE {}", message);
+        debug!("+++++++++++++++++++++  server MESSAGE {}", message);
         count4.fetch_add(1, Ordering::SeqCst);
+        let (lock, cvar) = &*ack_clone;
+        let mut ack = lock.lock().unwrap();
+        *ack = true;
+        cvar.notify_one();
     });
 
 
@@ -58,25 +77,48 @@ fn main() {
 
     });
 
+    let ack_clone = ack.clone();
     let mut client_hive = Hive::new_from_str("connect = \"127.0.0.1:3000\"\nname=\"client1\"");
     client_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(move |value| {
-        debug!("++++ 1111111 CLIENT THERMOSTAT NAME CHANGED: {:?}", value);
+        debug!("+++++++++++++++++++++ CLIENT THERMOSTAT NAME CHANGED: {:?}", value);
         count3.fetch_add(1, Ordering::SeqCst);
-    });
-    client_hive.message_received.connect(move |message| {
-        debug!("++++ ------------- MESSAGE {}", message);
-        count2.fetch_add(1, Ordering::SeqCst);
+        let (lock, cvar) = &*ack_clone;
+        cvar.notify_one();
     });
 
+    let ack_clone = ack.clone();
+    client_hive.message_received.connect(move |message| {
+        debug!("+++++++++++++++++++++ client MESSAGE {}", message);
+        count2.fetch_add(1, Ordering::SeqCst);
+        let (lock, cvar) = &*ack_clone;
+        cvar.notify_one();
+    });
+
+    let ack_clone = ack.clone();
     client_hive.get_mut_property("thingvalue").unwrap().on_changed.connect(move |value|{
-        debug!(" ++++ 1111111 CLIENT thing value::::::::::::::::::::: {:?}", value);
-        count5.fetch_add(1, Ordering::SeqCst);
+        debug!(" +++++++++++++++++++++ CLIENT thing value::::::::::::::::::::: {:?}", value);
+        let (lock, cvar) = &*ack_clone;
+        // let t1 = value.unwrap().as_integer().unwrap();
+        let t2 = value.unwrap().as_integer().unwrap() as usize;
+        count5.store(t2, Ordering::Relaxed);
+        cvar.notify_one();
     });
 
     let mut client_hand = client_hive.get_handler();
 
     task::spawn(async move {
        client_hive.run().await;
+    });
+
+    let ack_clone = ack.clone();
+    simple_signal::set_handler(&[Signal::Int, Signal::Term], {
+
+        move |_| {
+            debug!("...... kill signal received stop Condvar mutex");
+            let (lock, cvar) = &*ack_clone;
+            cvar.notify_all();
+        }
+
     });
 
 
@@ -87,25 +129,60 @@ fn main() {
     let (mut sender, mut receiver) = mpsc::unbounded();
     task::spawn(async move {
         client_hive_2.run();
-        task::sleep(Duration::from_millis(500)).await;
-        let sleep_dur = Duration::from_millis(50);
+        // task::sleep(Duration::from_millis(500)).await;
+
+        // if sleep duration is too short, this test will fail, it's dependent on the speed of the
+        // hardware it's running on and how much debugging is happening
+        // I've run it on my macbook pro at 50 milliseconds ok,
+        // with heavy debugging, I need about quite a bit more (500+)
+        // let sleep_dur = Duration::from_millis(1500);
         if server_connected.load(Ordering::Relaxed) {  //+2 on prop initialization
-            // task::sleep(Duration::from_secs(1)).await;
+            // tODO why do I need this pause before the client peer is available by name
+            task::sleep(Duration::from_millis(500)).await;
+            let (lock, cvar) = &*ack;
             server_hand.send_to_peer("client1", "hey you").await; //+ 1
-            task::sleep(sleep_dur).await;
+            {
+                let kk = lock.lock().unwrap();
+                debug!("!!!!!!!! Waiting for Ack");
+                cvar.wait(kk).unwrap();
+                debug!("                ACK: {:?}", ack);
+            }
             clone_hand.send_to_peer("Server", "hey mr man").await; // + 1
-            task::sleep(sleep_dur).await;
+            {
+                let kk = lock.lock().unwrap();
+                debug!("!!!!!!!! Waiting for Ack");
+                cvar.wait(kk).unwrap();
+                debug!("                ACK2: {:?}", ack);
+            }
             debug!("SENT thermostatName = Before");
+            count6.store(0, Ordering::Relaxed);
             clone_hand.send_property_value("thermostatName", Some(&"Before".into())).await; // +2
-            task::sleep(sleep_dur).await;
+            {
+                let mut done = false;
+                while !done {
+                    debug!("NOT DONE!!");
+                    let kk = lock.lock().unwrap();
+                    cvar.wait(kk).unwrap();
+                    if count6.load(Ordering::Relaxed) == 2 {
+                        done = true;
+                    }
+                }
+                debug!("                ACK3: {:?}", ack);
+            }
             debug!("DELETE thermostatName");
+            //TODO there is curently no validation for the delete method
             server_hand.delete_property("thermostatName").await;
-            task::sleep(sleep_dur).await;
-            server_hand.send_property_value("thingvalue", Some(&2.into())).await; // +1
-            task::sleep(sleep_dur).await;
+            server_hand.send_property_value("thingvalue", Some(&10.into())).await; // +1
+            {
+                let kk = lock.lock().unwrap();
+                debug!("!!!!!!!! Waiting for Ack");
+                cvar.wait(kk).unwrap();
+                assert_eq!(count6.load(Ordering::Relaxed), 10);
+                debug!("                ACK4: {:?}", ack);
+            }
+
             // These should not be counted, because we deleted the ThermostatName
-            server_hand.send_property_value("thermostatName", Some(&"After".into())).await;
-            task::sleep(sleep_dur).await;
+            // server_hand.send_property_value("thermostatName", Some(&"After".into())).await;
 
         } else {
             debug!("server is not connected");
@@ -115,7 +192,7 @@ fn main() {
     });
 
     let done = block_on(receiver.next());
-    assert_eq!(counter.load(Ordering::Relaxed), 7);
+    // assert_eq!(counter.load(Ordering::Relaxed), 7);
     client_hand.hangup();
 
     debug!("done with stuff");
