@@ -22,7 +22,7 @@ use log::{debug, info, trace, warn};
 
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::{central::Central};
-use crate::hive::{HEADER_NAME, HIVE_PROTOCOL, PING, PONG, Result, Sender};
+use crate::hive::{HEADER_NAME, HIVE_PROTOCOL, PING, PONG, Result, Sender, HEADER};
 #[cfg(feature = "websock")]
 use crate::websocket::WebSock;
 
@@ -240,6 +240,15 @@ impl Peer {
                             self.web_sock = Some(sock);
                         }
                 };
+                // send headers
+                let name_bytes = self.hive_name.as_bytes();
+                let mut bytes = BytesMut::with_capacity(name_bytes.len() + 2);
+                bytes.put_u8(HEADER);
+                //bytes.put_u8(PEER_REQUESTS);
+                bytes.put_u8(HEADER_NAME);
+                bytes.put_slice(name_bytes);
+                trace!(".... send headers: {:?}", bytes);
+                self.send(bytes.freeze()).await?;
             },
             _ => {
                 unimplemented!("finish this!!");
@@ -382,7 +391,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, pee
         let mut sender = sender.clone();
         let mut size_buff = [0; 4];
         // let r = AsyncReadExt::read(&mut reader, &mut size_buff).await;
-        debug!("<<<<<<<<<<<<<<<<< {:?} waiting for read", peer_id_string);
+        debug!("{:?} waiting for read", peer_id_string);
         let r = reader.read(&mut size_buff).await;
         let from = String::from(&from);
         match r {
@@ -401,12 +410,14 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, pee
                             // let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
                             let msg = Bytes::from(size_buff);
                             debug!("<<<<<<<<<<<<<<<<< {:?} Read message: {:?}", peer_id_string, &msg);
+                            let debug = msg.clone();
                             let se = SocketEvent::Message {
                                 from,
                                 msg,
                             };
                             if !sender.is_closed() {
                                 sender.send(se).await.expect("Failed to send message");
+                                debug!("{:?} send message {:?}", peer_id_string, debug);
                             }
                         }
                         Err(e) => {

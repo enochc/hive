@@ -24,7 +24,7 @@ fn main() {
             p.set_int(6);
             p.set_bool(true);
 
-            println!("Done: {:?}", p.get());
+            println!("Done: {:?}", p.to_string());
         },
         _ => {
             println!("No OPtion: \"thingvalue\"");

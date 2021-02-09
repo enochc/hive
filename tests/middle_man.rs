@@ -62,10 +62,10 @@ fn main(){
     block_on(async{
         middle_hand.send_property_value("thing", Some(&4.into())).await;
         thread::sleep(Duration::from_millis(100));
-        // assert_eq!(counter.load(Ordering::Relaxed), 3);
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
         client_hand.send_property_value("thing",Some(&5.into())).await;
         thread::sleep(Duration::from_millis(100));
-        // assert_eq!(counter.load(Ordering::Relaxed), 5);
+        assert_eq!(counter.load(Ordering::Relaxed), 4);
 
     });
 

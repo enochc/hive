@@ -38,6 +38,6 @@ fn main() {
     let ret = counter.load(Ordering::Relaxed);
     sleep(Duration::from_millis(1000));
     assert_eq!(ret, 8);
-    println!("Done: {:?} ran {:?} times", p.get(), ret);
+    println!("Done: {:?} ran {:?} times", p.to_string(), ret);
 
 }

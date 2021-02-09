@@ -1,11 +1,9 @@
 #![allow(unused_imports)]
-// use async_std::prelude::*;
 use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
 use hive::hive::Hive;
 use async_std::task;
 use futures::{SinkExt, StreamExt};
 use hive::property::{Property, PropertyType};
-// use async_std::task::sleep;
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use async_std::task::block_on;
@@ -16,15 +14,13 @@ use log::{debug, info, error, LevelFilter};
 
 use std::sync::{Condvar, Mutex};
 use simple_signal::Signal;
-// use async_std::sync::{Condvar, Mutex};
-// use parking_lot::{Condvar, Mutex};
 
 
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 #[test]
 fn main() {
-    init_logging(Some(LevelFilter::Debug));
+    init_logging(Some(LevelFilter::Info));
     let counter = Arc::new(AtomicUsize::new(0));
     let count1 = counter.clone();
     let count2 = counter.clone();
@@ -52,16 +48,21 @@ fn main() {
     let prop = server_hive.get_mut_property("thermostatName").unwrap();
 
     let ack_clone = ack.clone();
-    server_hive.get_mut_property("thermostatName", ).unwrap().on_changed.connect(move |value| {
-        debug!("+++++++++++++++++++++ SERV|| THERMOSTAT NAME CHANGED: {:?}", value);
-        count1.fetch_add(1, Ordering::SeqCst);
-        let (lock, cvar) = &*ack_clone;
-        cvar.notify_one();
+
+    // an example of using the properties Stream trait
+    let mut ff = server_hive.get_property("thermostatName", ).unwrap().stream.clone();
+    async_std::task::spawn(async move {
+        while let Some(x) = ff.next().await {
+            info!("+++++++++++++++++++++ SERV|| THERMOSTAT NAME CHANGED: {:?}", x);
+            count1.fetch_add(1, Ordering::SeqCst);
+            let (lock, cvar) = &*ack_clone;
+            cvar.notify_one();
+        }
     });
 
     let ack_clone = ack.clone();
     server_hive.message_received.connect(move |message|{
-        debug!("+++++++++++++++++++++  server MESSAGE {}", message);
+        info!("+++++++++++++++++++++  server MESSAGE {}", message);
         count4.fetch_add(1, Ordering::SeqCst);
         let (lock, cvar) = &*ack_clone;
         let mut ack = lock.lock().unwrap();
@@ -76,7 +77,7 @@ fn main() {
     let ack_clone = ack.clone();
     let mut client_hive = Hive::new_from_str("connect = \"127.0.0.1:3000\"\nname=\"client1\"");
     client_hive.get_mut_property("thermostatName").unwrap().on_changed.connect(move |value| {
-        debug!("+++++++++++++++++++++ CLIENT THERMOSTAT NAME CHANGED: {:?}", value);
+        info!("+++++++++++++++++++++ CLIENT THERMOSTAT NAME CHANGED: {:?}", value);
         count3.fetch_add(1, Ordering::SeqCst);
         let (lock, cvar) = &*ack_clone;
         cvar.notify_one();
@@ -84,7 +85,7 @@ fn main() {
 
     let ack_clone = ack.clone();
     client_hive.message_received.connect(move |message| {
-        debug!("+++++++++++++++++++++ client MESSAGE {}", message);
+        info!("+++++++++++++++++++++ client MESSAGE {}", message);
         count2.fetch_add(1, Ordering::SeqCst);
         let (lock, cvar) = &*ack_clone;
         cvar.notify_one();
@@ -92,7 +93,7 @@ fn main() {
 
     let ack_clone = ack.clone();
     client_hive.get_mut_property("thingvalue").unwrap().on_changed.connect(move |value|{
-        debug!(" +++++++++++++++++++++ CLIENT thing value::::::::::::::::::::: {:?}", value);
+        info!(" +++++++++++++++++++++ CLIENT thing value::::::::::::::::::::: {:?}", value);
         let (lock, cvar) = &*ack_clone;
         // let t1 = value.unwrap().as_integer().unwrap();
         let t2 = value.unwrap().as_integer().unwrap() as usize;
@@ -106,7 +107,7 @@ fn main() {
     simple_signal::set_handler(&[Signal::Int, Signal::Term], {
 
         move |_| {
-            debug!("...... kill signal received stop Condvar mutex");
+            info!("...... kill signal received stop Condvar mutex");
             let (lock, cvar) = &*ack_clone;
             cvar.notify_all();
         }
@@ -114,11 +115,10 @@ fn main() {
     });
 
 
-    let mut client_hive_2 = Hive::new_from_str("connect = \"127.0.0.1:3000\"\nname=\"client2\"");
-    let mut client_2_handler = client_hive_2.go(true);
+    // let mut client_hive_2 = Hive::new_from_str("connect = \"127.0.0.1:3000\"\nname=\"client2\"");
+    // let mut client_2_handler = client_hive_2.go(true);
 
-
-    let mut client_handl_clone = client_hand.clone();
+    // let mut client_handl_clone = client_hand.clone();
 
     let (mut sender, mut receiver) = mpsc::unbounded();
     task::spawn(async move {
@@ -128,49 +128,52 @@ fn main() {
             server_hand.send_to_peer("client1", "hey you").await; //+ 1
             {
                 let kk = lock.lock().unwrap();
-                debug!("!!!!!!!! Waiting for Ack");
+                info!("!!!!!!!! Waiting for Ack");
                 cvar.wait(kk).unwrap();
-                debug!("                ACK: {:?}", ack);
+                info!("                ACK: {:?}", ack);
             }
-            client_handl_clone.send_to_peer("Server", "hey mr man").await; // + 1
+            client_hand.send_to_peer("Server", "hey mr man").await; // + 1
             {
                 let kk = lock.lock().unwrap();
-                debug!("!!!!!!!! Waiting for Ack");
+                info!("!!!!!!!! Waiting for Ack");
                 cvar.wait(kk).unwrap();
-                debug!("                ACK2: {:?}", ack);
+                info!("                ACK2: {:?}", ack);
             }
-            debug!("SENT thermostatName = Before");
+            info!("SENT thermostatName = Before");
             count6.store(0, Ordering::Relaxed);
-            client_handl_clone.send_property_value("thermostatName", Some(&"Before".into())).await; // +2
+            client_hand.send_property_value("thermostatName", Some(&"Before".into())).await; // +2
             {
                 let mut done = false;
                 while !done {
-                    debug!("NOT DONE!!");
+                    info!("NOT DONE!!");
                     let kk = lock.lock().unwrap();
                     cvar.wait(kk).unwrap();
                     if count6.load(Ordering::Relaxed) == 2 {
                         done = true;
                     }
                 }
-                debug!("                ACK3: {:?}", ack);
+                info!("                ACK3: {:?}", ack);
             }
-            debug!("DELETE thermostatName");
+            info!("DELETE thermostatName");
             //TODO there is curently no validation for the delete method
             server_hand.delete_property("thermostatName").await;
             server_hand.send_property_value("thingvalue", Some(&10.into())).await; // +1
             {
                 let kk = lock.lock().unwrap();
-                debug!("!!!!!!!! Waiting for Ack");
+                info!("!!!!!!!! Waiting for Ack");
                 cvar.wait(kk).unwrap();
-                assert_eq!(count6.load(Ordering::Relaxed), 10);
-                debug!("                ACK4: {:?}", ack);
+                let c6 = count6.load(Ordering::Relaxed);
+                assert_eq!(c6, 10);
+                info!("                ACK4: {:?}, {:?}", ack, c6);
             }
+
+            client_hand.hangup();
 
             // These should not be counted, because we deleted the ThermostatName
             // server_hand.send_property_value("thermostatName", Some(&"After".into())).await;
 
         } else {
-            debug!("server is not connected");
+            info!("server is not connected");
         }
         sender.send(1 as i32).await;
 
@@ -178,9 +181,9 @@ fn main() {
 
     let done = block_on(receiver.next());
     // assert_eq!(counter.load(Ordering::Relaxed), 7);
-    client_hand.hangup();
 
-    debug!("done with stuff");
+
+    info!("done with stuff");
 
 }
 

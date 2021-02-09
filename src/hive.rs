@@ -142,7 +142,7 @@ impl Hive {
             Some(r) => {
                 let (lock, cvar) = &*r;
                 let lock = lock.lock().unwrap();
-                cvar.wait(lock).expect("Wait on lock failed");
+                let _ = cvar.wait(lock).expect("Wait on lock failed");
 
                 handler
             }
@@ -152,7 +152,7 @@ impl Hive {
         match self.ready.clone() {
             None => {}
             Some(ready) => {
-                let (lock, cvar) = &*ready;
+                let (_lock, cvar) = &*ready;
                 cvar.notify_all();
             }
         }
@@ -239,7 +239,7 @@ impl Hive {
     }
 
     fn set_property(&mut self, property: Property) {
-        debug!("SET PROPERTY:: {:?}={:?}", property.get_name(), property.value);
+        debug!("{:?} SET PROPERTY:: {:?}={:?}", self.name, property.get_name(),*property.value.read().unwrap());
         let name = property.get_name().clone();
         if self.has_property(name) {
             /*
@@ -450,7 +450,10 @@ impl Hive {
     async fn receive_events(&mut self) -> Result<()> {
         debug!("!!!!!!!!!!!!!! receiving for {:?}", self.name);
         while !self.sender.is_closed() {
-            match self.receiver.next().await {
+            debug!("{:?} waiting for event",self.name);
+            let nn = self.receiver.next().await;
+            debug!("{:?} Received event: {:?}",self.name, nn);
+            match nn {
                 Some(SocketEvent::NewPeer {
                          name,
                          stream,
@@ -481,10 +484,7 @@ impl Hive {
 
                         // we auto send all the peers via TCP because it prevents un additional request
                         // TODO should this be moved into the Peer handshake
-                        if ptype == PeerType::TcpServer {
-                            debug!("......SEND HEADERS");
-                            self.send_headers(&p).await?;
-                        } else if ptype == PeerType::TcpClient {
+                        if ptype == PeerType::TcpClient {
                             self.send_properties(&p).await?;
                         }
 
@@ -540,6 +540,7 @@ impl Hive {
                 }
             }
         };
+        info!("Stopped receiving events!");
         Ok(())
     }
 
@@ -620,20 +621,6 @@ impl Hive {
         Ok(())
     }
 
-    /*
-    Currently this only responds to new connected peers with the peer name
-    TODO we could send other init options here such as a property filter etc
-     */
-    async fn send_headers(&self, peer: &Peer) -> Result<()> {
-        let mut bytes = BytesMut::with_capacity(self.name.len() + 3);
-        bytes.put_u8(HEADER);
-        //bytes.put_u8(PEER_REQUESTS);
-        bytes.put_u8(HEADER_NAME);
-        bytes.put_slice(self.name.as_bytes());
-        trace!(".... send headers: {:?}", bytes);
-        peer.send(bytes.freeze()).await?;
-        Ok(())
-    }
 
     async fn set_headers_from_peer(&mut self, mut head: Bytes, from: &str) {
         debug!(".... Set headers from peer: {:?} = {:?}, self={:?}", from, head, self.name);

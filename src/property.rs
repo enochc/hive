@@ -8,6 +8,14 @@ use crate::hive::{PROPERTIES, PROPERTY, DELETE};
 use std::collections::HashMap;
 use async_std::task::block_on;
 use bytes::{Bytes, BytesMut, BufMut};
+use async_std::sync::Arc;
+use std::sync::{Condvar, Mutex, RwLock};
+use async_std::stream::Stream;
+use std::task::{Context, Poll};
+use std::pin::Pin;
+use toml::Value;
+use std::rc::Rc;
+
 
 pub type PropertyType = toml::Value;
 
@@ -16,17 +24,45 @@ pub type PropertyType = toml::Value;
 pub struct Property
 {
     name: Box<str>,
-    pub value: Option<PropertyType>,
+    pub value: Arc<RwLock<Option<PropertyType>>>,
     pub on_changed: Signal<Option<PropertyType>>,
+    pub stream: PropertyStream,
+}
+
+#[derive(Default, Clone)]
+pub struct PropertyStream
+{
+    has_next: Arc<(Mutex<bool>, Condvar)>,
+    pub value: Arc<RwLock<Option<PropertyType>>>
+}
+
+impl Stream for PropertyStream {
+    type Item = Value;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+
+
+        let (lock, cvar) = &*self.has_next;
+        let is_reeady = lock.lock().unwrap();
+
+        let _ = cvar.wait(is_reeady).unwrap();
+        let a = &*self.value.read().unwrap();
+        // let v = *a.read().unwrap();
+        // let c = v.as_ref().unwrap().clone();
+
+        return Poll::Ready(a.clone());
+    }
 }
 impl fmt::Debug for Property {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}={:?}", self.name, self.value)
     }
 }
+
 impl Property {
     pub fn to_string(&self) -> String {
-        return match &self.value {
+        let v = &*self.value.read().unwrap();
+        return match v {
             Some(t) => format!("{}={}", self.name, t.to_string()),
             None => format!("{}=None", self.name),
         }
@@ -40,17 +76,21 @@ impl Property {
         let val = table.get(key);
         let p = Property::from_toml(key.as_str(), val);
         return Some(p);
-
-
     }
+
     pub fn get_name(&self) -> &str {
         self.name.borrow()
     }
     pub fn new(name: &str, val: Option<PropertyType>) -> Property{
+        let arc_val = Arc::new(RwLock::new(val));
         return Property{
             name:Box::from(name),
-            value: val,
-            on_changed: Default::default()
+            value: arc_val.clone(),
+            on_changed: Default::default(),
+            stream: PropertyStream{
+                value: arc_val,
+                has_next: Arc::new((Mutex::new(false), Condvar::new())),
+            }
         }
     }
     pub fn from_str(name: &str, val: &str) -> Property {
@@ -113,49 +153,52 @@ impl Property {
     }
 
     pub fn set_from_prop(&mut self, v:Property)-> bool{
-        return self.set(v.value.as_ref().unwrap().clone());
+        let other = &*v.value.read().unwrap();
+        return self.set(other.as_ref().unwrap().clone());
     }
 
-    pub fn set(&mut self, v: PropertyType) -> bool
+    pub fn set(&mut self, new_prop: PropertyType) -> bool
         where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
-        debug!("set thing {}", v);
-        let v_clone = v.clone();
-        let op_v = Some(v);
 
-        if !self.value.eq(&op_v) {
-            self.value = op_v;
+        let does_eq = match &*self.value.read().unwrap() {
+            None => { false }
+            Some(pt) => { pt.eq(&new_prop)}
+        };
+
+        return if !does_eq {
+            let mut rr = self.value.write().unwrap();
+            *rr = Some(new_prop.clone());
             debug!("emit change");
+            let stream = self.stream.has_next.clone();
+            let on_change = self.on_changed.emit(Some(new_prop));
 
-            block_on(self.on_changed.emit(Some(v_clone)));
-            return true;
+            let on_next = async {
+                let (lock, cvar) = &*stream;
+                cvar.notify_all();
+            };
+            block_on(async {
+                futures::join!(on_change, on_next);
+            });
+            true
         } else {
-            debug!("do nothing ");
-            return false;
+            debug!("value is the same, do nothing ");
+            false
         }
     }
 
-    pub fn get(&self) -> &Option<PropertyType> {
-        &self.value
-    }
 }
 /*
     |P|one=1\ntwo=2\nthree=3
  */
 pub(crate) fn properties_to_bytes(properties: &HashMap<String, Property>) -> Bytes {
-    // let mut bytes = BytesMut::from(&[PROPERTIES]);
     let mut bytes = BytesMut::new();
     bytes.put_u8(PROPERTIES);
-    // let mut message = PROPERTIES.to_string();
     for p in properties {
-        if p.1.value.is_some() {
-            // message.push_str(
-            //     property_to_bytes(Some(p.1), false).unwrap().as_str()
-            // );
+        if p.1.value.read().unwrap().is_some() {
             bytes.put_slice(
                 &property_to_bytes(Some(p.1), false).unwrap()
             );
-            // message.push('\n');
             bytes.put_u8(b'\n');
         }
 
@@ -167,7 +210,7 @@ pub(crate) fn properties_to_bytes(properties: &HashMap<String, Property>) -> Byt
  */
 pub(crate) fn property_to_bytes(property:Option<&Property>, inc_head:bool) -> Option<Bytes> {
     return match property {
-        Some(p) if p.value.is_some() => {
+        Some(p) if p.value.read().unwrap().is_some() => {
             let prop_str = p.to_string();
             let bytes =  if inc_head {
                 let mut b = BytesMut::with_capacity(prop_str.len()+1);
@@ -180,12 +223,9 @@ pub(crate) fn property_to_bytes(property:Option<&Property>, inc_head:bool) -> Op
             Some(bytes)
         },
         Some(p) => {
-            debug!("... test2 {:?}", inc_head);
             let p_name = p.get_name();
             let mut bytes = BytesMut::with_capacity(p_name.len()+1);
-            // let mut message = DELETE.to_string();
             bytes.put_u8(DELETE);
-            // message.push_str(p.get_name());
             bytes.put_slice(p_name.as_bytes());
             Some(bytes.freeze())
         },

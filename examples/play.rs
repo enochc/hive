@@ -1,81 +1,91 @@
-#![allow(warnings)]
-use async_std::{
-    prelude::*,
-    task,
-};
-use futures::channel::mpsc;
-use futures::SinkExt;
-use async_std::sync::{RwLock, Arc};
+
+use async_std::stream::Stream;
+use std::pin::Pin;
+use async_std::task::{Context, Poll};
+use async_std::sync::Arc;
+use std::sync::{Condvar, Mutex};
+use hive::property::PropertyType;
+use toml::Value;
+use std::time::Duration;
+use std::thread::sleep;
 
 
-pub struct Signal<T>
-where T: Clone + 'static
- {
-    slots: Vec<Arc<Box<dyn Fn(T)>>>,
+/// A stream which counts from one to five
+#[derive(Clone)]
+struct Counter {
+    count: u32,
+    ready: Arc<(Mutex<bool>, Condvar)>,
 }
 
-impl<T> Clone for Signal<T>
-    where T: Clone{
-    fn clone(&self) -> Signal<T>{
-        self.slots.clone();
-        return Signal{
-            slots: self.slots.clone()
+
+impl Counter {
+    fn new() -> Counter {
+
+        let ready = Arc::new((Mutex::new(false), Condvar::new()));
+        let ready_clone = ready.clone();
+
+        let counter = Counter {
+            count: 0,
+            ready,
+        };
+
+        async_std::task::spawn(async move {
+            let (_lock, cvar) = &*ready_clone;
+            println!("__ task spawn");
+            loop {
+                sleep(Duration::from_secs(1));
+                cvar.notify_all();
+            }
+        });
+        return counter;
+    }
+}
+
+
+impl Stream for Counter {
+    type Item = Value;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+
+        self.count = self.count + 1;
+        let (lock, cvar) = &*self.ready;
+        let is_reeady = lock.lock().unwrap();
+
+        let _ = cvar.wait(is_reeady).unwrap();
+
+        if self.count < 6 {
+            let op = PropertyType::from(self.count);
+            let ss = Some(op);
+            return Poll::Ready(ss);
+        }else {
+            println!("done");
+            return Poll::Ready(None);
         }
+
     }
 }
-
-impl<T> Signal<T>
-    where T: Clone {
-    fn new(func: Box<dyn Fn(T)>) -> Signal<T> {
-        //let mut v = Vec::new();
-        //v.push(Arc::new(func));
-        let v = vec![Arc::new(func)];
-        return Signal{
-            slots: v
-        }
-    }
-    fn connect(mut self, func:fn(T)) {
-        self.slots.push(Arc::new(Box::new(func)));
-    }
-}
-
 fn main(){
-    // task::block_on(run());
-    fn bb(it:u32) {
-        println!("<<<<< do a thing {}", it);
-    }
-    let s:Signal<u32> = Signal::new(Box::new(bb));
-    let p = s.clone();
+    // And now we can use it!
+    use async_std::stream::StreamExt;
 
+    let mut counter = Counter::new();
 
-    // let b = bb;
-    // let c = b.clone();
-    // c(4);
-    // s();
-}
-
-async fn run (){
-    let (tx,mut rx) = mpsc::channel(5);
-    let mut  tx = tx.clone();
-
-    task::spawn(async move{
-        for x in 0..5 {
-
-            tx.send(x).await;
-
-            println!("sending: {}", x);
+    let mut counter_clone = counter.clone();
+    async_std::task::spawn(async move {
+        while let Some(x) = counter_clone.next().await {
+            println!("me too: {}", x);
         }
-        // tx.flush().await;
+        println!("also done");
 
     });
 
-    task::spawn( async move{
-        loop {
-            match rx.next().await {
-                Some(val) => println!("received: {}", val),
-                _ => println!("something else")
-            }
+    async_std::task::block_on(async {
+        while let Some(x) = counter.next().await {
+            println!("{}", x);
         }
-    }).await;
+        println!("really done");
+
+    });
+
 
 }
