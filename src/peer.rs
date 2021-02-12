@@ -22,7 +22,7 @@ use log::{debug, info, trace, warn};
 
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::{central::Central};
-use crate::hive::{HEADER_NAME, HIVE_PROTOCOL, PING, PONG, Result, Sender, HEADER};
+use crate::hive::{HEADER_NAME, HIVE_PROTOCOL, PING, PONG, Result, Sender, HEADER, PEER_REQUESTS};
 #[cfg(feature = "websock")]
 use crate::websocket::WebSock;
 
@@ -188,7 +188,7 @@ impl Peer {
     async fn handshake(&mut self, stream: &mut TcpStream, sender: &UnboundedSender<SocketEvent>) -> Result<()> {
 
         match self.peer_type {
-            PeerType::TcpClient => {
+            PeerType::TcpServer => {
                 debug!("<<<< SEND  CLIENT HANDSHAKE");
                 let mut bm = BytesMut::new();
                 bm.put_slice(format!("{}\n", HIVE_PROTOCOL).as_bytes());
@@ -196,10 +196,8 @@ impl Peer {
                 bm.put_slice(format!("{}\n", self.hive_name).as_bytes());
                 stream.write(bm.as_ref()).await.expect("write failed");
                 stream.flush().await.expect("flush failed");
-                debug!("<<<< SENT HIVE");
-
             },
-            PeerType::TcpServer => {
+            PeerType::TcpClient => {
                 let mut reader = BufReader::new(stream.clone());
                 debug!("{:?} handshake....", self.get_id_name());
                 let mut buff = Vec::new();
@@ -242,13 +240,14 @@ impl Peer {
                 };
                 // send headers
                 let name_bytes = self.hive_name.as_bytes();
-                let mut bytes = BytesMut::with_capacity(name_bytes.len() + 2);
+                let mut bytes = BytesMut::with_capacity(name_bytes.len() + 3);
                 bytes.put_u8(HEADER);
-                //bytes.put_u8(PEER_REQUESTS);
+                bytes.put_u8(PEER_REQUESTS);
                 bytes.put_u8(HEADER_NAME);
                 bytes.put_slice(name_bytes);
-                trace!(".... send headers: {:?}", bytes);
+                info!(".... send headers: {:?}", bytes);
                 self.send(bytes.freeze()).await?;
+
             },
             _ => {
                 unimplemented!("finish this!!");
@@ -328,7 +327,7 @@ impl Peer {
         debug!("SEND starts here {:?}", msg);
         if self.stream.is_some() {
             if self.web_sock.is_some() {
-                debug!("Sending message to web client at {:?} = {:?}", self.address, msg);
+                info!("Sending message to web client at {:?} = {:?}", self.address, msg);
                 self.web_sock.as_ref().unwrap().send_message(msg).await?;
             } else {
                 debug!(">>>>>>>>>>>>>>>>  {:?} Send to peer {}: {:?}",self.get_id_name(), self.name.read().await, msg);

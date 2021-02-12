@@ -761,21 +761,21 @@ impl Hive {
                         self.send_to_peer(vec[1], pear_name).await?;
                     }
                 }
-                // REQUEST_PEERS => {
-                //     // let peer_str = format!("{}{}", REQUEST_PEERS, self.peer_string());
-                //     let str = self.peer_string();
-                //     let mut peer_bytes = BytesMut::with_capacity(str.len()+1);
-                //     peer_bytes.put_u8(REQUEST_PEERS);
-                //     peer_bytes.put_slice(str.as_bytes());
-                //
-                //     for p in self.peers.as_mut_slice() {
-                //         if p.address() == from {
-                //             p.send(peer_bytes.freeze()).await?;
-                //             p.update_peers = true;
-                //             break;
-                //         }
-                //     }
-                // }
+                PEER_REQUESTS => {
+                    // let peer_str = format!("{}{}", REQUEST_PEERS, self.peer_string());
+                    let str = self.peer_string();
+                    let mut peer_bytes = BytesMut::with_capacity(str.len()+1);
+                    peer_bytes.put_u8(PEER_RESPONSE);
+                    peer_bytes.put_slice(str.as_bytes());
+
+                    for p in self.peers.as_mut_slice() {
+                        if p.address() == from {
+                            p.send(peer_bytes.freeze()).await?;
+                            p.update_peers = true;
+                            break;
+                        }
+                    }
+                }
                 _ => unimplemented!("Unknown message {:?}", msg_type)
             }
             // do ACK for peer
