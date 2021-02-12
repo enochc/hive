@@ -762,7 +762,6 @@ impl Hive {
                     }
                 }
                 PEER_REQUESTS => {
-                    // let peer_str = format!("{}{}", REQUEST_PEERS, self.peer_string());
                     let str = self.peer_string();
                     let mut peer_bytes = BytesMut::with_capacity(str.len()+1);
                     peer_bytes.put_u8(PEER_RESPONSE);

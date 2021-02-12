@@ -10,12 +10,10 @@ use futures::executor::block_on;
 use async_std::sync::Arc;
 use log::{LevelFilter};
 
-// TODO somethimes this test works, sometimes it doesn't under identical circumstances!!!!!
-// Sometimes the Client receives a response on the initial thing value of 1, sometimes not
-// It doesn't really break stuff, but it's annoying as HELL!!!!!
+
 #[test]
 fn main(){
-    init_logging(Some(LevelFilter::Info));
+    init_logging(Some(LevelFilter::Debug));
 
     let counter = Arc::new(AtomicUsize::new(0));
     let counter1 = counter.clone();

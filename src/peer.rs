@@ -240,9 +240,10 @@ impl Peer {
                 };
                 // send headers
                 let name_bytes = self.hive_name.as_bytes();
-                let mut bytes = BytesMut::with_capacity(name_bytes.len() + 3);
+                // let mut bytes = BytesMut::with_capacity(name_bytes.len() + 3);
+                let mut bytes = BytesMut::with_capacity(name_bytes.len() + 2);
                 bytes.put_u8(HEADER);
-                bytes.put_u8(PEER_REQUESTS);
+                // bytes.put_u8(PEER_REQUESTS);
                 bytes.put_u8(HEADER_NAME);
                 bytes.put_slice(name_bytes);
                 info!(".... send headers: {:?}", bytes);
