@@ -32,8 +32,6 @@ impl<T> Signal<T>
         let count = self.counter.load(Ordering::Relaxed);
         debug!("EMITTING:: {}", count);
         let mut futures = vec![];
-        // let mut exists_fut = false;
-        // let mut future: Option<JoinHandle<()>> = None;
 
         for s in self.slots.lock().await.iter() {
             let s_clone = s.clone();
@@ -42,17 +40,10 @@ impl<T> Signal<T>
             let h = task::spawn(async move{
                 send_emit(s_clone, val_clone).await;
             });
-            // match future {
-            //     Some(f) => { future = Zip(h, f);},
-            //     None => { future = Some(h);}
-            // }
 
             futures.push(h);
         }
-        // match future {
-        //     None => {},
-        //     Some(fut) => {fut.await}
-        // }
+
         join_all(futures).await;
     }
 

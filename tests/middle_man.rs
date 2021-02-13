@@ -2,14 +2,13 @@ use hive::hive::Hive;
 use std::sync::atomic::{Ordering, AtomicUsize};
 #[allow(unused_imports)]
 use log::{info, debug};
-use async_std::task;
 use std::time::Duration;
 use std::thread;
 use hive::init_logging;
 use futures::executor::block_on;
 use async_std::sync::Arc;
 use log::{LevelFilter};
-
+use std::sync::{Condvar, Mutex};
 
 #[test]
 fn main(){
@@ -19,6 +18,10 @@ fn main(){
     let counter1 = counter.clone();
     let counter2 = counter.clone();
 
+    let ack: Arc<(Mutex<u32>, Condvar)> = Arc::new((Mutex::new(0), Condvar::new()));
+    let ack_clone = ack.clone();
+    let ack_clone2 = ack.clone();
+
     let props_str = r#"
     listen="3000"
     name = "Server"
@@ -26,21 +29,26 @@ fn main(){
     thing=1
     "#;
     let mut server_hive = Hive::new_from_str(props_str);
-    server_hive.get_mut_property("thing", ).unwrap().on_changed.connect(move |value| {
-        info!("SERVER ----------------------- thing changed: {:?}", value);
+
+    // server_hive.get_mut_property("thing", ).unwrap().on_changed.connect(move |value| {
+    server_hive.get_mut_property("thing", ).unwrap().on_next(move |value| {
+        info!("SERVER ----------------------- server thing changed: {:?}", value);
         counter1.fetch_add(1, Ordering::SeqCst);
+        let (lock, cvar) = &*ack_clone;
+        let mut done = lock.lock().unwrap();
+        *done +=1;
+        cvar.notify_one();
+
     });
 
-    // let mut server_hand = server_hive.get_handler();
     server_hive.go(true);
-
 
     let props_str = r#"
     name = "MiddleMan"
     connect="3000"
     listen="3001"
     "#;
-    let mut middle_man = Hive::new_from_str(props_str);
+    let middle_man = Hive::new_from_str(props_str);
     let mut middle_hand = middle_man.go(true);
 
     let props_str = r#"
@@ -49,20 +57,35 @@ fn main(){
     thing=1
     "#;
     let mut client_hive = Hive::new_from_str(props_str);
-    client_hive.get_mut_property("thing", ).unwrap().on_changed.connect(move |value| {
-        info!("CLIENT!! --------------------- thing changed: {:?}", value);
-        // this gets changed on initial connection when the property first sinks
+    client_hive.get_mut_property("thing", ).unwrap().on_next(move |value| {
+        info!("CLIENT!! --------------------- client thing changed: {:?}", value);
         counter2.fetch_add(1, Ordering::SeqCst);
+        let (lock, cvar) = &*ack_clone2;
+        let mut done = lock.lock().unwrap();
+        *done +=1;
+        cvar.notify_one();
     });
 
     let mut client_hand = client_hive.go(true);
 
     block_on(async{
         middle_hand.send_property_value("thing", Some(&4.into())).await;
-        thread::sleep(Duration::from_millis(100));
+        let (lock, cvar) = &*ack;
+        let mut done = lock.lock().unwrap();
+
+        while *done <2 {
+            info!(":::: hmmmm, {:?}", done);
+            done = cvar.wait(done).unwrap();
+        }
         assert_eq!(counter.load(Ordering::Relaxed), 2);
+
         client_hand.send_property_value("thing",Some(&5.into())).await;
-        thread::sleep(Duration::from_millis(100));
+
+        while *done <4 {
+            info!(":::: hmmmm, {:?}", done);
+            done = cvar.wait(done).unwrap();
+        }
+
         assert_eq!(counter.load(Ordering::Relaxed), 4);
 
     });

@@ -22,7 +22,7 @@ use log::{debug, info, trace, warn};
 
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::{central::Central};
-use crate::hive::{HEADER_NAME, HIVE_PROTOCOL, PING, PONG, Result, Sender, HEADER, PEER_REQUESTS};
+use crate::hive::{HEADER_NAME, HIVE_PROTOCOL, PING, PONG, Result, Sender, HEADER};
 #[cfg(feature = "websock")]
 use crate::websocket::WebSock;
 
