@@ -85,6 +85,7 @@ fn main() {
     let mut client_hive = Hive::new_from_str("connect = \"127.0.0.1:3000\"\nname=\"client1\"");
 
     let client_thermostat_name_property =  client_hive.get_mut_property("thermostatName").unwrap();
+    let mut client_therm_prop_clone = client_thermostat_name_property.clone();
     let mut stream = client_thermostat_name_property.stream.clone();
     async_std::task::spawn(async move {
         while let Some(x) = stream.next().await {
@@ -110,7 +111,6 @@ fn main() {
 
     let ack_clone = ack.clone();
     // client_hive.get_mut_property("thingvalue").unwrap().on_changed.connect(move |value|{
-    info!("================== test 11111:");
     client_hive.get_mut_property("thingvalue").unwrap().on_next( move |value|{
         info!(" +++++++++++++++++++++ CLIENT thing value::::::::::::::::::::: {:?}", value);
         let (lock, cvar) = &*ack_clone;
@@ -155,7 +155,7 @@ fn main() {
                 info!("                ACK hey you: {:?}", got);
             }
         }
-        client_hand.send_to_peer("Server", "hey mr man").await; // + 1
+            client_hand.send_to_peer("Server", "hey mr man").await; // + 1
         {
             let mut got = lock.lock().unwrap();
             while &*got != "hey mr man" {
@@ -164,9 +164,11 @@ fn main() {
                 info!("                ACK mr man: {:?}", got);
             }
         }
+
         info!("SENT thermostatName = Before");
         count6.store(0, Ordering::Relaxed);
-        client_hand.send_property_value("thermostatName", Some(&"Before".into())).await; // +2
+        client_hand.set_property("thermostatName", Some(&"Before".into())).await; // +2
+        // client_therm_prop_clone.set("Before".into());
         {
             let mut done = lock.lock().unwrap();
             while *messages_received.lock().unwrap() <= 2 {
@@ -178,7 +180,7 @@ fn main() {
         info!("DELETE thermostatName");
         //TODO there is curently no validation for the delete method
         server_hand.delete_property("thermostatName").await;
-        server_hand.send_property_value("thingvalue", Some(&10.into())).await; // +1
+        server_hand.set_property("thingvalue", Some(&10.into())).await; // +1
         {
             let mut done = lock.lock().unwrap();
             while &*done != "10" {

@@ -69,7 +69,7 @@ fn main(){
     let mut client_hand = client_hive.go(true);
 
     block_on(async{
-        middle_hand.send_property_value("thing", Some(&4.into())).await;
+        middle_hand.set_property("thing", Some(&4.into())).await;
         let (lock, cvar) = &*ack;
         let mut done = lock.lock().unwrap();
 
@@ -79,7 +79,7 @@ fn main(){
         }
         assert_eq!(counter.load(Ordering::Relaxed), 2);
 
-        client_hand.send_property_value("thing",Some(&5.into())).await;
+        client_hand.set_property("thing", Some(&5.into())).await;
 
         while *done <4 {
             info!(":::: hmmmm, {:?}", done);

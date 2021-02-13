@@ -23,7 +23,7 @@ impl Handler {
 
     // This is basically a set_property method, however, Hive itself does not deal directly with property values
     // It only propagates value change notifications, hence the name
-    pub async fn send_property_value(&mut self, prop_name:&str, prop_value:Option<&PropertyType>){
+    pub async fn set_property(&mut self, prop_name:&str, prop_value:Option<&PropertyType>){
         let p = Property::from_toml(prop_name, prop_value);
         self.send_property(p).await;
     }

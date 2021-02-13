@@ -24,6 +24,7 @@ use crate::peer::{Peer, SocketEvent, PeerType};
 use crate::property::{properties_to_bytes, Property};
 use crate::signal::Signal;
 use std::sync::{Condvar, Mutex};
+use std::fmt::{Debug, Formatter};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub type Sender<T> = mpsc::UnboundedSender<T>;
@@ -45,6 +46,12 @@ pub struct Hive {
     pub connected: Arc<AtomicBool>,
     advertising: Arc<AtomicBool>,
     ready: Option<Arc<(Mutex<bool>, Condvar)>>
+}
+
+impl Debug for Hive {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Hive").field("name", &self.name).finish()
+    }
 }
 
 pub(crate) const PROPERTIES: u8 = 0x10;
@@ -143,7 +150,6 @@ impl Hive {
                 let (lock, cvar) = &*r;
                 let lock = lock.lock().unwrap();
                 let _ = cvar.wait(lock).expect("Wait on lock failed");
-
                 handler
             }
         }
@@ -323,7 +329,7 @@ impl Hive {
     }
 
 
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(& mut self) -> Result<()> {
         self.setup_stop_listener();
         self.advertising.store(true, Ordering::Relaxed);
 
@@ -442,13 +448,12 @@ impl Hive {
             //This is where we sit for a long time and just receive events
             self.receive_events().await?;
         }
-        debug!("<<<<<<  Hive DONE");
+        debug!("Hive DONE");
         Ok(())
     }
 
 
-    async fn receive_events(&mut self) -> Result<()> {
-        debug!("!!!!!!!!!!!!!! receiving for {:?}", self.name);
+    async fn receive_events(& mut self) -> Result<()> {
         while !self.sender.is_closed() {
             debug!("{:?} waiting for event",self.name);
             let nn = self.receiver.next().await;
@@ -491,6 +496,7 @@ impl Hive {
 
                         debug!("<<<< NEW PEER for {:?}: {:?}",self.name, p.get_name());
                         let is_web_sock_peer = p.web_sock.is_some();
+
                         self.peers.push(p);
 
                         if !is_tcp_client {
@@ -527,11 +533,14 @@ impl Hive {
                 }
                 #[allow(unused_variables)]
                 Some(SocketEvent::SendBtProps { sender }) => {
+                    // let str = properties_to_bytes(&self.properties);
+                    // let ff = str.to_vec();
                     #[cfg(target_os = "linux")]
                         {
                             debug!("<<<........... HAHAHAHAHAHA {:?}", sender);
-                            let str = properties_to_sock_str(&self.properties);
-                            let resp = bluster::gatt::event::Response::Success(str.into());
+                            // let str = properties_to_sock_str(&self.properties);
+                            let bytes = properties_to_bytes(&self.properties);
+                            let resp = bluster::gatt::event::Response::Success(bytes.to_vec());
                             sender.send(resp).unwrap();
                         }
                 }

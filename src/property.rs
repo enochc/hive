@@ -69,7 +69,7 @@ impl fmt::Debug for Property {
     }
 }
 
-// #[derive(Clone)]
+#[derive(Clone)]
 pub struct Property
 {
     name: Box<str>,

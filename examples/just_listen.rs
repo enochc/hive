@@ -11,6 +11,8 @@ use hive::init_logging;
 use log::{debug, info, error};
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use simple_signal::{self, Signal};
+use std::sync::{Mutex, Condvar};
 
 // blasuhhh
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
@@ -32,16 +34,35 @@ fn main() {
 
     use simple_signal::{self, Signal};
 
-    server_hive.get_mut_property("turn").unwrap().on_changed.connect(move |value|{
+    server_hive.get_mut_property("turn").unwrap().on_next(move |value|{
         debug!("<<<< TURN: {:?}", value);
     });
 
     let advertising = server_hive.get_advertising();
 
-    task::block_on(async {server_hive.run().await});
+    let is_running: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(true), Condvar::new()));
+
+    simple_signal::set_handler(&[Signal::Int, Signal::Term], {
+        let run_clone = is_running.clone();
+
+        move |_| {
+            info!("Stopping...");
+            let (lock, cvar) = &*run_clone;
+            let mut running = lock.lock().unwrap();
+            *running = false;
+            cvar.notify_one();
+        }
+    });
+    let (lock, cvar) = &*is_running;
+
+    let handler = server_hive.go(true);
+
+    let mut running = lock.lock().unwrap();
+    while *running {
+        running = cvar.wait(running).unwrap();
+    }
+
 
     debug!("Done!! ");
-
-
 
 }

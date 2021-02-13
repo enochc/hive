@@ -179,7 +179,7 @@ impl Peer {
                 event_sender: sender,
                 web_sock: None,
                 hive_name,
-                peer_type
+                peer_type,
             }
         };
 
