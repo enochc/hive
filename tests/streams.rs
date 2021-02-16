@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
-use hive::hive::Hive;
+// use hive::hive::Hive;
+use Hive;
 use async_std::task;
 use futures::{SinkExt, StreamExt};
 use hive::property::{Property, PropertyType};

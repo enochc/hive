@@ -1,7 +1,9 @@
+//https://github.com/akosthekiss/blurmac
+
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Condvar, Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -24,15 +26,16 @@ use bluster::{
 };
 
 use crate::bluetooth::{HIVE_CHAR_ID, HIVE_DESC_ID, HIVE_PROPS_DESC_ID, HiveMessage, SERVICE_ID};
+#[cfg(target_os = "linux")]
 use crate::bluetooth::my_blurz::set_discoverable;
 use crate::hive::{Receiver, Sender};
 use crate::peer::{SocketEvent, PeerType};
+
 
 // #[derive(Clone)]
 pub struct Peripheral {
     ble_name: String,
     event_sender: Sender<SocketEvent>,
-    //TODO this feels silly, do a really need a mutex?
     address: Mutex<String>,
 
 }
@@ -88,7 +91,6 @@ impl Peripheral {
             }
         });
 
-
         let mut characteristics: HashSet<Characteristic> = HashSet::new();
         characteristics.insert(Characteristic::new(
             Uuid::from_sdp_short_uuid(HIVE_CHAR_ID),
@@ -128,18 +130,17 @@ impl Peripheral {
                                 sender_properties_descriptor_clone,
                             ))),
                         ),
-                        Some("Hive_Prios_Desc".as_bytes().to_vec()),
+                        Some("Hive_Props_Desc".as_bytes().to_vec()),
                     )
                 );
                 descriptors
             },
         ));
-
         let sender_clone = bytes_tx.clone();
         let mut event_sender_clone = self.event_sender.clone();
 
         let characteristic_handler = async {
-            let characteristic_value = Arc::new(Mutex::new(String::from("hi")));
+            let characteristic_value = Mutex::new(String::from("hi"));
             let mut rx = receiver_characteristic;
             while let Some(event) = rx.next().await {
                 match event {
@@ -204,9 +205,7 @@ impl Peripheral {
                 };
             }
         };
-
         let mut event_sender_clone = self.event_sender.clone();
-
         let props_descriptor_handler = async {
             let mut rx = receiver_properties_descriptor;
             let mut event_sender_clone = self.event_sender.clone();
@@ -269,64 +268,70 @@ impl Peripheral {
 
         let peripheral = Peripheral::get_peripheral().await;
 
+        while !peripheral.is_powered().await.expect("Failed to check if powered") {}
+        debug!("Peripheral powered on");
+        // TODO this is broken on macos
         peripheral.add_service(&Service::new(
             Uuid::from_sdp_short_uuid(SERVICE_ID),
             true,
             characteristics,
         )).unwrap();
 
-
         let ble_name_clone = self.ble_name.clone();
-        let event_sender_clone = self.event_sender.clone();
+
+        let advertise: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(true), Condvar::new()));
+        let advertise_clone = advertise.clone();
         let main_fut = async move {
             debug!("ONE");
 
-            let powered = peripheral.is_powered().await;
-            debug!(":::::: {:?}", powered);
-            while !peripheral.is_powered().await.expect("Failed to check if powered") {}
-            debug!("Peripheral powered on");
             peripheral.register_gatt().await.unwrap();
 
+
             if do_advertise {
+                #[cfg(target_os = "linux")]
                 set_discoverable(true).expect("Failed to set discoverable");
                 peripheral.start_advertising(&ble_name_clone, &[]).await
                     .expect("Failed to start_advertising");
                 while !peripheral.is_advertising().await.unwrap() {}
                 debug!("Peripheral started advertising");
 
-                while !event_sender_clone.is_closed() {
-                    tokio::time::delay_for(Duration::from_secs(1)).await;
+                let (lock, cvar) = &*advertise_clone;
+                let mut adr = lock.lock().unwrap();
+                while *adr {
+                    adr = cvar.wait(adr).unwrap();
                 }
-
                 peripheral.stop_advertising().await.unwrap();
+                #[cfg(target_os = "linux")]
                 set_discoverable(false).expect("failed to stop being discovered");
                 debug!("Peripheral stopped advertising");
+
             }
         };
-
+        let event_sender_clone = self.event_sender.clone();
         let sender_characteristic_clone = sender_characteristic.clone();
         let mut sender_descriptor_clone = sender_descriptor.clone();
-        let fut_stop = async {
+        let fut_stop = async move {
             // we pretty much wait here for a long time
-            while !self.event_sender.is_closed() {
+            while !event_sender_clone.is_closed() {
                 tokio::time::delay_for(Duration::from_secs(1)).await;
             }
+
+            let (lock, cvar) = &*advertise;
+            let mut adr = lock.lock().unwrap();
+            *adr = false;
+            cvar.notify_all();
+
             &sender_characteristic_clone.clone().close_channel();
             &sender_descriptor_clone.close_channel();
         };
 
-        // let fut = futures::future::join4(characteristic_handler, descriptor_handler, main_fut, fut_stop);
         let fut = futures::future::join5(characteristic_handler,
                                          descriptor_handler,
                                          props_descriptor_handler,
                                          main_fut,
                                          fut_stop);
         fut.await;
-        // thread::spawn(move ||{
-        //     let fut = futures::future::join(characteristic_handler, descriptor_handler);
-        //     block_on(fut);
-        // });
-        // main_fut.await;
+
         debug!("<< Peripheral stopped!");
         Ok(())
     }
