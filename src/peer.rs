@@ -83,7 +83,7 @@ pub struct Peer {
     pub address: String,
     last_received: Arc<RwLock<SystemTime>>,
     ack_check: Arc<AtomicBool>,
-    pub web_sock: Option<WebSock>,
+    web_sock: Option<WebSock>,
     event_sender: UnboundedSender<SocketEvent>,
     hive_name: String,
     peer_type: PeerType,
@@ -104,6 +104,7 @@ impl Peer {
     pub fn to_string(&self) -> String {
         return format!("{:?},{:?}", self.get_name(), self.address);
     }
+    pub fn is_web_socket(&self) -> bool {return self.web_sock.is_some()}
 
     pub async fn set_name(&self, name: &str) {
         debug!("{:?} set name = {:?}", self.get_id_name(), name);
@@ -345,7 +346,7 @@ impl Peer {
                 }
         } else if self.peripheral.is_some() {
             debug!("Send via bt peripheral");
-            let mut buff = BytesMut::with_capacity(msg.len());//BytesMut::from(msg.to_vec());
+            let mut buff = BytesMut::with_capacity(msg.len());
             buff.put_slice(msg.as_ref());
             let b = buff.freeze();
             self.peripheral.as_ref().unwrap()

@@ -495,7 +495,7 @@ impl Hive {
 
 
                         debug!("<<<< NEW PEER for {:?}: {:?}",self.name, p.get_name());
-                        let is_web_sock_peer = p.web_sock.is_some();
+                        let is_web_sock_peer = p.is_web_socket();
 
                         self.peers.push(p);
 
@@ -533,12 +533,9 @@ impl Hive {
                 }
                 #[allow(unused_variables)]
                 Some(SocketEvent::SendBtProps { sender }) => {
-                    // let str = properties_to_bytes(&self.properties);
-                    // let ff = str.to_vec();
                     #[cfg(target_os = "linux")]
                         {
                             debug!("<<<........... HAHAHAHAHAHA {:?}", sender);
-                            // let str = properties_to_sock_str(&self.properties);
                             let bytes = properties_to_bytes(&self.properties);
                             let resp = bluster::gatt::event::Response::Success(bytes.to_vec());
                             sender.send(resp).unwrap();

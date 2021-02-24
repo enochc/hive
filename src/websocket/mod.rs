@@ -43,10 +43,11 @@ impl WebSock {
             str = "".to_string();
             let m = AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
             let parts = str.split(":").collect::<Vec<_>>();
+            debug!("... HEADER:: {:?}",str);
             headers.insert(parts.first().unwrap().to_string(), parts.last().unwrap().trim().to_string());
 
             let done = parts.len() < 2;
-            if count > 30 || m == 0 || done {
+            if (count > 30 || m == 0 || done) && headers.get("Upgrade") == Some(&"websocket".to_string()) {
                 let sec_resp = WebSock::get_sec(headers.get("Sec-WebSocket-Key").unwrap());
                 let mut response_string = "HTTP/1.1 101 Switching Protocols\r\n".to_string();
                 response_string.push_str("Upgrade: websocket\r\n");
