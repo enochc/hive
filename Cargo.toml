@@ -7,7 +7,7 @@ license-file = "LICENSE.txt"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
-default = ["websock", "bluetooth"]
+default = ["websock"]
 #default = []
 bluetooth = ["bluster", "blurz", "uuid", "tokio", "lazy_static", "regex"]
 websock = ["websocket-codec", "base64", "sha-1", "tokio-util"]

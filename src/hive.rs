@@ -58,7 +58,7 @@ pub(crate) const PROPERTIES: u8 = 0x10;
 pub(crate) const PROPERTY: u8 = 0x11;
 pub(crate) const DELETE: u8 = 0x12;
 pub(crate) const PEER_MESSAGE: u8 = 0x13;
-pub(crate) const HEADER: u8 = 0x72; // "H" utf8 representation
+pub(crate) const HEADER: u8 = 0x72;
 pub(crate) const PEER_MESSAGE_DIV: &str = "\n";
 pub(crate) const PONG: u8 = 0x61;
 pub(crate) const HANGUP: u8 = 0x62;
@@ -67,7 +67,7 @@ pub(crate) const PING: u8 = 0x63;
 // pub(crate) const NEW_PEER:u8 = 0x64;
 pub(crate) const PEER_REQUESTS: u8 = 0x65;
 pub(crate) const PEER_RESPONSE: u8 = 0x66;
-pub(crate) const HEADER_NAME: u8 = 0x78; // "N" utf8 representation
+pub(crate) const HEADER_NAME: u8 = 0x78;
 pub(crate) const HIVE_PROTOCOL: &str = "HVEP";
 
 
