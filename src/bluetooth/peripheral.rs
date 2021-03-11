@@ -313,7 +313,7 @@ impl Peripheral {
         let fut_stop = async move {
             // we pretty much wait here for a long time
             while !event_sender_clone.is_closed() {
-                tokio::time::delay_for(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
 
             let (lock, cvar) = &*advertise;

@@ -9,6 +9,5 @@
   "Comment": {
     "body": "string",
     "post": "Post"
-  },
-  "turn": "int"
+  }
 }

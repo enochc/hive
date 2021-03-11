@@ -16,6 +16,9 @@ use log::{debug, info};
 use toml::Value;
 
 use crate::hive::{DELETE, PROPERTIES, PROPERTY};
+use toml::value::Table;
+use toml::map::Map;
+use std::fmt::{Debug, Formatter};
 
 pub type PropertyType = toml::Value;
 
@@ -65,7 +68,7 @@ impl Stream for PropertyStream {
 
 impl fmt::Debug for Property {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}={:?}", self.name, self.value)
+        write!(f, "{} value = {:?}, args = {:?}", self.name, *self.value.read().unwrap(), self.args)
     }
 }
 
@@ -75,12 +78,14 @@ pub struct Property
     name: Box<str>,
     pub value: Arc<RwLock<Option<PropertyType>>>,
     // on_changed was fun, kind of QT like signal/slot binding, but it's not necessary
-    // without the onChanged signal I can implement Clone if I feel so inclined
+    // without t he onChanged signal I can implement Clone if I feel so inclined
     // pub on_changed: Signal<Option<PropertyType>>,
     pub stream: PropertyStream,
     on_next_holder: Arc<dyn Fn(PropertyType) + Send + Sync + 'static>,
+    pub args: Option<Table>,
 
 }
+
 
 impl Property {
     pub fn to_string(&self) -> String {
@@ -90,11 +95,28 @@ impl Property {
             None => format!("{}=None", self.name),
         };
     }
+    fn rest_get(&mut self) ->Result<bool, Box<dyn std::error::Error + Send + Sync>>{
+        if cfg!(feature = "rest"){
+            let table = self.args.as_ref().unwrap();
+            match table.get("rest_get"){
+                Some(url) => {
+                    println!("doing a thing: {:?}", url.as_str().unwrap());
+                    return Ok(true);
+                },
+                _ =>{}
+            }
+        }
+
+        return Ok(false)
+
+
+    }
+
     pub fn on_next<F>(&mut self, f: F) where
         F: Fn(PropertyType) + Send + Sync + 'static {
         self.on_next_holder = Arc::new(f);
     }
-    pub fn from_table(table: &toml::value::Table) -> Option<Property> {
+    pub fn from_table(table: &Table) -> Option<Property> {
         if table.keys().len() != 1 {
             // return None
         }
@@ -119,6 +141,7 @@ impl Property {
             },
             // on_next_holder: Arc::new(Box::new(|_| {})),
             on_next_holder: Arc::new(|_| {}),
+            args: None
         };
     }
     pub fn from_str(name: &str, val: &str) -> Property {
@@ -130,6 +153,7 @@ impl Property {
     pub fn from_float(name: &str, val: f64) -> Property {
         Property::new(name, Some(PropertyType::from(val)))
     }
+
     pub fn from_toml(name: &str, val: Option<&toml::Value>) -> Property {
         //Property::new(name, Some(PropertyType::from(val.to_string())))
         let p = match val {
@@ -145,8 +169,41 @@ impl Property {
             Some(v) if v.is_float() => {
                 Property::from_float(name, v.as_float().unwrap())
             }
+            Some(v) if v.is_table() => {
+                /**
+                If the value is also a table, we look for the "val" in the table to set as the default value.
+                the rest of the table values, if any, are set as the "table" value on the Property
+                */
+                match v.as_table() {
+                    Some(mut t) => {
+                        let mut params = Table::new();
+                        let mut val:Option<Value> = None;
+                        for key in t.keys(){
+                            match t.get(key){
+                                Some(v) => {
+                                    if key == "val"{
+                                        val = Some(v.clone())
+                                    } else {
+                                        params.insert(key.clone(), v.clone());
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+                        let mut p = Property::new(name, val);
+                        if params.keys().len() >0 {
+                            p.args = Some(params);
+                        }
+                        p.rest_get();
+                        return p;
+                    }
+                    _ => {}
+                };
+                Property::new(name, None)
+
+            }
             _ => {
-                println!("<<Failed to convert Property: {:?}", name);
+                debug!("<<Failed to convert Property: {:?}: {:?}", name, val);
                 Property::new(name, None)
             }
         };

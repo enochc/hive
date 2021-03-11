@@ -1,7 +1,6 @@
 #![allow(unused_imports)]
 use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
-// use hive::hive::Hive;
-use Hive;
+use hive::hive::Hive;
 use async_std::task;
 use futures::{SinkExt, StreamExt};
 use hive::property::{Property, PropertyType};
@@ -21,7 +20,7 @@ use std::ops::Index;
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 #[test]
 fn main() {
-    init_logging(Some(LevelFilter::Info));
+    init_logging(Some(LevelFilter::Debug));
 
     let counter = Arc::new(AtomicUsize::new(0));
     let count1 = counter.clone();

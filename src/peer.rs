@@ -201,10 +201,15 @@ impl Peer {
             PeerType::TcpClient => {
                 let mut reader = BufReader::new(stream.clone());
                 debug!("{:?} handshake....", self.get_id_name());
-                let mut buff = Vec::new();
-                let eol_byte = "\n".as_bytes()[0];
-                AsyncBufReadExt::read_until(&mut reader, eol_byte, &mut buff).await?;
-                let mut str = String::from_utf8(buff).expect("failed to parse utf8");
+                let mut str = String::new();
+                AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
+                debug!("start shake: {:?}", str);
+                if str == "\u{0}\u{0}\u{0}\n" {
+                    // WTF!!!
+                    str = "".to_string();
+                    AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
+                    debug!("again: {:?}", str);
+                }
 
                 if str.starts_with(HIVE_PROTOCOL) {
                     loop {
@@ -216,6 +221,7 @@ impl Peer {
                         let my8 = bm.get_u8();
                         match my8 {
                             HEADER_NAME => {
+                                debug!("got name: {:?}", bm);
                                 // trim off the newline char
                                 bm.truncate(bm.len() - 1);
                                 let name = String::from_utf8(bm.to_vec()).expect("Can't parse name");
@@ -223,7 +229,7 @@ impl Peer {
                                 break;
                             }
                             _ => {
-                                warn!("something else");
+                                warn!("something else: {:?}", my8);
                                 break;
                             }
                         }

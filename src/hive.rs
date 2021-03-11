@@ -25,6 +25,8 @@ use crate::property::{properties_to_bytes, Property};
 use crate::signal::Signal;
 use std::sync::{Condvar, Mutex};
 use std::fmt::{Debug, Formatter};
+use toml::Value;
+use futures::executor::block_on;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub type Sender<T> = mpsc::UnboundedSender<T>;
@@ -77,10 +79,13 @@ fn spawn_bluetooth_listener(do_advertise: bool, sender: Sender<SocketEvent>, ble
     // let str = ble_name.clone();
     std::thread::spawn(move || {
         let sender_clone = sender.clone();
-        let mut rt = tokio::runtime::Builder::new()
-            // .basic_scheduler()
-            .threaded_scheduler()
-            .enable_all()
+        // let mut rt = tokio_0_2::runtime::Builder::new()
+        //     // .basic_scheduler()
+        //     .threaded_scheduler()
+        //     .enable_all()
+        //     .build()
+        //     .unwrap();
+        let mut rt = tokio::runtime::Builder::new_multi_thread()
             .build()
             .unwrap();
         rt.block_on(async move {
@@ -129,7 +134,7 @@ impl Hive {
     }
 
     pub fn go(mut self, wait:bool)->Handler {
-        //This consumes the Hive and returns a handler
+        //This consumes the Hive and returns a handler and spawns it's run thread in a task
         if wait {
             self.ready = Some(
                 Arc::new((Mutex::new(false), Condvar::new()))
@@ -165,10 +170,10 @@ impl Hive {
     }
 
     pub fn new_from_str(properties: &str) -> Hive {
+
         let config: toml::Value = toml::from_str(properties).unwrap();
         let prop = |p: &str| {
             return match config.get(p) {
-                // Some(v) => Some(v.to_string()),
                 Some(v) => Some(String::from(v.as_str().unwrap())),
                 _ => None
             };
@@ -203,12 +208,40 @@ impl Hive {
         };
 
         let properties = config.get("Properties");
-        if !properties.is_none() {
-            match properties {
-                Some(p) => hive.parse_properties(p),
-                _ => ()
-            }
+
+        match properties {
+            Some(p) => hive.parse_properties(p),
+            _ => ()
         };
+
+        // fetch initial values from the rest api
+        #[cfg(feature = "rest")]
+        match config.get(("REST")){
+            Some(t) => {
+                match t.get("get"){
+                    Some(rest) => {
+                        let mut rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_io()
+                            .enable_time()
+                            .build()
+                            .unwrap();
+                        rt.block_on(async move {
+                            let url = rest.to_string();
+                            debug!("<<<<<< rest: {:?}", url);
+                            let resp = reqwest::get("http://127.0.0.1:8000/hive/get").await.unwrap()
+                                .json::<HashMap<String, Value>>()
+                                .await.unwrap();
+
+                            println!("{:#?}", resp);
+                            // TODO finish this!!
+                        });
+                    }
+                    None => {}
+                }
+            }
+            None => {}
+        }
+
 
         return hive;
     }
@@ -245,7 +278,7 @@ impl Hive {
     }
 
     fn set_property(&mut self, property: Property) {
-        debug!("{:?} SET PROPERTY:: {:?}={:?}", self.name, property.get_name(),*property.value.read().unwrap());
+        println!("{:?} SET PROPERTY: {:?}", property.get_name(), property);
         let name = property.get_name().clone();
         if self.has_property(name) {
             /*
@@ -734,7 +767,9 @@ impl Hive {
                 PROPERTY => {
                     let message = String::from_utf8(msg.to_vec()).unwrap();
                     let p_toml: toml::Value = toml::from_str(&message).unwrap();
+
                     let property = Property::from_table(p_toml.as_table().unwrap());
+                    debug!("property: {:?}", p_toml);
                     self.set_property(property.unwrap());
                     self.broadcast(PROPERTY, Some(msg), from).await?;
                 }
@@ -781,7 +816,7 @@ impl Hive {
                         }
                     }
                 }
-                _ => unimplemented!("Unknown message {:?}", msg_type)
+                _ => error!("Unknown message {:?}", msg_type)
             }
             // do ACK for peer
             match self.peers.iter_mut().find(|p| p.address() == from) {
