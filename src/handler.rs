@@ -7,7 +7,7 @@ use log::{debug, error, info};
 
 use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
 use crate::peer::SocketEvent;
-use crate::property::{Property, property_to_bytes, PropertyType};
+use crate::property::{Property, property_to_bytes, PropertyValue};
 
 #[derive(Clone)]
 pub struct Handler {
@@ -23,8 +23,9 @@ impl Handler {
 
     // This is basically a set_property method, however, Hive itself does not deal directly with property values
     // It only propagates value change notifications, hence the name
-    pub async fn set_property(&mut self, prop_name:&str, prop_value:Option<&PropertyType>){
-        let p = Property::from_toml(prop_name, prop_value);
+    pub async fn set_property(&mut self, prop_name:&str, prop_value:Option<&PropertyValue>){
+        // let p = Property::from_toml(prop_name, prop_value);
+        let p = Property::from_toml(prop_name, Some(&prop_value.unwrap().toml()));
         self.send_property(p).await;
     }
 

@@ -18,16 +18,86 @@ use toml::Value;
 use crate::hive::{DELETE, PROPERTIES, PROPERTY};
 use toml::value::Table;
 use toml::map::Map;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Formatter, Display};
 
-pub type PropertyType = toml::Value;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+// pub type PropertyType = toml::Value;
+
+#[derive(Clone, Debug)]
+pub struct PropertyValue {
+    pub val: toml::Value
+}
+
+impl PropertyValue {
+    pub fn toml(&self) -> toml::Value {
+        self.val.clone()
+    }
+}
+impl Display for PropertyValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        write!(f, "{}",self.val)
+    }
+}
+
+impl PartialEq for PropertyValue {
+    fn eq(&self, other: &Self) -> bool {
+        return self.val.eq(&other.val)
+    }
+}
+impl From<toml::Value> for PropertyValue {
+    fn from(v: Value) -> Self {
+        PropertyValue {val:v}
+    }
+}
+impl From<&str> for PropertyValue {
+    fn from(v: &str) -> Self {
+        debug!("0............................... {:?}",v);
+        PropertyValue {val:Value::from(v)}
+    }
+}
+impl From<bool> for PropertyValue {
+    fn from(v: bool) -> Self {
+        debug!("1............................... {:?}",v);
+        PropertyValue {val:Value::from(v)}
+    }
+}
+impl From<u32> for PropertyValue {
+    fn from(v: u32) -> Self {
+        debug!("2............................... {:?}",v);
+        PropertyValue {val:Value::from(v)}
+    }
+}
+impl From<i32> for PropertyValue {
+    fn from(v: i32) -> Self {
+        debug!("3............................... {:?}",v);
+        PropertyValue {val:Value::from(v)}
+    }
+}
+impl From<f64> for PropertyValue {
+    fn from(v: f64) -> Self {
+        debug!("4............................... {:?}",v);
+        PropertyValue {val:Value::from(v)}
+    }
+}
+impl From<i64> for PropertyValue {
+    fn from(v: i64) -> Self {
+        debug!("5............................... {:?}",v);
+        PropertyValue {val:Value::from(v)}
+    }
+}
+
+// impl Into<PropertyType> for toml::Value{
+//     fn into(self) -> PropertyType {
+//         PropertyType{toml:self}
+//     }
+// }
 
 
 #[derive(Default, Clone)]
 pub struct PropertyStream
 {
     has_next: Arc<(Mutex<bool>, Condvar)>,
-    pub value: Arc<RwLock<Option<PropertyType>>>,
+    pub value: Arc<RwLock<Option<PropertyValue>>>,
 
 }
 
@@ -52,7 +122,7 @@ pub struct PropertyStream
 // }
 
 impl Stream for PropertyStream {
-    type Item = Value;
+    type Item = PropertyValue;
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let (lock, cvar) = &*self.has_next;
@@ -76,26 +146,27 @@ impl fmt::Debug for Property {
 pub struct Property
 {
     name: Box<str>,
-    pub value: Arc<RwLock<Option<PropertyType>>>,
+    pub value: Arc<RwLock<Option<PropertyValue>>>,
     // on_changed was fun, kind of QT like signal/slot binding, but it's not necessary
     // without t he onChanged signal I can implement Clone if I feel so inclined
     // pub on_changed: Signal<Option<PropertyType>>,
     pub stream: PropertyStream,
-    on_next_holder: Arc<dyn Fn(PropertyType) + Send + Sync + 'static>,
+    on_next_holder: Arc<dyn Fn(PropertyValue) + Send + Sync + 'static>,
     pub args: Option<Table>,
 
 }
+
 
 
 impl Property {
     pub fn to_string(&self) -> String {
         let v = &*self.value.read().unwrap();
         return match v {
-            Some(t) => format!("{}={}", self.name, t.to_string()),
+            Some(t) => format!("{}={}", self.name, t.val.to_string()),
             None => format!("{}=None", self.name),
         };
     }
-    fn rest_get(&mut self) ->Result<bool, Box<dyn std::error::Error + Send + Sync>>{
+    fn rest_get(&mut self) ->Result<bool>{
         if cfg!(feature = "rest"){
             let table = self.args.as_ref().unwrap();
             match table.get("rest_get"){
@@ -113,7 +184,7 @@ impl Property {
     }
 
     pub fn on_next<F>(&mut self, f: F) where
-        F: Fn(PropertyType) + Send + Sync + 'static {
+        F: Fn(PropertyValue) + Send + Sync + 'static {
         self.on_next_holder = Arc::new(f);
     }
     pub fn from_table(table: &Table) -> Option<Property> {
@@ -130,7 +201,7 @@ impl Property {
     pub fn get_name(&self) -> &str {
         self.name.borrow()
     }
-    pub fn new(name: &str, val: Option<PropertyType>) -> Property {
+    pub fn new(name: &str, val: Option<PropertyValue>) -> Property {
         let arc_val = Arc::new(RwLock::new(val));
         return Property {
             name: Box::from(name),
@@ -145,13 +216,13 @@ impl Property {
         };
     }
     pub fn from_str(name: &str, val: &str) -> Property {
-        Property::new(name, Some(PropertyType::from(val)))
+        Property::new(name, Some(PropertyValue::from(val)))
     }
     pub fn from_bool(name: &str, val: bool) -> Property {
-        Property::new(name, Some(PropertyType::from(val)))
+        Property::new(name, Some(PropertyValue::from(val)))
     }
     pub fn from_float(name: &str, val: f64) -> Property {
-        Property::new(name, Some(PropertyType::from(val)))
+        Property::new(name, Some(PropertyValue::from(val)))
     }
 
     pub fn from_toml(name: &str, val: Option<&toml::Value>) -> Property {
@@ -190,7 +261,8 @@ impl Property {
                                 None => {}
                             }
                         }
-                        let mut p = Property::new(name, val);
+
+                        let mut p = Property::new(name, Some(val.unwrap().into()));
                         if params.keys().len() >0 {
                             p.args = Some(params);
                         }
@@ -213,27 +285,27 @@ impl Property {
         let small_int = u32::try_from(val);
         return match small_int {
             Ok(si) => {
-                Property::new(name, Some(PropertyType::from(si)))
+                Property::new(name, Some(PropertyValue::from(si)))
             }
             _ => {
-                Property::new(name, Some(PropertyType::from(val)))
+                Property::new(name, Some(PropertyValue::from(val)))
             }
         };
     }
     pub fn set_str(&mut self, s: &str) {
-        let p = PropertyType::from(s);
+        let p = PropertyValue::from(s);
         self.set(p);
     }
     pub fn set_bool(&mut self, b: bool) {
-        let p = PropertyType::from(b);
+        let p = PropertyValue::from(b);
         self.set(p);
     }
     pub fn set_int(&mut self, s: u32) {
-        let p = PropertyType::from(s);
+        let p = PropertyValue::from(s);
         self.set(p);
     }
     pub fn set_float(&mut self, s: f64) {
-        let p = PropertyType::from(s);
+        let p = PropertyValue::from(s);
         self.set(p);
     }
 
@@ -242,8 +314,8 @@ impl Property {
         return self.set(other.as_ref().unwrap().clone());
     }
 
-    pub fn set(&mut self, new_prop: PropertyType) -> bool
-        where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
+    pub fn set(&mut self, new_prop: PropertyValue) -> bool
+        where PropertyValue: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
         let does_eq = match &*self.value.read().unwrap() {
             None => { false }

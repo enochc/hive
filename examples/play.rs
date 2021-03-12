@@ -4,7 +4,7 @@ use std::pin::Pin;
 use async_std::task::{Context, Poll};
 use async_std::sync::Arc;
 use std::sync::{Condvar, Mutex};
-use hive::property::PropertyType;
+use hive::property::PropertyValue;
 use toml::Value;
 use std::time::Duration;
 use std::thread::sleep;
@@ -54,7 +54,7 @@ impl Stream for Counter {
         let _ = cvar.wait(is_reeady).unwrap();
 
         if self.count < 6 {
-            let op = PropertyType::from(self.count);
+            let op = PropertyValue::from(self.count);
             let ss = Some(op);
             return Poll::Ready(ss);
         }else {

@@ -3,7 +3,7 @@ use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
 use hive::hive::Hive;
 use async_std::task;
 use futures::{SinkExt, StreamExt};
-use hive::property::{Property, PropertyType};
+use hive::property::{Property, PropertyValue};
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use async_std::task::block_on;
@@ -19,7 +19,7 @@ use std::ops::Index;
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 #[test]
-fn main() {
+fn main()-> Result<(), Box<dyn std::error::Error>> {
     init_logging(Some(LevelFilter::Debug));
 
     let counter = Arc::new(AtomicUsize::new(0));
@@ -48,6 +48,10 @@ fn main() {
     let mut server_hive = Hive::new_from_str(props_str);
     let prop = server_hive.get_mut_property("thermostatName").unwrap();
 
+    let v = prop.value.read().unwrap().as_ref().unwrap().to_string();
+    let matches = v.eq("\"orig therm name\"");
+    info!("maths: {}",matches);
+    assert_eq!(v, "\"orig therm name\"".to_string());
     let ack_clone = ack.clone();
 
     let messages_received = Arc::new(Mutex::new(0));
@@ -88,8 +92,15 @@ fn main() {
     let mut client_therm_prop_clone = client_thermostat_name_property.clone();
     let mut stream = client_thermostat_name_property.stream.clone();
     async_std::task::spawn(async move {
+        let mut count = 1;
         while let Some(x) = stream.next().await {
             info!("+++++++++++++++++++++ CLIENT THERMOSTAT NAME CHANGED: {:?}", x);
+            if count == 1 {
+                assert_eq!(x, PropertyValue::from("orig therm name"));
+                count += 1;
+            } else if count == 2 {
+                assert_eq!(x, PropertyValue::from("Before"));
+            }
             count3.fetch_add(1, Ordering::SeqCst);
             let (lock, cvar) = &*ack_clone;
             let mut ack = lock.lock().unwrap();
@@ -114,12 +125,13 @@ fn main() {
     client_hive.get_mut_property("thingvalue").unwrap().on_next( move |value|{
         info!(" +++++++++++++++++++++ CLIENT thing value::::::::::::::::::::: {:?}", value);
         let (lock, cvar) = &*ack_clone;
-        let t2 = value.as_integer().unwrap() as usize;
+        let t2 = value.val.as_integer().unwrap() as usize;
         count5.store(t2, Ordering::Relaxed);
         let mut ack = lock.lock().unwrap();
         *ack = value.to_string();
         cvar.notify_one();
     });
+
 
     let mut client_hand = client_hive.go(true);
 
@@ -204,6 +216,8 @@ fn main() {
     let done = block_on(receiver.next());
 
     info!("done with stuff");
+
+    Ok(())
 
 }
 

@@ -278,7 +278,7 @@ impl Hive {
     }
 
     fn set_property(&mut self, property: Property) {
-        println!("{:?} SET PROPERTY: {:?}", property.get_name(), property);
+        debug!("{:?} SET PROPERTY: {:?}", property.get_name(), property);
         let name = property.get_name().clone();
         if self.has_property(name) {
             /*
