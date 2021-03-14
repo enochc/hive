@@ -28,6 +28,9 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     let counter_3 = counter.clone();
     let counter_4 = counter.clone();
     let counter_5 = counter.clone();
+    let counter_6 = counter.clone();
+    let counter_7 = counter.clone();
+    let counter_8 = counter.clone();
 
     let thingValue = Arc::new(AtomicUsize::new(0));
     let thingValue_1 = thingValue.clone();
@@ -139,16 +142,18 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
         cvar.notify_one();
     });
 
-    client_hive.get_mut_property("thermostatTarget_temp").unwrap().on_next(|value|{
+    client_hive.get_mut_property("thermostatTarget_temp").unwrap().on_next(move |value|{
         assert_eq!(value.val.as_float().unwrap(), 1.45);
+        counter_6.fetch_add(1, Ordering::Relaxed);
     });
 
-    client_hive.get_mut_property("is_active").unwrap().on_next(|value|{
+    client_hive.get_mut_property("is_active").unwrap().on_next(move |value|{
         assert_eq!(value.val.as_bool().unwrap(), true);
+        counter_7.fetch_add(1, Ordering::Relaxed);
     });
-    client_hive.get_mut_property("longNum").unwrap().on_next(|value|{
-        info!(".............. long numb: {:?}", value);
+    client_hive.get_mut_property("longNum").unwrap().on_next(move |value|{
         assert_eq!(value.val.as_integer().unwrap(), -1003987654);
+        counter_8.fetch_add(1, Ordering::Relaxed);
     });
 
 
@@ -233,7 +238,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(c6, 10);
 
     let c = counter.load(Ordering::Relaxed);
-    assert_eq!(c, 5);
+    assert_eq!(c, 8);
 
     info!("done with stuff");
 
