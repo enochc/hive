@@ -2,6 +2,8 @@ use std::thread::sleep;
 use hive::hive::Hive;
 use std::time::Duration;
 
+//OBSOLETE!!
+
 fn main() {
     let mut h = Hive::new("examples/properties.toml");//Hive::parse_properties(&config);
 
@@ -18,7 +20,7 @@ fn main() {
                 println!("also Inside signal: {:?}", v);
             });
 
-            p.set_str("What");
+            p.set("What");
             p.set_str("now");
             p.set_int(6);
             p.set_int(6);

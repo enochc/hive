@@ -18,21 +18,19 @@ pub struct Handler {
 
 impl Handler {
     pub fn set_str(&self, name:&str, value:&str){
-        let _prop = Property::from_str(name, value);
+        let _prop = Property::from_value(name, value.into());
     }
 
     // This is basically a set_property method, however, Hive itself does not deal directly with property values
     // It only propagates value change notifications, hence the name
     pub async fn set_property(&mut self, prop_name:&str, prop_value:Option<&PropertyValue>){
-        // let p = Property::from_toml(prop_name, prop_value);
         let p = Property::from_toml(prop_name, Some(&prop_value.unwrap().toml()));
         self.send_property(p).await;
     }
 
     pub async fn send_property(&mut self, property:Property){
 
-        let message = property_to_bytes(Some(&property), true)
-            .unwrap();
+        let message = property_to_bytes(&property, true);
         debug!("... send_property: {:?}, {:?}", message, self.sender.is_closed());
         let socket_event = SocketEvent::Message {
             from: String::from(""),
@@ -45,7 +43,7 @@ impl Handler {
 
     pub async fn delete_property(&mut self, name: &str){
         let p = Property::new(name, None);
-        let message = property_to_bytes(Some(&p), true).unwrap();
+        let message = property_to_bytes(&p, true);
         let socket_event = SocketEvent::Message {
             from: String::from(""),
             msg: message

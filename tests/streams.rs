@@ -100,6 +100,9 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
                 count += 1;
             } else if count == 2 {
                 assert_eq!(x, PropertyValue::from("Before"));
+                count += 1;
+            } else if count == 3 {
+                panic!("verify that the property has been deleted");
             }
             count3.fetch_add(1, Ordering::SeqCst);
             let (lock, cvar) = &*ack_clone;
@@ -180,7 +183,6 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
         info!("SENT thermostatName = Before");
         count6.store(0, Ordering::Relaxed);
         client_hand.set_property("thermostatName", Some(&"Before".into())).await; // +2
-        // client_therm_prop_clone.set("Before".into());
         {
             let mut done = lock.lock().unwrap();
             while *messages_received.lock().unwrap() <= 2 {
@@ -190,7 +192,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
             info!("                ACK thermostatName: {:?}", done);
         }
         info!("DELETE thermostatName");
-        //TODO there is curently no validation for the delete method
+
         server_hand.delete_property("thermostatName").await;
         server_hand.set_property("thingvalue", Some(&10.into())).await; // +1
         {
@@ -207,7 +209,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
         client_hand.hangup();
 
         // These should not be counted, because we deleted the ThermostatName
-        // server_hand.send_property_value("thermostatName", Some(&"After".into())).await;
+        server_hand.set_property("thermostatName", Some(&"After".into())).await;
 
         sender.send(1 as i32).await;
 

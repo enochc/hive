@@ -21,12 +21,11 @@ use toml;
 use crate::bluetooth::central::Central;
 use crate::handler::Handler;
 use crate::peer::{Peer, SocketEvent, PeerType};
-use crate::property::{properties_to_bytes, Property};
+use crate::property::{properties_to_bytes, Property, bytes_to_property, property_to_bytes};
 use crate::signal::Signal;
 use std::sync::{Condvar, Mutex};
 use std::fmt::{Debug, Formatter};
 use toml::Value;
-use futures::executor::block_on;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub type Sender<T> = mpsc::UnboundedSender<T>;
@@ -216,11 +215,11 @@ impl Hive {
 
         // fetch initial values from the rest api
         #[cfg(feature = "rest")]
-        match config.get(("REST")){
+        match config.get("REST"){
             Some(t) => {
                 match t.get("get"){
                     Some(rest) => {
-                        let mut rt = tokio::runtime::Builder::new_current_thread()
+                        let rt = tokio::runtime::Builder::new_current_thread()
                             .enable_io()
                             .enable_time()
                             .build()
@@ -690,37 +689,36 @@ impl Hive {
         }
     }
 
-    async fn broadcast(&self, msg_type: u8, msg: Option<Bytes>, except: &str) -> Result<()> {
+    async fn broadcast(&self, msg_type: u8, property: &Property, except: &str) -> Result<()> {
         /*
         Dont broadcast to the same Peer that the original change came from
         to prevent an infinite re-broadcast loop
          */
-        match msg {
-            Some(m) => {
-                // bluetooth clients dont receive independent updates,
-                // bluetooth really is a broadcast and only needs to go out once
-                let mut sent_bt_broadcast = false;
-                for p in &self.peers {
-                    debug!("{} broadcasting: {:?}, {:?}, {:?}",self.name, p.get_name(), p.is_bt_client(), m);
-                    if p.address() != except {
-                        debug!("... TEST 1");
-                        if p.is_bt_client() {
-                            if sent_bt_broadcast {
-                                // I'm a bluetooth client and the broadcast has already been sent next
-                                continue;
-                            }
-                            sent_bt_broadcast = true;
-                        }
-                        let mut msg_out = BytesMut::with_capacity(m.len() + 1);
-                        msg_out.put_u8(msg_type);
-                        msg_out.put_slice(&m);
-                        debug!("<<{} sending: {:?}", self.name, msg_out);
-                        p.send(msg_out.freeze()).await?;
+
+        // bluetooth clients dont receive independent updates,
+        // bluetooth really is a broadcast and only needs to go out once
+        let mut sent_bt_broadcast = false;
+        let msg = property_to_bytes(property, false);
+        for p in &self.peers {
+            debug!("{} broadcasting: {:?}, {:?}",self.name, p.get_name(), p.is_bt_client(),);
+            if p.address() != except {
+                debug!("... TEST 1");
+                if p.is_bt_client() {
+                    if sent_bt_broadcast {
+                        // I'm a bluetooth client and the broadcast has already been sent next
+                        continue;
                     }
+                    sent_bt_broadcast = true;
                 }
+                let mut msg_out = BytesMut::with_capacity(msg.len() + 1);
+                msg_out.put_u8(msg_type);
+                msg_out.put_slice(&msg.clone());
+                debug!("<<{} sending: {:?}", self.name, msg_out);
+                p.send(msg_out.freeze()).await?;
             }
-            _ => {}
-        };
+        }
+
+
         Ok(())
     }
 
@@ -754,31 +752,52 @@ impl Hive {
                     self.notify_peers_change().await;
                 }
                 PROPERTIES => {
-                    let message = String::from_utf8(msg.to_vec()).unwrap();
-                    match toml::from_str(&message) {
-                        Ok(v) => {
-                            self.parse_properties(&v);
+                    debug!("properties:: {:?}", msg);
+                    while msg.has_remaining().clone(){
+                        let p = bytes_to_property(&mut msg);
+                        debug!("thing: {:?}", p);
+                        match p{
+                            None => {}
+                            Some(p) => {
+                                self.set_property(p)
+                            }
                         }
-                        Err(_) => {
-                            panic!("Failed to parse TOML: {:?}", message)
+                    }
+
+                    debug!("done");
+                }
+
+                PROPERTY => {
+                    let p = bytes_to_property(&mut msg);
+                    debug!("property: {:?}", p);
+                    match p{
+                        None => {
+                            unimplemented!("Why are you here?")
+                        }
+                        Some(p) => {
+                            if p.is_none() {
+                                debug!("DELETING {:?}", p.get_name());
+                                self.broadcast(DELETE, &p, from).await?;
+                                self.properties.remove(p.get_name());
+                            } else {
+                                self.broadcast(PROPERTY, &p, from).await?;
+                                self.set_property(p);
+                            }
                         }
                     }
                 }
-                PROPERTY => {
-                    let message = String::from_utf8(msg.to_vec()).unwrap();
-                    let p_toml: toml::Value = toml::from_str(&message).unwrap();
-
-                    let property = Property::from_table(p_toml.as_table().unwrap());
-                    debug!("property: {:?}", p_toml);
-                    self.set_property(property.unwrap());
-                    self.broadcast(PROPERTY, Some(msg), from).await?;
-                }
+                // todo Delete is redundant, setting the value to None does the same thing
                 DELETE => {
                     let message = String::from_utf8(msg.to_vec()).unwrap();
                     let p = self.properties.remove(&message);
-                    // this is unnecessary, but fun
-                    drop(p);
-                    self.broadcast(DELETE, Some(msg), from).await?;
+                    match p{
+                        None => {}
+                        Some(p) => {
+                            self.broadcast(DELETE, &p, from).await?;
+                            // this is unnecessary, but fun
+                            drop(p);
+                        }
+                    }
                 }
                 HEADER => {
                     self.set_headers_from_peer(msg, from).await;
@@ -816,7 +835,7 @@ impl Hive {
                         }
                     }
                 }
-                _ => error!("Unknown message {:?}", msg_type)
+                _ => unimplemented!("Unknown message {:#02x}", msg_type)//error!("Unknown message {:?}", msg_type)
             }
             // do ACK for peer
             match self.peers.iter_mut().find(|p| p.address() == from) {
