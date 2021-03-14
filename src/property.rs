@@ -452,8 +452,20 @@ pub(crate) fn bytes_to_property(bytes:&mut Bytes) -> Option<Property> {
             return Some(Property::from_value(&name.ok().unwrap(), bool.into()));
         }
         IS_SHORT => {
-            let short = bytes.get_u8();
+            let short = bytes.get_i8();
             return Some(Property::from_value(&name.ok().unwrap(), short.into()));
+        }
+        IS_SMALL => {
+            let small = bytes.get_i16();
+            return Some(Property::from_value(&name.ok().unwrap(), (small as i32).into()));
+        }
+        IS_LONG => {
+            let long = bytes.get_i32();
+            return Some(Property::from_value(&name.ok().unwrap(), long.into()));
+        }
+        IS_INT => {
+            let int = bytes.get_i64();
+            return Some(Property::from_value(&name.ok().unwrap(), int.into()));
         }
         IS_FLOAT => {
             let float = bytes.get_f64();

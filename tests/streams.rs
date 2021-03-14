@@ -23,12 +23,15 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     init_logging(Some(LevelFilter::Debug));
 
     let counter = Arc::new(AtomicUsize::new(0));
-    let count1 = counter.clone();
-    let count2 = counter.clone();
-    let count3 = counter.clone();
-    let count4 = counter.clone();
-    let count5 = counter.clone();
-    let count6 = counter.clone();
+    let counter_1 = counter.clone();
+    let counter_2 = counter.clone();
+    let counter_3 = counter.clone();
+    let counter_4 = counter.clone();
+    let counter_5 = counter.clone();
+
+    let thingValue = Arc::new(AtomicUsize::new(0));
+    let thingValue_1 = thingValue.clone();
+    // let count6 = counter.clone();
 
     let ack: Arc<(Mutex<String>, Condvar)> = Arc::new((Mutex::new("".into()), Condvar::new()));
 
@@ -44,6 +47,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     thermostatName = "orig therm name"
     thermostatTemperature= "too cold"
     thermostatTarget_temp = 1.45
+    longNum = -1003987654
     "#;
     let mut server_hive = Hive::new_from_str(props_str);
     let prop = server_hive.get_mut_property("thermostatName").unwrap();
@@ -61,7 +65,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     async_std::task::spawn(async move {
         while let Some(x) = ff.next().await {
             info!("+++++++++++++++++++++ SERV|| THERMOSTAT NAME CHANGED: {:?}", x);
-            count1.fetch_add(1, Ordering::SeqCst);
+            counter_1.fetch_add(1, Ordering::SeqCst);
             let (lock, cvar) = &*ack_clone;
             let mut ack = lock.lock().unwrap();
             *ack = x.to_string();
@@ -74,7 +78,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     let ack_clone = ack.clone();
     server_hive.message_received.connect(move |message|{
         info!("+++++++++++++++++++++  server MESSAGE {}", message);
-        count4.fetch_add(1, Ordering::SeqCst);
+        counter_4.fetch_add(1, Ordering::SeqCst);
         let (lock, cvar) = &*ack_clone;
         let mut ack = lock.lock().unwrap();
         *ack = message.clone();
@@ -104,7 +108,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
             } else if count == 3 {
                 panic!("verify that the property has been deleted");
             }
-            count3.fetch_add(1, Ordering::SeqCst);
+            counter_3.fetch_add(1, Ordering::SeqCst);
             let (lock, cvar) = &*ack_clone;
             let mut ack = lock.lock().unwrap();
             *ack = x.to_string();
@@ -116,7 +120,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     let ack_clone = ack.clone();
     client_hive.message_received.connect(move |message| {
         info!("+++++++++++++++++++++ client MESSAGE {}", message);
-        count2.fetch_add(1, Ordering::SeqCst);
+        counter_2.fetch_add(1, Ordering::SeqCst);
         let (lock, cvar) = &*ack_clone;
         let mut ack = lock.lock().unwrap();
         *ack = message;
@@ -129,10 +133,22 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
         info!(" +++++++++++++++++++++ CLIENT thing value::::::::::::::::::::: {:?}", value);
         let (lock, cvar) = &*ack_clone;
         let t2 = value.val.as_integer().unwrap() as usize;
-        count5.store(t2, Ordering::Relaxed);
+        thingValue_1.store(t2, Ordering::Relaxed);
         let mut ack = lock.lock().unwrap();
         *ack = value.to_string();
         cvar.notify_one();
+    });
+
+    client_hive.get_mut_property("thermostatTarget_temp").unwrap().on_next(|value|{
+        assert_eq!(value.val.as_float().unwrap(), 1.45);
+    });
+
+    client_hive.get_mut_property("is_active").unwrap().on_next(|value|{
+        assert_eq!(value.val.as_bool().unwrap(), true);
+    });
+    client_hive.get_mut_property("longNum").unwrap().on_next(|value|{
+        info!(".............. long numb: {:?}", value);
+        assert_eq!(value.val.as_integer().unwrap(), -1003987654);
     });
 
 
@@ -181,7 +197,6 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
         }
 
         info!("SENT thermostatName = Before");
-        count6.store(0, Ordering::Relaxed);
         client_hand.set_property("thermostatName", Some(&"Before".into())).await; // +2
         {
             let mut done = lock.lock().unwrap();
@@ -201,9 +216,6 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
                 info!("Wait for thingvalue update to 10");
                 done = cvar.wait(done).unwrap();
             }
-            let c6 = count6.load(Ordering::Relaxed);
-            assert_eq!(c6, 10);
-            info!("                ACK thingvalue: {:?}, {:?}", done, c6);
         }
 
         client_hand.hangup();
@@ -216,6 +228,12 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     });
 
     let done = block_on(receiver.next());
+
+    let c6 = thingValue.load(Ordering::Relaxed);
+    assert_eq!(c6, 10);
+
+    let c = counter.load(Ordering::Relaxed);
+    assert_eq!(c, 5);
 
     info!("done with stuff");
 
