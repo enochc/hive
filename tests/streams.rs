@@ -50,6 +50,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     thermostatName = "orig therm name"
     thermostatTemperature= "too cold"
     thermostatTarget_temp = 1.45
+    blahh = 1000
     longNum = -1003987654
     "#;
     let mut server_hive = Hive::new_from_str(props_str);
@@ -117,6 +118,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
             *ack = x.to_string();
             *mr_clone2.lock().unwrap() += 1;
             cvar.notify_one();
+
         }
     });
 
@@ -145,6 +147,10 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     client_hive.get_mut_property("thermostatTarget_temp").unwrap().on_next(move |value|{
         assert_eq!(value.val.as_float().unwrap(), 1.45);
         counter_6.fetch_add(1, Ordering::Relaxed);
+    });
+
+    client_hive.get_mut_property("blahh").unwrap().on_next(move |value|{
+        assert_eq!(value.val.as_integer().unwrap(), 1000);
     });
 
     client_hive.get_mut_property("is_active").unwrap().on_next(move |value|{

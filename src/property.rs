@@ -89,14 +89,14 @@ impl From<i64> for PropertyValue {
 //     }
 // }
 
-pub(crate) const IS_BOOL: u8 = 0x11;
-pub(crate) const IS_STR: u8 = 0x12;
-pub(crate) const IS_SHORT: u8 = 0x13; // 8 bits
-pub(crate) const IS_SMALL: u8 = 0x14; // 16 bits
-pub(crate) const IS_LONG: u8 = 0x15; // 32 bits
-pub(crate) const IS_INT: u8 = 0x16; // 64 bits
-pub(crate) const IS_FLOAT: u8 = 0x17; // 64 bits
-pub(crate) const IS_NONE: u8 = 0x18;
+pub(crate) const IS_BOOL: i8 = 0x19;
+pub(crate) const IS_STR: i8 = 0x20;
+pub(crate) const IS_SHORT: i8 = 0x21; // 8 bits
+pub(crate) const IS_SMALL: i8 = 0x14; // 16 bits
+pub(crate) const IS_LONG: i8 = 0x15; // 32 bits
+pub(crate) const IS_INT: i8 = 0x16; // 64 bits
+pub(crate) const IS_FLOAT: i8 = 0x17; // 64 bits
+pub(crate) const IS_NONE: i8 = 0x18;
 
 #[derive(Default, Clone)]
 pub struct PropertyStream
@@ -356,14 +356,14 @@ pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
 
     match &*property.value.read().unwrap() {
         None => {
-            bytes.put_u8(IS_NONE);
+            bytes.put_i8(IS_NONE);
         }
         Some(p) => {
             if p.val.is_bool() {
-                bytes.put_u8(IS_BOOL);
+                bytes.put_i8(IS_BOOL);
                 bytes.put_u8(if p.val.as_bool().unwrap() { 1 } else { 0 });
             } else if p.val.is_str() {
-                bytes.put_u8(IS_STR);
+                bytes.put_i8(IS_STR);
                 let str_val = p.val.as_str().unwrap();
                 let str_length: u8 = str_val.len() as u8;
                 bytes.put_u8(str_length);
@@ -372,25 +372,25 @@ pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
                 let int = p.val.as_integer().unwrap();
                 match int.to_i8() {
                     Some(i) => {
-                        bytes.put_u8(IS_SHORT);
+                        bytes.put_i8(IS_SHORT);
                         bytes.put_i8(i);
                     }
                     None => {
                         match int.to_i16() {
                             Some(i) => {
-                                bytes.put_u8(IS_SMALL);
+                                bytes.put_i8(IS_SMALL);
                                 bytes.put_i16(i);
                             }
                             None => {
                                 match int.to_i32() {
                                     Some(i) => {
-                                        bytes.put_u8(IS_LONG);
+                                        bytes.put_i8(IS_LONG);
                                         bytes.put_i32(i);
                                     }
                                     None => {
                                         match int.to_i64() {
                                             Some(i) => {
-                                                bytes.put_u8(IS_INT);
+                                                bytes.put_i8(IS_INT);
                                                 bytes.put_i64(i);
                                             }
                                             None => {
@@ -406,7 +406,7 @@ pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
             } else if p.val.is_float() {
                 match p.val.as_float() {
                     Some(i) => {
-                        bytes.put_u8(IS_FLOAT);
+                        bytes.put_i8(IS_FLOAT);
                         bytes.put_f64(i);
                     }
                     None => {
@@ -436,7 +436,7 @@ pub(crate) fn bytes_to_property(bytes:&mut Bytes) -> Option<Property> {
     bytes.advance(name_length);
     debug!("name: {:?}", name);
 
-    let value_type = bytes.get_u8();
+    let value_type = bytes.get_i8();
     debug!("wtf...... {:#02x}, {:#02x}", value_type, IS_SHORT);
     match value_type {
         IS_STR => {

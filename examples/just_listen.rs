@@ -33,8 +33,8 @@ fn main() {
     speed = 1000
     pt = 2
 
-    [REST]
-    get = "http://127.0.0.1:8000/hive/get"
+    #[REST]
+    #get = "http://127.0.0.1:8000/hive/get"
 
     "#;
     let mut server_hive = Hive::new_from_str(props_str);
