@@ -565,7 +565,7 @@ impl Hive {
                 }
                 #[allow(unused_variables)]
                 Some(SocketEvent::SendBtProps { sender }) => {
-                    #[cfg(target_os = "linux")]
+                    #[cfg(all(target_os = "linux", feature = "bluetooth"))]
                         {
                             debug!("<<<........... HAHAHAHAHAHA {:?}", sender);
                             let bytes = properties_to_bytes(&self.properties);
