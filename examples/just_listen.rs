@@ -49,6 +49,7 @@ fn main() {
 
     let is_running: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(true), Condvar::new()));
 
+    // listens for termination signal: (ctrl+c)
     simple_signal::set_handler(&[Signal::Int, Signal::Term], {
         let run_clone = is_running.clone();
 
