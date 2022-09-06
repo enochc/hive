@@ -1,6 +1,7 @@
 use std::thread::sleep;
 use hive::hive::Hive;
 use std::time::Duration;
+use hive::property::{PropertyValue, SetProperty};
 
 //OBSOLETE!!
 
@@ -11,25 +12,23 @@ fn main() {
     let p = h.get_mut_property("thingvalue");
     match p {
         Some(p) => {
-            p.on_changed.connect(|v|{
+            // p.on_changed.connect(|v|{
+            p.on_next(|v|{
                 println!("Inside signal: {:?}", v);
-                sleep(Duration::from_secs(2))
+                sleep(Duration::from_millis(300))
             });
 
-            p.on_changed.connect(|v|{
-                println!("also Inside signal: {:?}", v);
-            });
-
-            p.set("What");
-            p.set_str("now");
-            p.set_int(6);
-            p.set_int(6);
-            p.set_bool(true);
+            p.set_value(&"What".into());
+            p.set("now");
+            p.set_value(&6.into());
+            p.set(&PropertyValue::from(6));
+            p.set(7);
+            p.set(true);
 
             println!("Done: {:?}", p.to_string());
         },
         _ => {
-            println!("No OPtion: \"thingvalue\"");
+            println!("No Option: \"thingvalue\"");
         }
     }
 

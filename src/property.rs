@@ -284,10 +284,10 @@ impl Property {
 
     pub fn set_from_prop(&mut self, v: Property) -> bool {
         let other = &*v.value.read().unwrap();
-        return self.set_value(other.as_ref().unwrap().clone());
+        return self.set_value(other.as_ref().unwrap());
     }
 
-    pub fn set_value(&mut self, new_prop: PropertyValue) -> bool
+    pub fn set_value(&mut self, new_prop: &PropertyValue) -> bool
         where PropertyValue: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
         let does_eq = match &*self.value.read().unwrap() {
@@ -305,7 +305,7 @@ impl Property {
                 let (_, cvar) = &*stream;
                 cvar.notify_all();
             };
-            (self.on_next_holder)(new_prop);
+            (self.on_next_holder)(new_prop.clone());
 
             block_on(async {
                 on_next.await;
@@ -322,7 +322,25 @@ impl Property {
 impl SetProperty<&str> for Property{
     fn set(&mut self, v: &str) {
         let p = PropertyValue::from(v);
-        self.set_value(p);
+        self.set_value(&p);
+    }
+}
+impl SetProperty<bool> for Property{
+    fn set(&mut self, v: bool) {
+        let p = PropertyValue::from(v);
+        self.set_value(&p);
+    }
+}
+impl SetProperty<&PropertyValue> for Property{
+    fn set(&mut self, v: &PropertyValue) {
+        // let p = PropertyValue::from(v);
+        self.set_value(v);
+    }
+}
+impl SetProperty<i32> for Property{
+    fn set(&mut self, v: i32) {
+        let p = PropertyValue::from(v);
+        self.set_value(&p);
     }
 }
 

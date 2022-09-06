@@ -22,7 +22,7 @@ const SEC_KEY: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 #[derive(Debug, Clone)]
 pub struct WebSock {
-    headers: HashMap<String, String>,
+    _headers: HashMap<String, String>,
     stream: TcpStream,
 }
 
@@ -73,7 +73,7 @@ impl WebSock {
         }
 
         return Ok(WebSock {
-            headers,
+            _headers: headers,
             stream,
         });
     }

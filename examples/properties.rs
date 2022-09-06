@@ -20,7 +20,7 @@ fn main() {
     let mut stream = p.stream.clone();
     async_std::task::spawn(async move {
         while let Some(z) = stream.next().await {
-            println!("Inside signal: {:?}", x);
+            println!("Inside signal: {:?}", z);
             sleep(Duration::from_millis(1000));
             c1.fetch_add(1, Ordering::SeqCst);
             println!(" DONE 1")

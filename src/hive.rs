@@ -25,7 +25,9 @@ use crate::property::{properties_to_bytes, Property, bytes_to_property, property
 use crate::signal::Signal;
 use std::sync::{Condvar, Mutex};
 use std::fmt::{Debug, Formatter};
-use toml::Value;
+
+#[cfg(feature = "multicast")]
+use crate::multicast;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub type Sender<T> = mpsc::UnboundedSender<T>;
@@ -46,7 +48,8 @@ pub struct Hive {
     pub message_received: Signal<String>,
     pub connected: Arc<AtomicBool>,
     advertising: Arc<AtomicBool>,
-    ready: Option<Arc<(Mutex<bool>, Condvar)>>
+    ready: Option<Arc<(Mutex<bool>, Condvar)>>,
+    discover: Option<bool> // true false or None
 }
 
 impl Debug for Hive {
@@ -185,7 +188,11 @@ impl Hive {
         let listen_port = prop("listen");
         let bt_listen = prop("bt_listen");
         let bt_connect_to = prop("bt_connect");
-
+        let op = prop("discover");
+        let discover: Option<bool> = match op {
+            Some(boolean) => Some(boolean.parse().unwrap()),
+            _ => None,
+        };
 
         let props: HashMap::<String, Property> = HashMap::new();
 
@@ -203,7 +210,8 @@ impl Hive {
             message_received: Default::default(),
             connected: Arc::new(AtomicBool::new(false)),
             advertising: Arc::new(AtomicBool::new(false)),
-            ready: None
+            ready: None,
+            discover
         };
 
         let properties = config.get("Properties");
@@ -433,6 +441,23 @@ impl Hive {
             }
 
             self.connected.store(true, Ordering::Relaxed);
+        }
+
+
+        // broadcast a hello to find server to connect to
+        let mut testthing = 0;
+        match self.discover {
+            Some(dis) => {
+                if dis {
+                    testthing = 1;
+                    debug!("<<<<<<<<< do say hello!")
+                } else {
+                    testthing = 2;
+                    debug!("<<<<<<<<< do listen for hello!")
+                }
+            }, _ => {
+                debug!("<<<<<<<<< no hello!")
+            }
         }
 
         // I'm a server

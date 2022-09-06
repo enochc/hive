@@ -16,6 +16,9 @@ pub mod websocket;
 #[cfg(feature = "bluetooth")]
 pub mod bluetooth;
 
+// #[cfg(feature = "multicast")]
+pub mod multicast;
+
 
 #[cfg(feature="bluetooth")]
 #[macro_use]

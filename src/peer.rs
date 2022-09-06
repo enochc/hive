@@ -148,7 +148,7 @@ impl Peer {
             match stream.as_mut() {
                 Some(s) => {
                     let msg = format!("Shake failed for {}", peer.get_id_name());
-                    &peer.handshake(s, &sender).await.expect(&msg);
+                    let _ = &peer.handshake(s, &sender).await.expect(&msg);
                 }
                 None => {}
             };
