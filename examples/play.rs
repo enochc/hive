@@ -49,17 +49,17 @@ impl Stream for Counter {
 
         self.count = self.count + 1;
         let (lock, cvar) = &*self.ready;
-        let is_reeady = lock.lock().unwrap();
+        let is_ready = lock.lock().unwrap();
 
-        let _ = cvar.wait(is_reeady).unwrap();
+        let _unused = cvar.wait(is_ready).unwrap();
 
-        if self.count < 6 {
+        return if self.count < 6 {
             let op = PropertyValue::from(self.count);
-            let ss = Some(op);
-            return Poll::Ready(ss);
-        }else {
+            let ss = Some(op.val);
+            Poll::Ready(ss)
+        } else {
             println!("done");
-            return Poll::Ready(None);
+            Poll::Ready(None)
         }
 
     }

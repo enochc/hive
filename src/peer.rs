@@ -335,10 +335,10 @@ impl Peer {
         debug!("SEND starts here {:?}", msg);
         if self.stream.is_some() {
             if self.web_sock.is_some() {
-                info!("Sending message to web client at {:?} = {:?}", self.address, msg);
-                self.web_sock.as_ref().unwrap().send_message(msg).await?;
+                warn!("<<< fail webclient is broken >>>> Sending message to web client at {:?} = {:?}", self.address, msg);
+                // self.web_sock.as_ref().unwrap().send_message(msg).await?;
             } else {
-                debug!(">>>>>>>>>>>>>>>>  {:?} Send to peer {}: {:?}",self.get_id_name(), self.name.read().await, msg);
+                debug!("{:?} Send to peer {}: {:?}",self.get_id_name(), self.name.read().await, msg);
                 self.send_on_stream(msg).await?;
             }
         } else if self.central.is_some() {
