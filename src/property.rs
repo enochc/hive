@@ -133,7 +133,7 @@ impl Stream for PropertyStream {
         let (lock, cvar) = &*self.has_next;
         let is_reeady = lock.lock().unwrap();
 
-        let _ = cvar.wait(is_reeady).unwrap();
+        let _unused = cvar.wait(is_reeady).unwrap();
         let a = &*self.value.read().unwrap();
 
 
@@ -153,7 +153,7 @@ pub struct Property
     name: Box<str>,
     pub value: Arc<RwLock<Option<PropertyValue>>>,
     // on_changed was fun, kind of QT like signal/slot binding, but it's not necessary
-    // without t he onChanged signal I can implement Clone if I feel so inclined
+    // without it he onChanged signal I can implement Clone if I feel so inclined
     // pub on_changed: Signal<Option<PropertyType>>,
     pub stream: PropertyStream,
     on_next_holder: Arc<dyn Fn(PropertyValue) + Send + Sync + 'static>,
@@ -163,6 +163,16 @@ pub struct Property
 
 
 impl Property {
+    // pub fn get_value(&self) -> Option<PropertyValue> {
+    pub fn get_value(&self) -> Option<Value> {
+        let rr = &*self.value.read().unwrap();
+        match rr {
+            None => { None }
+            Some(v) => {
+                Some(v.clone().val)
+            }
+        }
+    }
     pub fn is_none(&self) ->bool {
         return self.value.read().unwrap().is_none();
     }

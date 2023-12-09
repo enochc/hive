@@ -153,7 +153,7 @@ impl Hive {
             Some(r) => {
                 let (lock, cvar) = &*r;
                 let lock = lock.lock().unwrap();
-                let _ = cvar.wait(lock).expect("Wait on lock failed");
+                let guard = cvar.wait(lock).expect("Wait on lock failed");
                 handler
             }
         }
