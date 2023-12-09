@@ -9,7 +9,7 @@ use futures::StreamExt;
 use async_std;
 
 fn main() {
-
+    //test
     let mut p = Property::from_value("test",4.into());
     let counter = Arc::new(AtomicUsize::new(0));
     let c1 = Arc::clone(&counter);
