@@ -12,7 +12,7 @@ use futures::channel::mpsc::UnboundedSender;
 #[allow(unused_imports)]
 use log::{debug, info, trace};
 use sha1::{Digest, Sha1};
-use tokio_util::codec::Encoder;
+// use tokio_util::codec::Encoder;
 use websocket_codec::{Message, MessageCodec, Opcode};
 
 use crate::hive::Result;
@@ -109,7 +109,7 @@ async fn send_message(msg: Bytes, mut stream: &TcpStream) -> Result<()> {
 }
 
 async fn read_loop(mut sender: &UnboundedSender<SocketEvent>, stream: TcpStream, from_string:&String) {
-    use tokio_util::codec::Decoder;
+    // use tokio_util::codec::Decoder;
 
     let mut is_running = true;
     while is_running {

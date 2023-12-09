@@ -7,7 +7,7 @@ license-file = "LICENSE.txt"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
-default = ["websock"]
+default = []
 #default = []
 bluetooth = ["bluster", "blurz", "uuid", "tokio", "lazy_static", "regex"]
 websock = ["websocket-codec", "base64", "sha-1", "tokio-util"]
@@ -17,8 +17,8 @@ rest = ["reqwest", "tokio"]
 futures = "0.3"
 #futures-lite = "1.11.3", can't quite use the lite lib.
 #https://docs.rs/config/0.10.1/config/
-config = "0.10.1"
-toml = "0.5"
+config = "0.13.4"
+toml = "0.8.8"
 log = "0.4.11"
 async-std = "1.9.0"
 simple-signal = "1.1.1"

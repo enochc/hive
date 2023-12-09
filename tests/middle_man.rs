@@ -2,8 +2,6 @@ use hive::hive::Hive;
 use std::sync::atomic::{Ordering, AtomicUsize};
 #[allow(unused_imports)]
 use log::{info, debug};
-use std::time::Duration;
-use std::thread;
 use hive::init_logging;
 use futures::executor::block_on;
 use async_std::sync::Arc;
