@@ -1,6 +1,7 @@
 use std::env::var;
 
 fn main() {
+    println!("<<<< build 2 >>>>");
     // The manifest dir points to the root of the project containing this file.
     let manifest_dir = var("CARGO_MANIFEST_DIR").unwrap();
     // We tell Cargo that our native ARMv7 libraries are inside a "libraries" folder.

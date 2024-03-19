@@ -153,7 +153,7 @@ pub struct Property
     name: Box<str>,
     pub value: Arc<RwLock<Option<PropertyValue>>>,
     // on_changed was fun, kind of QT like signal/slot binding, but it's not necessary
-    // without it he onChanged signal I can implement Clone if I feel so inclined
+    // without it the onChanged signal I can implement Clone if I feel so inclined
     // pub on_changed: Signal<Option<PropertyType>>,
     pub stream: PropertyStream,
     on_next_holder: Arc<dyn Fn(PropertyValue) + Send + Sync + 'static>,
