@@ -1,0 +1,53 @@
+component PropertyButton inherits Rectangle {
+    callback clicked;
+    in property <string> name;
+    in property <string> value;
+
+    HorizontalLayout {
+        alignment: start;
+        padding-left:10px;
+        Text {
+                text: name+": ";
+            }
+        Text {
+            text: value;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            // Delegate to the user of this element
+            root.clicked();
+        }
+    }
+}
+
+struct HProperty {
+    name: string,
+    value: string,
+}
+
+export component MainWindow inherits Window {
+
+//    min-height: 150px;
+//    min-width: 100px;
+//
+//    preferred-height: 200px;
+//    preferred-width: 400px;
+
+    in-out property <[HProperty]> properties: [
+        {name:"1", value:"one"},
+        {name:"2", value:"two"}
+    ];
+
+    callback check_if_pair_solved();
+    in property <bool> disable_tiles;
+
+    VerticalLayout {
+        for prop[i] in properties: PropertyButton {
+            name: prop.name;
+            value: prop.value;
+        }
+    }
+
+}

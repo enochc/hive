@@ -23,16 +23,16 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 
 #[derive(Clone, Debug)]
 pub struct PropertyValue {
-    pub val: toml::Value
+    pub val: Value
 }
 
 impl PropertyValue {
-    pub fn toml(&self) -> toml::Value {
+    pub fn toml(&self) -> Value {
         self.val.clone()
     }
 }
 impl Display for PropertyValue {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::result::Result<(), fmt::Error> {
         write!(f, "{}",self.val)
     }
 }
@@ -42,12 +42,12 @@ impl PartialEq for PropertyValue {
         return self.val.eq(&other.val)
     }
 }
-impl From<toml::Value> for PropertyValue {
+impl From<Value> for PropertyValue {
     fn from(v: Value) -> Self {
         PropertyValue {val:v}
     }
 }
-impl From<&toml::Value> for PropertyValue {
+impl From<&Value> for PropertyValue {
     fn from(v: &Value) -> Self {
         PropertyValue {val:v.clone()}
     }
@@ -141,8 +141,8 @@ impl Stream for PropertyStream {
     }
 }
 
-impl fmt::Debug for Property {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Debug for Property {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{} value = {:?}, args = {:?}", self.name, *self.value.read().unwrap(), self.args)
     }
 }
@@ -150,7 +150,7 @@ impl fmt::Debug for Property {
 #[derive(Clone)]
 pub struct Property
 {
-    name: Box<str>,
+    pub name: Box<str>,
     pub value: Arc<RwLock<Option<PropertyValue>>>,
     // on_changed was fun, kind of QT like signal/slot binding, but it's not necessary
     // without it the onChanged signal I can implement Clone if I feel so inclined
@@ -236,7 +236,7 @@ impl Property {
         };
     }
 
-    pub fn from_toml(name: &str, val: Option<&toml::Value>) -> Property {
+    pub fn from_toml(name: &str, val: Option<&Value>) -> Property {
         let p = match val {
             Some(v) if v.is_str() => {
                 Property::new(name, Some(v.into()))
@@ -298,7 +298,7 @@ impl Property {
     }
 
     pub fn set_value(&mut self, new_prop: PropertyValue) -> bool
-        where PropertyValue: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
+        where PropertyValue: Debug + PartialEq + Sync + Send + Clone + 'static,
     {
         let does_eq = match &*self.value.read().unwrap() {
             None => { false }

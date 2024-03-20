@@ -9,6 +9,7 @@ pub mod signal;
 pub mod hive;
 pub mod peer;
 pub mod handler;
+pub mod hive_gui;
 
 #[cfg(feature = "websock")]
 pub mod websocket;
@@ -42,9 +43,6 @@ impl log::Log for SimpleLogger {
 pub static LOGGER: SimpleLogger = SimpleLogger;
 
 pub fn init_logging(level:Option<LevelFilter>){
-    let my_level = match level {
-        Some(l) => l,
-        None => LevelFilter::Trace
-    };
+    let my_level = level.unwrap_or_else(|| LevelFilter::Trace);
     log::set_logger(&LOGGER).map(|()| log::set_max_level(my_level)).expect("failed to init logger");
 }

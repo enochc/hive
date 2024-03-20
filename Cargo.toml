@@ -64,3 +64,6 @@ crate-type = ["staticlib", "cdylib", "lib"]
 # this dependency is only needed for Android.
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "0.13.1", default-features = false }
+
+[build-dependencies]
+slint-build = "1.4.0"

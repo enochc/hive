@@ -7,9 +7,9 @@ use crate::hive_gui::HiveWindow;
 
 fn main() {
 
-    let g: HiveWindow = HiveWindow{};
+
     use hive_gui::Gui;
-    g.launch(None);
+    HiveWindow::launch(None);
     // let args: Vec<String> = env::args().collect();
     //
     // for (i, name) in args.iter().enumerate() {

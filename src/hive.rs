@@ -33,7 +33,7 @@ pub type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
 // #[derive(Debug)]
 pub struct Hive {
-    properties: HashMap<String, Property>,
+    pub properties: HashMap<String, Property>,
     sender: Sender<SocketEvent>,
     receiver: Receiver<SocketEvent>,
     connect_to: Option<String>,
