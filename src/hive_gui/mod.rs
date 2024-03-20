@@ -75,12 +75,17 @@ impl Gui for HiveWindow {
                         Some(property) => {
                             println!("<<< property {:?}", property);
 
-                            let handle_copy = window_weak.clone();
-                            slint::invoke_from_event_loop(move || {
+                            window_weak.upgrade_in_event_loop(|win|{
                                 let props_model: Rc<VecModel<HProperty>> = Rc::new(VecModel::from(vec![property]));
-                                let properties_rc: ModelRc<HProperty> = ModelRc::from(props_model);
-                                handle_copy.unwrap().set_properties(properties_rc)
-                            }).expect("TODO: panic message");
+                                    let properties_rc: ModelRc<HProperty> = ModelRc::from(props_model);
+                                    win.set_properties(properties_rc)
+                            }).unwrap()
+
+                            // slint::invoke_from_event_loop(move || {
+                            //     let props_model: Rc<VecModel<HProperty>> = Rc::new(VecModel::from(vec![property]));
+                            //     let properties_rc: ModelRc<HProperty> = ModelRc::from(props_model);
+                            //     handle_copy.unwrap().set_properties(properties_rc)
+                            // }).expect("TODO: panic message");
                         }
                     }
                 }
@@ -105,7 +110,6 @@ impl Gui for HiveWindow {
         });
 
         window.run().unwrap();
-        println!("<< WTF>>>");
     }
 }
 
