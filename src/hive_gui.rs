@@ -3,14 +3,12 @@ use slint::{CloseRequestResponse, Model, ModelRc, SharedString, VecModel, Weak};
 use std::env;
 use std::ops::Index;
 
+use crate::hive::Hive;
+use crate::property::Property;
 use futures::channel::mpsc::{channel, Sender};
 use futures::{SinkExt, StreamExt};
-use crate::hive::Hive;
 use std::rc::Rc;
 use toml::macros::IntoDeserializer;
-// use hive::hive::Hive;
-//
-use crate::property::Property;
 
 pub trait Gui {
     fn launch(hive: Option<Hive>);
@@ -34,7 +32,7 @@ impl From<&Property> for HProperty {
         HProperty {
             name: value.get_name().into(),
             value: match value.get_value() {
-                None => "empty".into(),
+                None => "__empty".into(),
                 Some(v) => v.to_string().into(),
             },
         }
@@ -47,7 +45,7 @@ impl Gui for HiveWindow {
         let window = MainWindow::new().unwrap();
         let window_weak = window.as_weak();
 
-        let props = match hive {
+        let mut props = match hive {
             None => {
                 vec![HProperty {
                     name: "two".into(),
@@ -56,6 +54,7 @@ impl Gui for HiveWindow {
             }
             Some(h) => h.properties.iter().map(|(p, v)| v.into()).collect(),
         };
+        props.sort_by(|a, b| a.name.cmp(&b.name));
         let props_model: Rc<VecModel<HProperty>> = Rc::new(VecModel::from(props));
         let properties_rc = ModelRc::from(props_model);
 
@@ -91,11 +90,6 @@ impl Gui for HiveWindow {
             }
         });
 
-        window.window().on_close_requested(move || {
-            println!("<< done");
-            return CloseRequestResponse::HideWindow;
-        });
-
         // async_std::task::spawn(async move {
         //     let mut x = 0;
         //     while (x < 5) {
@@ -105,6 +99,15 @@ impl Gui for HiveWindow {
         //         x += 1;
         //     }
         // });
+
+
+        window.window().on_close_requested(move || {
+            println!("<< done");
+            return CloseRequestResponse::HideWindow;
+        });
+        window.on_prop_changed(|prop:SharedString, val:f32|{
+            println!("<<<< {}, {}", prop, val);
+        });
 
         window.run().unwrap();
     }
