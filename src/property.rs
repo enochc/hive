@@ -1,6 +1,5 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
-// use crate::signal::Signal;
 use std::fmt;
 use std::pin::Pin;
 use std::sync::{Condvar, Mutex, RwLock};
@@ -23,7 +22,6 @@ use ahash::AHasher;
 use futures::future::ok;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
-// pub type PropertyType = toml::Value;
 
 #[derive(Clone, Debug)]
 pub struct PropertyValue {
@@ -199,12 +197,11 @@ pub struct Property
 
 impl Property {
 
-    pub fn hash(val: &str) -> u64 {
+    pub fn hash_id(val: &str) -> u64 {
         let mut hasher = AHasher::default();
         hasher.write(val.as_bytes());
         hasher.finish()
     }
-    // pub fn get_value(&self) -> Option<PropertyValue> {
     pub fn get_value(&self) -> Option<Value> {
         let rr = &*self.value.read().unwrap();
         match rr {
@@ -267,7 +264,7 @@ impl Property {
         let arc_val = Arc::new(RwLock::new(val));
         return Property {
             name: NAME(Some(name.to_string())),
-            id: Property::hash(&name),
+            id: Property::hash_id(&name),
             value: arc_val.clone(),
             stream: PropertyStream {
                 value: arc_val,

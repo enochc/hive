@@ -25,10 +25,10 @@ fn main(){
     listen="3000"
     name = "Server"
     [Properties]
-    thing=1
+    something_else_entirely=1
     "#;
     let mut server_hive = Hive::new_from_str(props_str);
-    let thing_key = &Property::hash("thing");
+    let thing_key = &Property::hash_id("thing");
     // server_hive.get_mut_property("thing", ).unwrap().on_changed.connect(move |value| {
     server_hive.get_mut_property(thing_key).unwrap().on_next(move |value| {
         info!("SERVER ----------------------- server thing changed: {:?}", value);
@@ -53,7 +53,7 @@ fn main(){
     let props_str = r#"
     connect="3001"
     name = "Client"
-    thing=1
+    something_else_entirely=1
     "#;
     let mut client_hive = Hive::new_from_str(props_str);
     client_hive.get_mut_property(thing_key ).unwrap().on_next(move |value| {

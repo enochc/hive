@@ -5,5 +5,4 @@ slint::include_modules!();
 fn main(){
     let mut h = Hive::new("examples/motors.toml");
     HiveWindow::launch(Some(h));
-    // HiveWindow::launch(None);
 }
