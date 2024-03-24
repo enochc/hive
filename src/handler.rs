@@ -17,8 +17,8 @@ pub struct Handler {
 
 
 impl Handler {
-    pub fn set_str(&self, name:&str, value:&str){
-        let _prop = Property::from_value(name, value.into());
+    pub fn set_str(&self, id:&u64, value:&str){
+        let _prop = Property::from_value(id, value.into());
     }
 
     // This is basically a set_property method, however, Hive itself does not deal directly with property values
@@ -42,7 +42,7 @@ impl Handler {
     }
 
     pub async fn delete_property(&mut self, name: &str){
-        let p = Property::new(name, None);
+        let p = Property::from_name(name, None);
         let message = property_to_bytes(&p, true);
         let socket_event = SocketEvent::Message {
             from: String::from(""),

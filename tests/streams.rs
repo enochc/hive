@@ -20,7 +20,10 @@ use std::ops::Index;
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 #[test]
 fn main()-> Result<(), Box<dyn std::error::Error>> {
+    println!("one<<<<");
     init_logging(Some(LevelFilter::Debug));
+
+    println!("one<<<<");
 
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_1 = counter.clone();
@@ -54,7 +57,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     longNum = -1003987654
     "#;
     let mut server_hive = Hive::new_from_str(props_str);
-    let prop = server_hive.get_mut_property("thermostatName").unwrap();
+    let prop = server_hive.get_mut_property_by_name("thermostatName").unwrap();
 
     let v = prop.value.read().unwrap().as_ref().unwrap().to_string();
     let matches = v.eq("\"orig therm name\"");
@@ -65,7 +68,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     let messages_received = Arc::new(Mutex::new(0));
     let mr_clone = messages_received.clone();
     let mr_clone2 = messages_received.clone();
-    let mut ff = server_hive.get_property("thermostatName", ).unwrap().stream.clone();
+    let mut ff = server_hive.get_mut_property_by_name("thermostatName", ).unwrap().stream.clone();
     async_std::task::spawn(async move {
         while let Some(x) = ff.next().await {
             info!("+++++++++++++++++++++ SERV|| THERMOSTAT NAME CHANGED: {:?}", x);
@@ -96,7 +99,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     let ack_clone = ack.clone();
     let mut client_hive = Hive::new_from_str("connect = \"127.0.0.1:3000\"\nname=\"client1\"");
 
-    let client_thermostat_name_property =  client_hive.get_mut_property("thermostatName").unwrap();
+    let client_thermostat_name_property =  client_hive.get_mut_property_by_name("thermostatName").unwrap();
     let mut client_therm_prop_clone = client_thermostat_name_property.clone();
     let mut stream = client_thermostat_name_property.stream.clone();
     async_std::task::spawn(async move {
@@ -134,7 +137,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
 
     let ack_clone = ack.clone();
     // client_hive.get_mut_property("thingvalue").unwrap().on_changed.connect(move |value|{
-    client_hive.get_mut_property("thingvalue").unwrap().on_next( move |value|{
+    client_hive.get_mut_property_by_name("thingvalue").unwrap().on_next( move |value|{
         info!(" +++++++++++++++++++++ CLIENT thing value::::::::::::::::::::: {:?}", value);
         let (lock, cvar) = &*ack_clone;
         let t2 = value.val.as_integer().unwrap() as usize;
@@ -144,20 +147,20 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
         cvar.notify_one();
     });
 
-    client_hive.get_mut_property("thermostatTarget_temp").unwrap().on_next(move |value|{
+    client_hive.get_mut_property_by_name("thermostatTarget_temp").unwrap().on_next(move |value|{
         assert_eq!(value.val.as_float().unwrap(), 1.45);
         counter_6.fetch_add(1, Ordering::Relaxed);
     });
 
-    client_hive.get_mut_property("blahh").unwrap().on_next(move |value|{
+    client_hive.get_mut_property_by_name("blahh").unwrap().on_next(move |value|{
         assert_eq!(value.val.as_integer().unwrap(), 1000);
     });
 
-    client_hive.get_mut_property("is_active").unwrap().on_next(move |value|{
+    client_hive.get_mut_property_by_name("is_active").unwrap().on_next(move |value|{
         assert_eq!(value.val.as_bool().unwrap(), true);
         counter_7.fetch_add(1, Ordering::Relaxed);
     });
-    client_hive.get_mut_property("longNum").unwrap().on_next(move |value|{
+    client_hive.get_mut_property_by_name("longNum").unwrap().on_next(move |value|{
         assert_eq!(value.val.as_integer().unwrap(), -1003987654);
         counter_8.fetch_add(1, Ordering::Relaxed);
     });
