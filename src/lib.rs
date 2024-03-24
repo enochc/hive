@@ -3,19 +3,21 @@
 use chrono::Local;
 use log::{Metadata, Level, Record, LevelFilter};
 
+pub mod hive_gui;
 mod hive_macros;
 pub mod property;
 pub mod signal;
 pub mod hive;
 pub mod peer;
 pub mod handler;
-pub mod hive_gui;
+
 
 #[cfg(feature = "websock")]
 pub mod websocket;
 
 #[cfg(feature = "bluetooth")]
 pub mod bluetooth;
+
 
 
 #[cfg(feature="bluetooth")]

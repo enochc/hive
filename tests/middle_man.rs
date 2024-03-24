@@ -7,6 +7,7 @@ use futures::executor::block_on;
 use async_std::sync::Arc;
 use log::{LevelFilter};
 use std::sync::{Condvar, Mutex};
+use hive::property::Property;
 
 #[test]
 fn main(){
@@ -27,9 +28,9 @@ fn main(){
     thing=1
     "#;
     let mut server_hive = Hive::new_from_str(props_str);
-
+    let thing_key = &Property::hash("thing");
     // server_hive.get_mut_property("thing", ).unwrap().on_changed.connect(move |value| {
-    server_hive.get_mut_property("thing", ).unwrap().on_next(move |value| {
+    server_hive.get_mut_property(thing_key).unwrap().on_next(move |value| {
         info!("SERVER ----------------------- server thing changed: {:?}", value);
         counter1.fetch_add(1, Ordering::SeqCst);
         let (lock, cvar) = &*ack_clone;
@@ -55,7 +56,7 @@ fn main(){
     thing=1
     "#;
     let mut client_hive = Hive::new_from_str(props_str);
-    client_hive.get_mut_property("thing", ).unwrap().on_next(move |value| {
+    client_hive.get_mut_property(thing_key ).unwrap().on_next(move |value| {
         info!("CLIENT!! --------------------- client thing changed: {:?}", value);
         counter2.fetch_add(1, Ordering::SeqCst);
         let (lock, cvar) = &*ack_clone2;

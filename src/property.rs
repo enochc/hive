@@ -17,6 +17,10 @@ use toml::Value;
 use crate::hive::{PROPERTIES, PROPERTY};
 use toml::value::Table;
 use std::fmt::{Debug, Formatter, Display};
+use std::hash::{BuildHasherDefault, Hash, Hasher};
+use ahash;
+use ahash::AHasher;
+use futures::future::ok;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 // pub type PropertyType = toml::Value;
@@ -147,10 +151,41 @@ impl Debug for Property {
     }
 }
 
+struct NAME(Option<String>);
+impl Display for NAME {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            None => { write!(f, "unnamed") }
+            Some(n) => { write!(f, "{}", n) }
+        }
+    }
+}
+impl From<&str> for NAME {
+    fn from(value: &str) -> Self {
+        NAME(Some(String::from(value)))
+    }
+}
+impl Borrow<str> for NAME{
+    fn borrow(&self) -> &str {
+        match &self.0 {
+            None => {""}
+            Some(n) => {n}
+        }
+    }
+}
+impl Clone for NAME{
+    fn clone(&self) -> Self {
+        match &self.0 {
+            None => {NAME(None)}
+            Some(n) => {NAME(Some(String::from(n)))}
+        }
+    }
+}
 #[derive(Clone)]
 pub struct Property
 {
-    pub name: Box<str>,
+    pub name: NAME,
+    pub id: u64,
     pub value: Arc<RwLock<Option<PropertyValue>>>,
     // on_changed was fun, kind of QT like signal/slot binding, but it's not necessary
     // without it the onChanged signal I can implement Clone if I feel so inclined
@@ -158,11 +193,17 @@ pub struct Property
     pub stream: PropertyStream,
     on_next_holder: Arc<dyn Fn(PropertyValue) + Send + Sync + 'static>,
     pub args: Option<Table>,
+
 }
 
 
-
 impl Property {
+
+    pub fn hash(val: &str) -> u64 {
+        let mut hasher = AHasher::default();
+        hasher.write(val.as_bytes());
+        hasher.finish()
+    }
     // pub fn get_value(&self) -> Option<PropertyValue> {
     pub fn get_value(&self) -> Option<Value> {
         let rr = &*self.value.read().unwrap();
@@ -218,14 +259,29 @@ impl Property {
     pub fn get_name(&self) -> &str {
         self.name.borrow()
     }
-    pub fn from_value(name: &str, val:Value) -> Property
+    pub fn from_value(id: &u64, val:Value) -> Property
         where Value: Into<PropertyValue> {
-        return Property::new(name, Some(val.into()));
+        return Property::from_id(id, Some(val.into()));
     }
-    pub fn new(name: &str, val: Option<PropertyValue>) -> Property {
+    pub fn from_name(name: &str, val: Option<PropertyValue>) -> Property {
         let arc_val = Arc::new(RwLock::new(val));
         return Property {
-            name: Box::from(name),
+            name: NAME(Some(name.to_string())),
+            id: Property::hash(&name),
+            value: arc_val.clone(),
+            stream: PropertyStream {
+                value: arc_val,
+                has_next: Arc::new((Mutex::new(false), Condvar::new())),
+            },
+            on_next_holder: Arc::new(|_| {}),
+            args: None,
+        };
+    }
+    pub fn from_id(id: &u64, val: Option<PropertyValue>) -> Property {
+        let arc_val = Arc::new(RwLock::new(val));
+        return Property {
+            name: NAME(None),
+            id: *id,
             value: arc_val.clone(),
             stream: PropertyStream {
                 value: arc_val,
@@ -239,16 +295,16 @@ impl Property {
     pub fn from_toml(name: &str, val: Option<&Value>) -> Property {
         let p = match val {
             Some(v) if v.is_str() => {
-                Property::new(name, Some(v.into()))
+                Property::from_name(name, Some(v.into()))
             }
             Some(v) if v.is_integer() => {
-                Property::new(name, Some(v.into()))
+                Property::from_name(name, Some(v.into()))
             }
             Some(v) if v.is_bool() => {
-                Property::new(name, Some(v.into()))
+                Property::from_name(name, Some(v.into()))
             }
             Some(v) if v.is_float() => {
-                Property::new(name, Some(v.into()))
+                Property::from_name(name, Some(v.into()))
             }
             Some(v) if v.is_table() => {
                 /*
@@ -272,7 +328,7 @@ impl Property {
                             }
                         }
 
-                        let mut p = Property::new(name, Some(val.unwrap().into()));
+                        let mut p = Property::from_name(name, Some(val.unwrap().into()));
                         if params.keys().len() >0 {
                             p.args = Some(params);
                         }
@@ -281,12 +337,12 @@ impl Property {
                     }
                     _ => {}
                 };
-                Property::new(name, None)
+                Property::from_name(name, None)
 
             }
             _ => {
                 debug!("<<Failed to convert Property: {:?}: {:?}", name, val);
-                Property::new(name, None)
+                Property::from_name(name, None)
             }
         };
         return p;
@@ -342,7 +398,7 @@ pub trait SetProperty<T> {
 /*
     |P|one=1\ntwo=2\nthree=3
  */
-pub(crate) fn properties_to_bytes(properties: &HashMap<String, Property>) -> Bytes {
+pub(crate) fn properties_to_bytes(properties: &HashMap<u64, Property>) -> Bytes {
     let mut bytes = BytesMut::new();
     bytes.put_u8(PROPERTIES);
     for p in properties {
@@ -356,13 +412,14 @@ pub(crate) fn properties_to_bytes(properties: &HashMap<String, Property>) -> Byt
 }
 
 use num_traits::ToPrimitive;
+// use sha1::Digest;
+
 pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
     let mut bytes = BytesMut::new();
     if inc_head {
-        bytes.put_u8(PROPERTY)
+        bytes.put_u8(PROPERTY);
     }
-    bytes.put_u8(property.name.len() as u8);
-    bytes.put_slice(&*property.name.as_bytes());
+    bytes.put_u64(property.id);
 
     match &*property.value.read().unwrap() {
         None => {
@@ -441,10 +498,11 @@ pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
 }
 
 pub(crate) fn bytes_to_property(bytes:&mut Bytes) -> Option<Property> {
-    let name_length = bytes.get_u8() as usize;
-    let name = String::from_utf8(bytes.slice(..name_length).to_vec());
-    bytes.advance(name_length);
-    debug!("name: {:?}", name);
+    // let name_length = bytes.get_u8() as usize;
+    // let name = String::from_utf8(bytes.slice(..name_length).to_vec());
+    let property_id = bytes.get_u64();
+    // bytes.advance(64);
+    debug!("id: {:?}", property_id);
 
     let value_type = bytes.get_i8();
     debug!("wtf...... {:#02x}, {:#02x}", value_type, IS_SHORT);
@@ -455,34 +513,34 @@ pub(crate) fn bytes_to_property(bytes:&mut Bytes) -> Option<Property> {
             bytes.advance(str_length);
             debug!("<<<<<<<<<<<<<<<<<<<<<<<<< string {:?} = {:?}", str_length, value);
             let v = value.ok().unwrap();
-            return Some(Property::from_value(&name.ok().unwrap(), v.into()));
+            return Some(Property::from_value(&property_id, v.into()));
         },
         IS_BOOL => {
             let bool = bytes.get_u8() > 0;
-            return Some(Property::from_value(&name.ok().unwrap(), bool.into()));
+            return Some(Property::from_value(&property_id, bool.into()));
         }
         IS_SHORT => {
             let short = bytes.get_i8();
-            return Some(Property::from_value(&name.ok().unwrap(), short.into()));
+            return Some(Property::from_value(&property_id, short.into()));
         }
         IS_SMALL => {
             let small = bytes.get_i16();
-            return Some(Property::from_value(&name.ok().unwrap(), (small as i32).into()));
+            return Some(Property::from_value(&property_id, (small as i32).into()));
         }
         IS_LONG => {
             let long = bytes.get_i32();
-            return Some(Property::from_value(&name.ok().unwrap(), long.into()));
+            return Some(Property::from_value(&property_id, long.into()));
         }
         IS_INT => {
             let int = bytes.get_i64();
-            return Some(Property::from_value(&name.ok().unwrap(), int.into()));
+            return Some(Property::from_value(&property_id, int.into()));
         }
         IS_FLOAT => {
             let float = bytes.get_f64();
-            return Some(Property::from_value(&name.ok().unwrap(), float.into()));
+            return Some(Property::from_value(&property_id, float.into()));
         }
         IS_NONE => {
-            return Some(Property::new(&name.ok().unwrap(), None));
+            return Some(Property::from_id(&property_id, None));
         }
         _ => {
             unimplemented!(".... doh, finish me {:?}", value_type)

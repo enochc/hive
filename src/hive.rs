@@ -1,6 +1,5 @@
 // Much code "borrowed" from> https://book.async.rs/tutorial/implementing_a_client.html
 // #![feature(async_closure)]
-
 use std::{collections::HashMap, fs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -26,14 +25,13 @@ use crate::signal::Signal;
 use std::sync::{Condvar, Mutex};
 use std::fmt::{Debug, Formatter};
 use toml::Value;
-
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub type Sender<T> = mpsc::UnboundedSender<T>;
 pub type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
 // #[derive(Debug)]
 pub struct Hive {
-    pub properties: HashMap<String, Property>,
+    pub properties: HashMap<u64, Property>,
     sender: Sender<SocketEvent>,
     receiver: Receiver<SocketEvent>,
     connect_to: Option<String>,
@@ -187,7 +185,7 @@ impl Hive {
         let bt_connect_to = prop("bt_connect");
 
 
-        let props: HashMap::<String, Property> = HashMap::new();
+        let props: HashMap::<u64, Property> = HashMap::new();
 
         let (send_chan, receive_chan) = mpsc::unbounded();
         let mut hive = Hive {
@@ -257,9 +255,19 @@ impl Hive {
         Hive::new_from_str(foo.as_str())
     }
 
-    pub fn get_mut_property(&mut self, key: &str) -> Option<&mut Property> {
+    pub fn get_mut_property(&mut self, key: &u64) -> Option<&mut Property> {
         if !self.properties.contains_key(key) {
-            let p = Property::new(key, None);
+            let p = Property::from_id(key, None);
+            self.set_property(p);
+        }
+
+        let op = self.properties.get_mut(key);
+        return op;
+    }
+    pub fn get_mut_property_by_name(&mut self, name: &str) -> Option<&mut Property> {
+        let key = &Property::hash(name);
+        if !self.properties.contains_key(key) {
+            let p = Property::from_id(key, None);
             self.set_property(p);
         }
 
@@ -267,27 +275,27 @@ impl Hive {
         return op;
     }
 
-    pub fn get_property(&self, key: &str) -> Option<&Property> {
+    pub fn get_property(&self, key: &u64) -> Option<&Property> {
         let op = self.properties.get(key);
         return op;
     }
 
-    fn has_property(&self, key: &str) -> bool {
+    fn has_property(&self, key: &u64) -> bool {
         return self.properties.contains_key(key);
     }
 
     fn set_property(&mut self, property: Property) {
         debug!("{:?} SET PROPERTY: {:?}", property.get_name(), property);
-        let name = property.get_name().clone();
-        if self.has_property(name) {
+        let id = &property.id;
+        if self.has_property(id) {
             /*
             This calls emit on the existing property
              */
-            self.get_mut_property(name).unwrap().set_from_prop(property);
+            self.get_mut_property(id).unwrap().set_from_prop(property);
         } else {
             // TODO when added for first time, no change event is emitted, EMIT CHANGE!!
             //  De couple add_property and get_mut_property
-            self.properties.insert(String::from(name), property);
+            self.properties.insert(*id, property);
         }
     }
 
@@ -451,7 +459,9 @@ impl Hive {
                 let name_clone = self.name.clone();
                 task::spawn(async move {
                     match Hive::accept_loop(send_chan, p, name_clone).await {
-                        Err(e) => panic!("Failed accept loop: {:?}", e),
+                        Err(e) => {
+                            panic!("Failed accept loop: {:?}", e)
+                        },
                         _ => (),
                     }
                 });
@@ -713,7 +723,7 @@ impl Hive {
                 let mut msg_out = BytesMut::with_capacity(msg.len() + 1);
                 msg_out.put_u8(msg_type);
                 msg_out.put_slice(&msg.clone());
-                debug!("<<{} sending: {:?}", self.name, msg_out);
+                debug!("<<{} sending:{:?} {}", self.name, msg_out, msg_out.len());
                 p.send(msg_out.freeze()).await?;
             }
         }
@@ -778,7 +788,7 @@ impl Hive {
                             if p.is_none() {
                                 debug!("DELETING {:?}", p.get_name());
                                 self.broadcast(DELETE, &p, from).await?;
-                                self.properties.remove(p.get_name());
+                                self.properties.remove(&p.id);
                             } else {
                                 self.broadcast(PROPERTY, &p, from).await?;
                                 self.set_property(p);
@@ -788,8 +798,8 @@ impl Hive {
                 }
                 // todo Delete is redundant, setting the value to None does the same thing
                 DELETE => {
-                    let message = String::from_utf8(msg.to_vec()).unwrap();
-                    let p = self.properties.remove(&message);
+                    // let message = String::from_utf8(msg.to_vec()).unwrap();
+                    let p = self.properties.remove(&msg.get_u64());
                     match p{
                         None => {}
                         Some(p) => {

@@ -3,7 +3,7 @@ use hive::hive_gui::{HiveWindow, Gui};
 slint::include_modules!();
 
 fn main(){
-    let mut h = Hive::new("examples/properties.toml");
+    let mut h = Hive::new("examples/motors.toml");
     HiveWindow::launch(Some(h));
     // HiveWindow::launch(None);
 }

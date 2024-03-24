@@ -1,11 +1,15 @@
+import { Slider } from "std-widgets.slint";
+
 component PropertyButton inherits Rectangle {
     callback clicked;
     in property <string> name;
     in property <string> value;
 
     HorizontalLayout {
+       min-width: 200px;
+       preferred-width: 400px;
         alignment: start;
-        padding-left:10px;
+//        padding-left:10px;
         Text {
                 text: name+": ";
             }
@@ -29,24 +33,31 @@ struct HProperty {
 
 export component MainWindow inherits Window {
 
-//    min-height: 150px;
-//    min-width: 100px;
-//
-//    preferred-height: 200px;
-//    preferred-width: 400px;
+    min-width: 200px;
+    preferred-width: 500px;
 
     in-out property <[HProperty]> properties: [
         {name:"1", value:"one"},
         {name:"2", value:"two"}
     ];
 
+
     callback check_if_pair_solved();
     in property <bool> disable_tiles;
 
     VerticalLayout {
+    padding:20px;
+    width:parent.width;
+    alignment:center;
         for prop[i] in properties: PropertyButton {
             name: prop.name;
             value: prop.value;
+        }
+
+        Slider {
+
+            width: 300px;
+
         }
     }
 
