@@ -41,7 +41,7 @@ fn main() {
 
     use simple_signal::{self, Signal};
 
-    server_hive.get_mut_property("turn").unwrap().on_next(move |value|{
+    server_hive.get_mut_property(&Property::hash_id("turn")).unwrap().on_next(move |value|{
         debug!("<<<< TURN: {:?}", value);
     });
 
