@@ -713,7 +713,8 @@ impl Hive {
                 let mut msg_out = BytesMut::with_capacity(msg.len() + 1);
                 msg_out.put_u8(msg_type);
                 msg_out.put_slice(&msg.clone());
-                debug!("<<{} sending: {:?}", self.name, msg_out);
+                // debug!("<<{} sending: {:?}", self.name, msg_out);
+                debug!("<<{} sending:{:?} {}", self.name, msg_out, msg_out.len());
                 p.send(msg_out.freeze()).await?;
             }
         }
