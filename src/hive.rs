@@ -22,7 +22,7 @@ use crate::handler::Handler;
 use crate::peer::{Peer, SocketEvent, PeerType};
 use crate::property::{properties_to_bytes, Property, bytes_to_property, property_to_bytes};
 use crate::signal::Signal;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, Weak};
 use std::fmt::{Debug, Formatter};
 use toml::Value;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -667,6 +667,13 @@ impl Hive {
         let bts = properties_to_bytes(&self.properties);
         peer.send(bts).await?;
         Ok(())
+    }
+
+    pub fn get_weak_property(&mut self, prop_name:&str) -> Weak<Mutex<Property>> {
+
+        // let prop = self.get_mut_property(&Property::hash_id(prop_name)).expect("nopers");
+        let mp = Arc::new(Mutex::new(self.get_mut_property(&Property::hash_id(prop_name)).expect("nopers").clone()));
+        Arc::downgrade(&mp).clone()
     }
 
 

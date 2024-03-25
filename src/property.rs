@@ -74,6 +74,11 @@ impl From<i32> for PropertyValue {
         PropertyValue {val:Value::from(v)}
     }
 }
+impl From<f32> for PropertyValue {
+    fn from(v: f32) -> Self {
+        PropertyValue {val:Value::from(v)}
+    }
+}
 impl From<f64> for PropertyValue {
     fn from(v: f64) -> Self {
         PropertyValue {val:Value::from(v)}
@@ -200,7 +205,9 @@ impl Property {
     pub fn hash_id(val: &str) -> u64 {
         let mut hasher = AHasher::default();
         hasher.write(val.as_bytes());
-        hasher.finish()
+        let rr= hasher.finish();
+        // println!("<< {}: {}",val,  rr);
+        rr
     }
     pub fn get_value(&self) -> Option<Value> {
         let rr = &*self.value.read().unwrap();

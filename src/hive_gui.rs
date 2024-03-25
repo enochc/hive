@@ -1,14 +1,18 @@
+use std::collections::HashMap;
 use slint;
 use slint::{CloseRequestResponse, Model, ModelRc, SharedString, VecModel, Weak};
 use std::env;
 use std::ops::Index;
 
 use crate::hive::Hive;
-use crate::property::Property;
-use futures::channel::mpsc::{channel, Sender};
+use crate::property::{Property, SetProperty};
+
 use futures::{SinkExt, StreamExt};
 use std::rc::Rc;
+use log::kv::{Source, Value};
 use toml::macros::IntoDeserializer;
+use crossbeam_channel::{bounded, RecvError, select, Sender};
+use async_std::task::block_on;
 
 pub trait Gui {
     fn launch(hive: Option<Hive>);
@@ -41,9 +45,11 @@ impl From<&Property> for HProperty {
 
 impl Gui for HiveWindow {
     fn launch(hive: Option<Hive>) {
-        let (mut sender, mut receiver) = channel::<HProperty>(1);
+        let (mut sender, mut receiver) = bounded(1); //channel::<Vec<HProperty>>();
         let window = MainWindow::new().unwrap();
         let window_weak = window.as_weak();
+
+        let mut hive_props: Option<HashMap<u64, Property>> = None;
 
         let mut props = match hive {
             None => {
@@ -52,61 +58,90 @@ impl Gui for HiveWindow {
                     value: "vals".into(),
                 }]
             }
-            Some(h) => h.properties.iter().map(|(p, v)| v.into()).collect(),
+            Some(ref h) => {
+                hive_props = Some(h.properties.clone());
+                h.properties.iter().map(|(p, v)| v.into()).collect()
+            },
         };
         props.sort_by(|a, b| a.name.cmp(&b.name));
         let props_model: Rc<VecModel<HProperty>> = Rc::new(VecModel::from(props));
         let properties_rc = ModelRc::from(props_model);
 
         window.set_properties(properties_rc);
-        let mut sender2 = sender.clone();
+        // let mut sender2 = sender.clone();
+        let mut done:bool = false;
 
         async_std::task::spawn(async move {
             loop {
-                while !sender2.is_closed() {
-                    match receiver.next().await {
-                        None => {}
-                        Some(property) => {
+                while !done {
+                    match receiver.recv() {//next().await {
+                        // None => {}
+                        // Some(property) => {
+                        //     println!("<<< property {:?}", property);
+                        //
+                        //     window_weak
+                        //         .upgrade_in_event_loop(|win| {
+                        //             let props_model: Rc<VecModel<HProperty>> =
+                        //                 Rc::new(VecModel::from(property));
+                        //             let properties_rc: ModelRc<HProperty> =
+                        //                 ModelRc::from(props_model);
+                        //             win.set_properties(properties_rc)
+                        //         })
+                        //         .expect("Window is gone.");
+                        //
+                        //     // slint::invoke_from_event_loop(move || {
+                        //     //     let props_model: Rc<VecModel<HProperty>> = Rc::new(VecModel::from(vec![property]));
+                        //     //     let properties_rc: ModelRc<HProperty> = ModelRc::from(props_model);
+                        //     //     handle_copy.unwrap().set_properties(properties_rc)
+                        //     // }).expect("TODO: panic message");
+                        // }
+                        Ok(property) => {
                             println!("<<< property {:?}", property);
-
-                            window_weak
-                                .upgrade_in_event_loop(|win| {
-                                    let props_model: Rc<VecModel<HProperty>> =
-                                        Rc::new(VecModel::from(vec![property]));
-                                    let properties_rc: ModelRc<HProperty> =
-                                        ModelRc::from(props_model);
-                                    win.set_properties(properties_rc)
-                                })
-                                .expect("Window is gone.");
-
-                            // slint::invoke_from_event_loop(move || {
-                            //     let props_model: Rc<VecModel<HProperty>> = Rc::new(VecModel::from(vec![property]));
-                            //     let properties_rc: ModelRc<HProperty> = ModelRc::from(props_model);
-                            //     handle_copy.unwrap().set_properties(properties_rc)
-                            // }).expect("TODO: panic message");
+                                window_weak
+                                    .upgrade_in_event_loop(|win| {
+                                        let props_model: Rc<VecModel<HProperty>> =
+                                            Rc::new(VecModel::from(property));
+                                        let properties_rc: ModelRc<HProperty> =
+                                            ModelRc::from(props_model);
+                                        win.set_properties(properties_rc)
+                                    })
+                                    .expect("Window is gone.");
                         }
+                        Err(_) => {}
                     }
                 }
             }
         });
 
-        // async_std::task::spawn(async move {
-        //     let mut x = 0;
-        //     while (x < 5) {
-        //         async_std::task::sleep(Duration::from_secs(1)).await;
-        //         sender.send(HProperty::new("one", &format!("two {}", x))).await.expect("TODO: panic message");
-        //         println!("<<<<<<{}", x);
-        //         x += 1;
-        //     }
-        // });
-
-
         window.window().on_close_requested(move || {
             println!("<< done");
+            done = true;
             return CloseRequestResponse::HideWindow;
         });
-        window.on_prop_changed(|prop:SharedString, val:f32|{
-            println!("<<<< {}, {}", prop, val);
+
+        let rr = Rc::new(hive).clone();
+
+        let mut ssc: Sender<Vec<HProperty>> = sender.clone();
+
+        window.on_prop_changed( move |prop:SharedString, val:f32|{
+            match rr.as_ref() {
+                None => {}
+                Some(r) => {
+                    // if prop.eq("all") {
+                    //     println!("all");
+                    //     ssc.send(vec! {
+                    //         HProperty::new("all",&val.to_string()),
+                    //         HProperty::new("m1",&val.to_string()),
+                    //         HProperty::new("m2",&val.to_string()),
+                    //         HProperty::new("m3",&val.to_string()),
+                    //         HProperty::new("m4",&val.to_string()),
+                    //     }).expect("TODO: panic message");
+                    // } else {
+                        let mut property = r.properties[&Property::hash_id(&prop)].clone();
+                        property.set_value(val.into());
+                    // }
+                }
+            }
         });
 
         window.run().unwrap();

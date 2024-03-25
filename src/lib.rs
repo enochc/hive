@@ -3,6 +3,7 @@
 use chrono::Local;
 use log::{Metadata, Level, Record, LevelFilter};
 
+#[cfg(feature = "gui")]
 pub mod hive_gui;
 mod hive_macros;
 pub mod property;
