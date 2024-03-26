@@ -1,10 +1,11 @@
+use std::alloc::System;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt;
 use std::pin::Pin;
 use std::sync::{Condvar, Mutex, RwLock};
 use std::task::{Context, Poll};
-
+use chrono::{DateTime, Local};
 use async_std::stream::Stream;
 use async_std::sync::Arc;
 use async_std::task::block_on;
@@ -17,6 +18,7 @@ use crate::hive::{PROPERTIES, PROPERTY};
 use toml::value::Table;
 use std::fmt::{Debug, Formatter, Display};
 use std::hash::{BuildHasherDefault, Hash, Hasher};
+use std::time::SystemTime;
 use ahash;
 use ahash::AHasher;
 use futures::future::ok;
@@ -195,6 +197,8 @@ pub struct Property
     // pub on_changed: Signal<Option<PropertyType>>,
     pub stream: PropertyStream,
     on_next_holder: Arc<dyn Fn(PropertyValue) + Send + Sync + 'static>,
+    debounce:u16,
+    last_notify: SystemTime,
     pub args: Option<Table>,
 
 }
@@ -203,6 +207,7 @@ pub struct Property
 impl Property {
 
     pub fn hash_id(val: &str) -> u64 {
+        let now:SystemTime = SystemTime::now();
         let mut hasher = AHasher::default();
         hasher.write(val.as_bytes());
         let rr= hasher.finish();
@@ -277,6 +282,8 @@ impl Property {
                 value: arc_val,
                 has_next: Arc::new((Mutex::new(false), Condvar::new())),
             },
+            debounce: 300,
+            last_notify: SystemTime::now(),
             on_next_holder: Arc::new(|_| {}),
             args: None,
         };
@@ -291,6 +298,8 @@ impl Property {
                 value: arc_val,
                 has_next: Arc::new((Mutex::new(false), Condvar::new())),
             },
+            debounce: 300,
+            last_notify: SystemTime::now(),
             on_next_holder: Arc::new(|_| {}),
             args: None,
         };
@@ -388,20 +397,7 @@ impl Property {
     }
 }
 
-// I'm not currently using this anywhere
-impl SetProperty<&str> for Property{
-    fn set(&mut self, v: &str) {
-        let p = PropertyValue::from(v);
-        self.set_value(p);
-    }
-}
 
-pub trait SetProperty<T> {
-    fn set(&mut self, v:T);
-}
-/*
-    |P|one=1\ntwo=2\nthree=3
- */
 pub(crate) fn properties_to_bytes(properties: &HashMap<u64, Property>) -> Bytes {
     let mut bytes = BytesMut::new();
     bytes.put_u8(PROPERTIES);
@@ -416,7 +412,6 @@ pub(crate) fn properties_to_bytes(properties: &HashMap<u64, Property>) -> Bytes 
 }
 
 use num_traits::ToPrimitive;
-// use sha1::Digest;
 
 pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
     let mut bytes = BytesMut::new();

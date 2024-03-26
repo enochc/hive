@@ -1,70 +1,123 @@
 import { Slider } from "std-widgets.slint";
 
-component PropertyButton inherits Rectangle {
-    callback changed(float);
-    in property <string> name;
-    in-out property <string> value;
-
-    VerticalLayout{
-
-        HorizontalLayout {
-           min-width: 200px;
-           preferred-width: 400px;
-            alignment: start;
-            Text {
-                    text: name+": ";
-                }
-            Text {
-                text: value;
-            }
-        }
-        Slider {
-            value: value.to-float();
-            width: 300px;
-            changed => {
-                value = self.value;
-                changed(value.to-float());
-            }
-        }
-    }
-
-//    TouchArea {
-//        clicked => {
-//            // Delegate to the user of this element
-//            root.clicked();
-//        }
-//    }
-}
-
-struct HProperty {
-    name: string,
-    value: string,
-}
 
 export component MainWindow inherits Window {
 
     min-width: 200px;
     preferred-width: 500px;
     callback prop_changed(string, float);
-
-    in-out property <[HProperty]> properties: [
-        {name:"1", value:"one"},
-        {name:"2", value:"two"}
-    ];
+    in-out property <float> motor1;
+    in-out property <float> motor2;
+    in-out property <float> motor3;
+    in-out property <float> motor4;
 
     callback check_if_pair_solved();
     in property <bool> disable_tiles;
+    property  <bool> isUpdatingM1: false;
+
+    property <float> m1;
+    property <float> m2;
 
     VerticalLayout {
-    padding:20px;
-    width:parent.width;
-    alignment:center;
-        for prop[i] in properties: PropertyButton {
-            name: prop.name;
-            value: prop.value;
-            changed(v) => {
-                prop_changed(prop.name, v)
+
+        padding:20px;
+        width:parent.width;
+        alignment:center;
+        VerticalLayout{
+             HorizontalLayout {
+                 min-width: 200px;
+                 preferred-width: 400px;
+                  alignment: start;
+                  Text {text: "ALL: ";}
+              }
+            Slider {
+                value: 0;
+                width: 300px;
+                changed => {
+                    m1.value = self.value;
+                    m2.value = self.value;
+                    m3.value = self.value;
+                    m4.value = self.value;
+                    motor1 = self.value;
+                    motor2 = self.value;
+                    motor3 = self.value;
+                    motor4 = self.value;
+                    prop_changed("m1", motor1);
+                    prop_changed("m2", motor2);
+                    prop_changed("m3", motor3);
+                    prop_changed("m4", motor4);
+
+                }
             }
         }
+
+        VerticalLayout{
+             HorizontalLayout {
+                 min-width: 200px;
+                 preferred-width: 400px;
+                  alignment: start;
+                  Text {text: "M1: ";}
+                  Text {text: motor1;}
+              }
+              m1:=Slider {
+                  value: motor1;
+                  width: 300px;
+                  changed(v) => {
+                    motor1 = self.value;
+                    prop_changed("m1", motor1);
+                  }
+              }
+          }
+        VerticalLayout{
+             HorizontalLayout {
+                 min-width: 200px;
+                 preferred-width: 400px;
+                  alignment: start;
+                  Text {text: "M2: ";}
+                  Text {text: motor2;}
+              }
+              m2:=Slider {
+                  value: motor2;
+                  width: 300px;
+                  changed(v) => {
+                    motor2 = self.value;
+                    prop_changed("m2", motor2);
+                  }
+              }
+          }
+      VerticalLayout{
+             HorizontalLayout {
+                 min-width: 200px;
+                 preferred-width: 400px;
+                  alignment: start;
+                  Text {text: "M3: ";}
+                  Text {text: motor3;}
+              }
+              m3:=Slider {
+                  value: motor3;
+                  width: 300px;
+                  changed(v) => {
+                    motor3 = self.value;
+                    prop_changed("m3", motor3);
+                  }
+              }
+          }
+      VerticalLayout{
+             HorizontalLayout {
+                 min-width: 200px;
+                 preferred-width: 400px;
+                  alignment: start;
+                  Text {text: "M4: ";}
+                  Text {text: motor4;}
+              }
+              m4:=Slider {
+                  value: motor4;
+                  width: 300px;
+                  changed(v) => {
+                    motor4 = self.value;
+                    prop_changed("m4", motor4);
+                  }
+              }
+          }
     }
 }
