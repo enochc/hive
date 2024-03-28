@@ -8,5 +8,5 @@ fn main() {
     println!("cargo:rustc-link-search={}/libraries/lib/arm-linux-gnueabihf", manifest_dir);
     println!("cargo:rustc-link-search={}/libraries/usr/lib/arm-linux-gnueabihf", manifest_dir);
 
-    slint_build::compile("src/ui/thing.slint").unwrap();
+    slint_build::compile("../Navio2r/ui/thing.slint").unwrap();
 }
