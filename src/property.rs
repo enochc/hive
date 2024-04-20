@@ -373,62 +373,61 @@ impl Property {
         debug!("!does_eq: {}", !does_eq);
 
         return if !does_eq {
-            let mut rr = self.value.write().unwrap();
-            *rr = Some(new_prop.clone());
+            *self.value.write().unwrap() = Some(new_prop.clone());
+
             debug!("emit change");
             let stream = self.stream.has_next.clone();
 
-            let on_next = async {
-                let (_, cvar) = &*stream;
+            let (sending, cvar) = &*stream;
+            if self.backoff > 0 {
+                match self.last_notify {
+                    Some(last_time)=> {
+                        // do the magic here!!!
+                        let ss = *sending.lock().unwrap();
+                        if(!ss) {
+                            *sending.lock().unwrap() = true;
+                            let duration = self.backoff.clone();
+                            let stream_clone = stream.clone();
+                            let hh = self.on_next_holder.clone();
+                            let rr = new_prop.clone();
+
+                            async_std::task::spawn(async move {
+                                async_std::task::sleep(Duration::from_millis(duration)).await;
+                                let (x, y) = &*stream_clone;
+                                y.notify_all();
+                                (hh)(rr);
+                            });
+                        } else {
+                            error!("!!! already sending ......");
+                        }
+
+                        info!("<<< hmmm {:?} {:?}", last_time, sending.lock())
+                    }
+                    _ => {
+                        // not set, set it!!
+                        cvar.notify_all();
+                        self.last_notify = Some(Local::now().naive_utc());
+                        debug!("notified!");
+                    }
+                }
+            } else {
+                // no backoff, just set it!
                 cvar.notify_all();
-            };
-            (self.on_next_holder)(new_prop);
+                self.last_notify = Some(Local::now().naive_utc());
 
+                (self.on_next_holder)(new_prop);
+                debug!("notified!");
+            }
 
-            // let (sending, cvar) = &*stream;
-            // if self.backoff > 0 {
-            //     match self.last_notify {
-            //         Some(last_time)=> {
-            //             // do the magic here!!!
-            //             let ss = *sending.lock().unwrap();
-            //             if(!ss) {
-            //                 *sending.lock().unwrap() = true;
-            //                 let duration = self.backoff.clone();
-            //                 let stream_clone = stream.clone();
-            //                 let hh = self.on_next_holder.clone();
-            //                 let rr = new_prop.clone();
-            //
-            //                 async_std::task::spawn(async move {
-            //                     async_std::task::sleep(Duration::from_millis(duration)).await;
-            //                     let (x, y) = &*stream_clone;
-            //                     y.notify_all();
-            //                     (hh)(rr);
-            //                 });
-            //             } else {
-            //                 error!("!!! already sending ......");
-            //             }
-            //
-            //             info!("<<< hmmm {:?} {:?}", last_time, sending.lock())
-            //         }
-            //         _ => {
-            //             // not set, set it!!
-            //             cvar.notify_all();
-            //             self.last_notify = Some(Local::now().naive_utc());
-            //             debug!("notified!");
-            //         }
-            //     }
-            // } else {
-            //     // no backoff, just set it!
+            // let on_next = async {
+            //     let (_, cvar) = &*stream;
             //     cvar.notify_all();
-            //     self.last_notify = Some(Local::now().naive_utc());
-            //
-            //     (self.on_next_holder)(new_prop);
-            //     debug!("notified!");
-            // }
+            // };
+            // (self.on_next_holder)(new_prop);
 
-            block_on(async {
-                on_next.await;
-            });
+            // block_on(async {
+            //     on_next.await;
+            // });
 
             true
         } else {
