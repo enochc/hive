@@ -394,6 +394,7 @@ impl Property {
                             async_std::task::spawn(async move {
                                 async_std::task::sleep(Duration::from_millis(duration)).await;
                                 let (x, y) = &*stream_clone;
+                                *x.lock().unwrap() = false;
                                 y.notify_all();
                                 (hh)(rr);
                             });
