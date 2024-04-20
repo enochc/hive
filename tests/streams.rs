@@ -35,8 +35,8 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     let counter_7 = counter.clone();
     let counter_8 = counter.clone();
 
-    let thingValue = Arc::new(AtomicUsize::new(0));
-    let thingValue_1 = thingValue.clone();
+    let thing_value = Arc::new(AtomicUsize::new(0));
+    let thing_value_1 = thing_value.clone();
     // let count6 = counter.clone();
 
     let ack: Arc<(Mutex<String>, Condvar)> = Arc::new((Mutex::new("".into()), Condvar::new()));
@@ -141,7 +141,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
         info!(" +++++++++++++++++++++ CLIENT thing value::::::::::::::::::::: {:?}", value);
         let (lock, cvar) = &*ack_clone;
         let t2 = value.val.as_integer().unwrap() as usize;
-        thingValue_1.store(t2, Ordering::Relaxed);
+        thing_value_1.store(t2, Ordering::Relaxed);
         let mut ack = lock.lock().unwrap();
         *ack = value.to_string();
         cvar.notify_one();
@@ -243,7 +243,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
 
     let done = block_on(receiver.next());
 
-    let c6 = thingValue.load(Ordering::Relaxed);
+    let c6 = thing_value.load(Ordering::Relaxed);
     assert_eq!(c6, 10);
 
     let c = counter.load(Ordering::Relaxed);

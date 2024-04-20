@@ -10,7 +10,7 @@ use async_std;
 
 fn main() {
     //test
-    let mut p = Property::from_value("test",4.into());
+    let mut p = Property::from_value_name("test",4.into());
     let counter = Arc::new(AtomicUsize::new(0));
     let c2 = Arc::clone(&counter);
 

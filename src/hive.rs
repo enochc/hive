@@ -130,6 +130,7 @@ impl Hive {
         return self.connected.load(Ordering::Relaxed);
     }
 
+    // wait will wait until the Hive service is running before returning
     pub fn go(mut self, wait:bool)->Handler {
         //This consumes the Hive and returns a handler and spawns it's run thread in a task
         if wait {

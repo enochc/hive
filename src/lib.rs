@@ -18,7 +18,7 @@ pub mod websocket;
 
 #[cfg(feature = "bluetooth")]
 pub mod bluetooth;
-
+pub mod backoff;
 
 
 #[cfg(feature="bluetooth")]

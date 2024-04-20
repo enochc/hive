@@ -13,9 +13,13 @@ use log::kv::{Source, Value};
 use toml::macros::IntoDeserializer;
 use crossbeam_channel::{bounded, RecvError, select, Sender};
 use async_std::task::block_on;
+use log::debug;
+use crate::handler::Handler;
 
 pub trait Gui {
+
     fn launch(hive: Option<Hive>);
+    // fn launch_with<F>(hive: Option<Hive>, with_window:F) where F: Fn(HiveWindow);
 }
 
 pub struct HiveWindow {}
@@ -59,8 +63,13 @@ impl Gui for HiveWindow {
                 }]
             }
             Some(ref h) => {
+
+                h.properties.iter().for_each(|(k,v)|{
+                   debug!("<< {:?} >>",v)
+                });
                 hive_props = Some(h.properties.clone());
                 h.properties.iter().map(|(p, v)| v.into()).collect()
+
             },
         };
         props.sort_by(|a, b| a.name.cmp(&b.name));
@@ -112,14 +121,15 @@ impl Gui for HiveWindow {
                 }
             }
         });
+        let rr = Rc::new(hive).clone();
+
 
         window.window().on_close_requested(move || {
             println!("<< done");
+            // handle.hangup();
             done = true;
             return CloseRequestResponse::HideWindow;
         });
-
-        let rr = Rc::new(hive).clone();
 
         let mut ssc: Sender<Vec<HProperty>> = sender.clone();
 
@@ -143,7 +153,8 @@ impl Gui for HiveWindow {
                 }
             }
         });
-
         window.run().unwrap();
     }
+
+
 }
