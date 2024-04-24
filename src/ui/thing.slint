@@ -1,29 +1,39 @@
 import { Slider } from "std-widgets.slint";
 
 component PropertyButton inherits Rectangle {
-    callback clicked;
+    callback changed(float);
     in property <string> name;
-    in property <string> value;
+    in-out property <string> value;
 
-    HorizontalLayout {
-       min-width: 200px;
-       preferred-width: 400px;
-        alignment: start;
-//        padding-left:10px;
-        Text {
-                text: name+": ";
+    VerticalLayout{
+
+        HorizontalLayout {
+           min-width: 200px;
+           preferred-width: 400px;
+            alignment: start;
+            Text {
+                    text: name+": ";
+                }
+            Text {
+                text: value;
             }
-        Text {
-            text: value;
+        }
+        Slider {
+            value: value.to-float();
+            width: 300px;
+            changed => {
+                value = self.value;
+                changed(value.to-float());
+            }
         }
     }
 
-    TouchArea {
-        clicked => {
-            // Delegate to the user of this element
-            root.clicked();
-        }
-    }
+//    TouchArea {
+//        clicked => {
+//            // Delegate to the user of this element
+//            root.clicked();
+//        }
+//    }
 }
 
 struct HProperty {
@@ -35,6 +45,7 @@ export component MainWindow inherits Window {
 
     min-width: 200px;
     preferred-width: 500px;
+    callback prop_changed(string, float);
 
     in-out property <[HProperty]> properties: [
         {name:"1", value:"one"},
@@ -52,13 +63,16 @@ export component MainWindow inherits Window {
         for prop[i] in properties: PropertyButton {
             name: prop.name;
             value: prop.value;
+            changed(v) => {
+                prop_changed(prop.name, v)
+            }
         }
 
-        Slider {
-
-            width: 300px;
-
-        }
+//        Slider {
+//
+//            width: 300px;
+//
+//        }
     }
 
 }
