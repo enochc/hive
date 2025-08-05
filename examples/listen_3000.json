@@ -1,0 +1,27 @@
+{
+  "listen": "127.0.0.1:3000",
+  "properties": [
+    {
+      "thingValue": 1
+    },
+    {
+      "is_active": true
+    },
+    {
+      "lightValue": {
+        "value": 0,
+        "backoff": 1000
+      }
+    },
+    {
+      "thermostatName": "thermostat"
+    },
+    {
+      "thermostatTemperature": "too cold"
+    },
+    {
+      "thermostatTarget_temp": 1.45
+    }
+  ]
+}
+

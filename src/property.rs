@@ -214,9 +214,13 @@ pub struct Property
 
 
 impl Property {
-    pub fn with_backoff(&mut self, val: &u64) -> &mut Property {
+    pub fn with_backoff(&mut self, val: &u64) -> & Property {
         self.backoff = val.clone();
         self
+    }
+
+    pub fn set_backoff(&mut self, val: &u64) {
+        self.backoff = val.clone();
     }
 
     pub fn hash_id(val: &str) -> u64 {
@@ -391,22 +395,25 @@ impl Property {
             None => { false }
             Some(pt) => { pt.eq(&new_prop) }
         };
-        debug!("!does_eq: {}", !does_eq);
+        debug!("!does_eq: {} {:?}", !does_eq, self.last_notify);
 
         return if !does_eq {
             *self.value.write().unwrap() = Some(new_prop.clone());
 
-            debug!("emit change");
+            debug!("emit change ({:?})", self.backoff);
             let stream = self.stream.has_next.clone();
 
             let (sending, cvar) = &*stream;
             if self.backoff > 0 {
+                debug!("backoff: {}", self.backoff);
                 match self.last_notify {
                     Some(last_time) => {
                         // do the magic here!!!
                         let ss = *sending.lock().unwrap();
                         if (!ss) {
+                            debug!("<< 1");
                             *sending.lock().unwrap() = true;
+                            debug!("<< 2");
                             let duration = self.backoff.clone();
                             let stream_clone = stream.clone();
                             let hh = self.on_next_holder.clone();
@@ -429,7 +436,7 @@ impl Property {
                         // not set, set it!!
                         cvar.notify_all();
                         self.last_notify = Some(Local::now().naive_utc());
-                        debug!("notified!");
+                        debug!("notified 2!  {:?}", self.last_notify);
                     }
                 }
             } else {

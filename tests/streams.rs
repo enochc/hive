@@ -1,21 +1,121 @@
 #![allow(unused_imports)]
+
+use std::io::{Error, ErrorKind};
 use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
 use hive::hive::Hive;
 use async_std::task;
-use futures::{SinkExt, StreamExt};
+use futures::{io, SinkExt, StreamExt};
 use hive::property::{Property, PropertyValue};
 use async_std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use async_std::task::block_on;
 use std::thread::sleep;
-use std::time::Duration;
 use hive::init_logging;
 use log::{debug, info, error, LevelFilter};
 
 use std::sync::{Condvar, Mutex};
 use simple_signal::Signal;
 use std::ops::Index;
+use anyhow::anyhow;
+use tokio::time::{self, Duration};
+use futures::{FutureExt, select};
 
+#[derive(Debug)]
+enum Control {
+    Stop,
+    Pause,
+    Continue,
+}
+async fn primary_task(mut value: i32) -> io::Result<i32> {
+    println!("Primary task started with value: {}", value);
+
+    for _ in 0..8 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        value += 1;
+        // println!("Tick... value = {}", value);
+    }
+
+    println!("Primary task finished with value: {}", value);
+    Ok(value)
+}
+#[tokio::test]
+async fn test_thing() -> io::Result<()> {
+    let val = test_thing_main(10).await;
+    println!("Done: val = {:?}", val);
+    Ok(())
+}
+async fn test_thing_main(start_val: i32) -> io::Result<i32> {
+    let (tx, mut rx) = mpsc::channel::<Control>(10);
+    // Spawn a task to send a Stop message after a short delay
+    tokio::spawn({
+        let mut tx = tx.clone();
+        async move {
+
+            time::sleep(Duration::from_secs(2)).await;
+            println!("Sending Continue command");
+            tx.send(Control::Continue).await.unwrap();
+
+            time::sleep(Duration::from_secs(2)).await;
+            println!("Sending Continue command");
+            tx.send(Control::Continue).await.unwrap();
+
+            time::sleep(Duration::from_secs(2)).await;
+            println!("Sending stop command");
+            tx.send(Control::Stop).await.unwrap();
+            //
+            // time::sleep(Duration::from_secs(2)).await;
+            // println!("Sending Stop command");
+            // tx.send(Control::Stop).await.unwrap();
+        }
+    });
+    let mut handle = tokio::spawn(primary_task(start_val));
+    tokio::pin!(handle);
+    let final_result;
+    loop {
+        println!("looping");
+        tokio::select! {
+            result = &mut handle => {
+                match result {
+                    Ok(Ok(val)) => {
+                        println!("Primary task completed.");
+                        final_result = val;
+                    }
+                   Ok(Err(e)) => {
+                        println!("Primary task returned an error: {}", e);
+                        return Err(e);
+                    }
+                    Err(join_err) => {
+                        println!("Primary task panicked or was aborted: {}", join_err);
+                        return Err(Error::new(ErrorKind::Interrupted, join_err));
+                    }
+                }
+                break;
+            }
+
+            msg = rx.next() => {
+                match msg {
+                    Some(Control::Stop) => {
+                        println!("Received Stop command.");
+                        handle.abort(); // Abort the running task
+                        let _ = handle.await; // Ensure cleanup
+                        return Ok(start_val);
+                    }
+                    Some(other) => {
+                        println!("Received other control command: {:?}", other);
+                    }
+                    None => {
+                        println!("Control channel closed.");
+                         return Ok(start_val);
+                    }
+                }
+            }
+        }
+    }
+
+    println!("Exited.");
+    assert!(true);
+    Ok((final_result))
+}
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 #[test]

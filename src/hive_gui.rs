@@ -50,21 +50,35 @@ impl From<&Property> for HProperty {
 }
 
 impl Gui for HiveWindow {
-    fn launch(hive: Option<Hive>) {
+    fn launch(mut hive: Option<Hive>) {
         let (mut sender, mut receiver) = channel::<HProperty>(1);
         let window = MainWindow::new().unwrap();
         let window_weak = window.as_weak();
 
-        let rr = Rc::new(hive);//.clone();
+        let rc_hive = Rc::new(hive);
 
-        let props = match rr.as_ref() { //match hive {
+        // let prop = match &*rc_hive {
+        //     None => {
+        //         None
+        //     }
+        //     Some(mut h) => {
+        //         let p = h.get_mut_property_by_name("lightValue");
+        //         return *p
+        //     }
+        // };
+
+        let props = match rc_hive.as_ref() { //match hive {
             None => {
                 vec![HProperty { name: "two".into(), value: "vals".into() }]
             }
             Some(h) => {
                 // h.get_mut_property_by_name("lightValue");
                 h.properties.iter().map(|(p, v)| {
-                    v.into()
+                    let mut pp = v.clone();
+                    pp.set_backoff(&1000);
+                    (&pp).into()
+                    // v.into()
+                    // pp
                 }).collect()
             }
         };
@@ -100,8 +114,11 @@ impl Gui for HiveWindow {
             return CloseRequestResponse::HideWindow;
         });
 
+        let r2 = rc_hive.clone();
+
         window.on_prop_changed(move |prop: SharedString, val: f32| {
-            match rr.as_ref() {
+            debug!("<<< prop changed: {:?}, {}", prop, val);
+            match &*r2  {
                 None => {}
                 Some(r) => {
                     let mut property = r.properties[&Property::hash_id(&prop)].clone();
@@ -109,6 +126,7 @@ impl Gui for HiveWindow {
                 }
             }
         });
+
         window.run().unwrap();
         println!("<< WTF>>>");
     }

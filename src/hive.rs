@@ -265,12 +265,18 @@ impl Hive {
         let op = self.properties.get_mut(key);
         return op;
     }
+    // pub fn get_mut_property_by_name(&mut self, name: &str) -> Option<&mut Property> {
+    //     let key = &Property::hash_id(name);
+    //     if !self.properties.contains_key(key) {
+    //         let p = Property::from_id(key, None);
+    //         self.set_property(p);
+    //     }
+    //
+    //     let op = self.properties.get_mut(key);
+    //     return op;
+    // }
     pub fn get_mut_property_by_name(&mut self, name: &str) -> Option<&mut Property> {
         let key = &Property::hash_id(name);
-        if !self.properties.contains_key(key) {
-            let p = Property::from_id(key, None);
-            self.set_property(p);
-        }
 
         let op = self.properties.get_mut(key);
         return op;
