@@ -1,6 +1,6 @@
 [package]
 name = "hive"
-version = "0.1.403"
+version = "0.1.404"
 authors = ["Enoch Carter <mrenoch@gmail.com>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
@@ -14,7 +14,15 @@ futures = "0.3.5"
 #https://docs.rs/config/0.10.1/config/
 config = "0.10.1"
 toml = "0.9.5"
-log = "0.4.11"
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = [
+#    "std",
+#    "fmt",
+    "env-filter",
+#    "time",
+#    "local-time",
+#    "chrono"
+] }
 
 #libusb = "0.3"
 #usbd-serial = "0.1"

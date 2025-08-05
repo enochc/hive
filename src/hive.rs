@@ -18,10 +18,10 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 type Sender<T> = mpsc::UnboundedSender<T>;
 type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
-use log::{debug, info, error};
 use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
 use async_std::sync::Arc;
+use tracing::{debug, error, info};
 // use usb_device::prelude::{UsbVidPid, UsbDeviceBuilder};
 
 

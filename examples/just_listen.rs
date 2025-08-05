@@ -6,7 +6,7 @@ use futures::{SinkExt, StreamExt};
 use hive::property::Property;
 use futures::executor::block_on;
 use std::thread::sleep;
-use log::{Metadata, Level, Record};
+// use log::{Metadata, Level, Record};
 use hive::init_logging;
 
 

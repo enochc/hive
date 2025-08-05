@@ -3,7 +3,9 @@
 use crate::hive::Hive;
 use std::os::raw::c_char;
 use std::ffi::{CStr};
-use log::{Metadata, Level, Record, LevelFilter};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+// use log::{Metadata, Level, Record, LevelFilter};
 
 mod hive_macros;
 pub mod property;
@@ -16,24 +18,31 @@ pub mod handler;
 mod android;
 
 // INIT LOGGING
-pub struct SimpleLogger;
-impl log::Log for SimpleLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= Level::Debug
-    }
-
-    fn log(&self, record: &Record) {
-        if self.enabled(record.metadata()) {
-            // println!("{:?}{:?}, {:?} - {}", record.file(), record.line(), record.level(), record.args());
-            println!("{:?} - {}", record.level(), record.args());
-        }
-    }
-
-    fn flush(&self) {}
-}
-pub static LOGGER: SimpleLogger = SimpleLogger;
+// pub struct SimpleLogger;
+// impl log::Log for SimpleLogger {
+//     fn enabled(&self, metadata: &Metadata) -> bool {
+//         metadata.level() <= Level::Debug
+//     }
+//
+//     fn log(&self, record: &Record) {
+//         if self.enabled(record.metadata()) {
+//             // println!("{:?}{:?}, {:?} - {}", record.file(), record.line(), record.level(), record.args());
+//             println!("{:?} - {}", record.level(), record.args());
+//         }
+//     }
+//
+//     fn flush(&self) {}
+// }
+// pub static LOGGER: SimpleLogger = SimpleLogger;
 pub fn init_logging(){
-    log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Debug)).expect("failed to init logger");
+    // log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Debug)).expect("failed to init logger");
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 }
 
 
