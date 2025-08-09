@@ -1,12 +1,9 @@
 use std::sync::{Arc};
 use async_std::task;
-// use async_std::task::JoinHandle;
-// use futures::future::join_all;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use async_std::sync::Mutex;
 use async_std::task::block_on;
-// use futures::channel::mpsc;
-
+use tracing::trace;
 
 
 #[derive(Default)]
@@ -31,10 +28,7 @@ impl<T> Signal<T>
         where T: Sync + Clone + Send + 'static,
     {
         let count = self.counter.load(Ordering::Relaxed);
-        println!("EMITTING:: {}", count);
-        // let mut handles: Vec<JoinHandle<bool>> = Vec::new();
-        // let mut handles = FuturesUnordered::new();
-        // Process each slot asynchronously
+        trace!("EMITTING:: {}", count);
         for s in self.slots.lock().await.iter() {
             let s_clone = s.clone();
             let val_clone = val.clone();
@@ -45,8 +39,6 @@ impl<T> Signal<T>
                 send_emit(s_clone, val_clone).await;
             });
         }
-
-        // join_all(handles).await;
     }
 
     pub fn connect(&self, slot: impl Fn(T) + Send + Sync + 'static) {

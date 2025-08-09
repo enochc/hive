@@ -21,8 +21,7 @@ type Receiver<T> = mpsc::UnboundedReceiver<T>;
 use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
 use async_std::sync::Arc;
-use tracing::{debug, error, info};
-// use usb_device::prelude::{UsbVidPid, UsbDeviceBuilder};
+use tracing::{debug, error, info, trace};
 
 
 
@@ -126,7 +125,7 @@ impl Hive {
     }
 
     fn set_property(&mut self, property: Property ){
-        let name = property.get_name().clone();
+        let name = property.get_name();
         if self.has_property(name) {
             /*
             This calls emit on the existing property
@@ -294,9 +293,7 @@ impl Hive {
             self.connected.store(true, Ordering::Relaxed);
             self.receive_events(true).await;
             debug!("SERVER DONE");
-
         }
-        // return Result::Ok(())
     }
 
     async fn receive_events(&mut self, is_server:bool){
@@ -440,7 +437,7 @@ impl Hive {
     }
 
     async fn got_message(&mut self, from:&str, msg:String){
-        debug!("GOT MESSAGE: {}: {:?}", self.name, msg);
+        trace!("GOT MESSAGE: {}: {:?}", self.name, msg);
         if msg.len() <3{
             debug!("<<< Whats this? {}", msg);
         }else {
@@ -472,14 +469,14 @@ impl Hive {
                     let vec: Vec<&str> = c.collect();
                     if vec.len() == 1 {
                         // the PEER_MESSAGE_DIV separates the peer name from the message
-                        // without the DIV, there is only a message and its for me
-                        debug!("the message was forwarded for me: {:?}", message);
+                        // without the DIV, there is only a message, and it's for me
+                        trace!("the message was forwarded for me: {:?}", message);
                         self.message_received.emit(String::from(message)).await;
                         return;
                     }
                     let pear_name = vec[0];
                     if self.name.to_string() == pear_name.to_string() {
-                        debug!("Message is for me: {:?}", vec[1]);
+                        trace!("Message is for me: {:?}", vec[1]);
                         self.message_received.emit(String::from(vec[1])).await;
                     } else {
                         self.send_to_peer(vec[1], pear_name).await;
