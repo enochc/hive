@@ -5,6 +5,7 @@ use std::borrow::Borrow;
 use crate::hive::{PROPERTIES, PROPERTY, DELETE};
 use std::collections::HashMap;
 use async_std::task::block_on;
+use tracing::trace;
 
 pub type PropertyType = toml::Value;
 
@@ -116,18 +117,18 @@ impl Property {
     pub fn set(&mut self, v: PropertyType) -> bool
         where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
-        println!("<<<< set thing {}", v);
+        trace!("<<<< set thing {}", v);
         let v_clone = v.clone();
         let op_v = Some(v);
 
         if !self.value.eq(&op_v) {
             self.value = op_v;
-            println!("<<<< emit change!!");
+            trace!("<<<< emit change!!");
 
             block_on(self.on_changed.emit(Some(v_clone)));
             return true;
         } else {
-            println!("do nothing ");
+            trace!("do nothing ");
             return false;
         }
     }

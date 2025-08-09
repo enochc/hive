@@ -9,6 +9,7 @@ use async_std::{
     task,
     sync::Arc,
 };
+use tracing::{error, trace};
 // use crate::hive::ACK;
 use crate::signal::Signal;
 
@@ -75,7 +76,7 @@ impl Peer {
     }
     pub async fn send(& self, msg: &str){
         let stream = self.stream.clone();
-        println!("Send to peer {}: {}",self.name ,msg);
+        trace!("Send to peer {}: {}",self.name ,msg);
         Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
     }
 
@@ -140,7 +141,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
 
                 if read == 0 {
                     // end connection, something bad happened, or the client just disconnected.
-                    println!("Read zero bytes");
+                    trace!("Read zero bytes");
                     sender.send(SocketEvent::Hangup{from}).await.expect("Failed to send Hangup");
                     is_running = false;
                 } else {
@@ -165,7 +166,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
                             }
                         },
                         Err(e) => {
-                            eprintln!("Failed to read message {:?}", e);
+                            error!("Failed to read message {:?}", e);
                             sender.send(SocketEvent::Hangup{
                                 from
                             }).await.expect("Failed to send Hangup");
@@ -174,12 +175,12 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
                 }
             },
             Err(e) => {
-                eprintln!("ERROR: {:?}",e);
+                error!("ERROR: {:?}",e);
                 sender.send(SocketEvent::Hangup{from}).await
                     .expect("Failed to send hangup");
                 is_running = false;
             }
         }
     }
-    println!("<< Peer run done");
+    trace!("<< Peer run done");
 }

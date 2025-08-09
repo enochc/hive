@@ -5,6 +5,7 @@ use async_std::task;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use async_std::sync::Mutex;
 use async_std::task::block_on;
+use tracing::debug;
 // use futures::channel::mpsc;
 
 
@@ -31,7 +32,7 @@ impl<T> Signal<T>
         where T: Sync + Clone + Send + 'static,
     {
         let count = self.counter.load(Ordering::Relaxed);
-        println!("EMITTING:: {}", count);
+        debug!("EMITTING:: {}", count);
         // let mut handles: Vec<JoinHandle<bool>> = Vec::new();
         // let mut handles = FuturesUnordered::new();
         // Process each slot asynchronously
