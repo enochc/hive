@@ -55,21 +55,21 @@ impl Peer {
         });
         return peer;
     }
-    pub async fn send(&self, msg: &str) {
+    pub async fn send(&self, msg: &str) -> std::io::Result<()> {
         let stream = self.stream.clone();
         trace!("Send to peer {}: {}", self.name, msg);
-        Peer::send_on_stream(stream, msg).await.expect("failed to send to Peer");
+        Peer::send_on_stream(stream, msg).await
     }
 
-    pub async fn send_on_stream(stream: Arc<TcpStream>, message: &str) -> Result<bool, std::io::Error> {
+    pub async fn send_on_stream(stream: Arc<TcpStream>, message: &str) -> std::io::Result<()> {
         let mut bytes = Vec::new();
         let msg_length: u32 = message.len() as u32;
         bytes.append(&mut msg_length.to_be_bytes().to_vec());
         bytes.append(&mut message.as_bytes().to_vec());
         let mut stream = &*stream;
         stream.write(&bytes).await?;
-        // stream.flush().await;
-        Result::Ok(true)
+        stream.flush().await?;
+        Result::Ok(())
     }
 }
 
@@ -121,7 +121,10 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
                 if read == 0 {
                     // end connection, something bad happened, or the client just disconnected.
                     trace!("Read zero bytes");
-                    sender.send(SocketEvent::Hangup { from }).await.expect("Failed to send Hangup");
+                    sender
+                        .send(SocketEvent::Hangup { from })
+                        .await
+                        .expect("Failed to send Hangup");
                     is_running = false;
                 } else {
                     let message_size = as_u32_be(&size_buff);
@@ -141,14 +144,20 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: Arc<TcpStream>)
                         }
                         Err(e) => {
                             error!("Failed to read message {:?}", e);
-                            sender.send(SocketEvent::Hangup { from }).await.expect("Failed to send Hangup");
+                            sender
+                                .send(SocketEvent::Hangup { from })
+                                .await
+                                .expect("Failed to send Hangup");
                         }
                     }
                 }
             }
             Err(e) => {
                 error!("ERROR: {:?}", e);
-                sender.send(SocketEvent::Hangup { from }).await.expect("Failed to send hangup");
+                sender
+                    .send(SocketEvent::Hangup { from })
+                    .await
+                    .expect("Failed to send hangup");
                 is_running = false;
             }
         }

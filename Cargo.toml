@@ -1,6 +1,6 @@
 [package]
 name = "hive"
-version = "0.1.407"
+version = "0.1.408"
 authors = ["Enoch Carter <mrenoch@gmail.com>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"

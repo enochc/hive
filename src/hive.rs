@@ -6,7 +6,7 @@ use async_std::{
 };
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
-use std::{collections::HashMap, fs};
+use std::{collections::HashMap, fs, io};
 use toml;
 
 use crate::handler::Handler;
@@ -364,14 +364,17 @@ impl Hive {
         }
     }
 
-    async fn send_to_peer(&self, msg: &str, peer_name: &str) {
+    async fn send_to_peer(&self, msg: &str, peer_name: &str) -> io::Result<()> {
         let p = self.get_peer_by_name(peer_name);
         match p {
             Some(peer) => {
                 let msg = format!("{}{}", PEER_MESSAGE, msg);
-                peer.send(msg.as_str()).await;
+                peer.send(msg.as_str()).await
             }
-            _ => error!("No peer {}", peer_name),
+            _ => {
+                error!("No peer {}", peer_name);
+                Err(io::Error::new(io::ErrorKind::NotConnected, "no peer"))
+            }
         }
     }
 
