@@ -92,7 +92,9 @@ impl Hive {
     }
 
     pub fn get_handler(&self) -> Handler {
-        return Handler { sender: self.sender.clone() };
+        return Handler {
+            sender: self.sender.clone(),
+        };
     }
 
     pub fn new(name: &str, toml_path: &str) -> Hive {
@@ -246,7 +248,10 @@ impl Hive {
                         },
                         Err(e) => {
                             error!("Nope:: {:?}", e);
-                            tx_clone.send(false).await.expect("Failed to send connect failed signal");
+                            tx_clone
+                                .send(false)
+                                .await
+                                .expect("Failed to send connect failed signal");
                         }
                     };
                 });
@@ -342,15 +347,20 @@ impl Hive {
     }
 
     async fn notify_peers_change(&mut self) {
-        let peer_str = format!("{}{}", REQUEST_PEERS, self.peer_string());
-        for p in &self.peers {
-            if p.update_peers {
-                let stream = p.stream.clone();
-                let msg = peer_str.clone();
-                task::spawn(async move {
-                    Peer::send_on_stream(stream, &msg).await.unwrap();
-                });
+        match self.peer_string() {
+            Some(peer_s) => {
+                let peer_str = format!("{}{}", REQUEST_PEERS, peer_s);
+                for p in &self.peers {
+                    if p.update_peers {
+                        let stream = p.stream.clone();
+                        let msg = peer_str.clone();
+                        task::spawn(async move {
+                            Peer::send_on_stream(stream, &msg).await.unwrap();
+                        });
+                    }
+                }
             }
+            None => {}
         }
     }
 
@@ -466,16 +476,19 @@ impl Hive {
                         self.send_to_peer(vec[1], pear_name).await;
                     }
                 }
-                REQUEST_PEERS => {
-                    let peer_str = format!("{}{}", REQUEST_PEERS, self.peer_string());
-                    for p in self.peers.as_mut_slice() {
-                        if p.address() == from {
-                            p.send(&peer_str).await;
-                            p.update_peers = true;
-                            break;
+                REQUEST_PEERS => match self.peer_string() {
+                    Some(peer) => {
+                        let peer_str = format!("{}{}", REQUEST_PEERS, peer);
+                        for p in self.peers.as_mut_slice() {
+                            if p.address() == from {
+                                p.send(&peer_str).await;
+                                p.update_peers = true;
+                                break;
+                            }
                         }
                     }
-                }
+                    None => {}
+                },
                 _ => debug!("got unknown message {:?},{:?}", msg_type, msg),
             }
         }
