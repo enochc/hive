@@ -1,19 +1,15 @@
 #![cfg(target_os = "android")]
 #![allow(non_snake_case)]
 
-use jni::JNIEnv;
-use jni::objects::{JClass, JString};
 use crate::hive::Hive;
 use crate::newHive;
+use jni::objects::{JClass, JString};
+use jni::JNIEnv;
 
 #[allow(clippy::similar_names)]
 #[no_mangle]
 // pub extern "system" fn Java_com_robertohuertas_rusty_1android_1lib_RustyKt_hello(
-pub extern "system" fn Java_com_example_rustinandroid_HiveKt_newHive(
-env: JNIEnv,
-_: JClass,
-input: JString,
-) -> Hive {
+pub extern "system" fn Java_com_example_rustinandroid_HiveKt_newHive(env: JNIEnv, _: JClass, input: JString) -> Hive {
     let java_str = env.get_string(input).expect("Couldn't get Java string!");
     // we call our generic func for iOS
     let java_str_ptr = java_str.as_ptr();

@@ -1,18 +1,18 @@
 // use std::fs;
 
 use crate::hive::Hive;
+use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::ffi::{CStr};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 // use log::{Metadata, Level, Record, LevelFilter};
 
+pub mod handler;
+pub mod hive;
 mod hive_macros;
+pub mod peer;
 pub mod property;
 pub mod signal;
-pub mod hive;
-pub mod peer;
-pub mod handler;
 
 #[cfg(target_os = "android")]
 mod android;
@@ -34,19 +34,13 @@ mod android;
 //     fn flush(&self) {}
 // }
 // pub static LOGGER: SimpleLogger = SimpleLogger;
-pub fn init_logging(){
+pub fn init_logging() {
     // log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Debug)).expect("failed to init logger");
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
-        )
+        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()))
         .with(tracing_subscriber::fmt::layer())
         .init();
 }
-
-
-
 
 #[no_mangle]
 pub unsafe extern "C" fn newHive(props: *const c_char) -> Hive {
@@ -56,15 +50,12 @@ pub unsafe extern "C" fn newHive(props: *const c_char) -> Hive {
         Err(_) => "you",
     };
 
-    Hive::new_from_str("Hive1", prop_str_pointer )
-        // .unwrap()
-        // .into_raw()
+    Hive::new_from_str("Hive1", prop_str_pointer)
+    // .unwrap()
+    // .into_raw()
 }
-
-
 
 // fn get_toml_config(file_path: &str) -> toml::Value{
 //     let foo: String = fs::read_to_string("examples/properties.toml").unwrap().parse().unwrap();
 //     return toml::from_str(&foo).unwrap();
 // }
-

@@ -1,18 +1,16 @@
+use crate::hive::{DELETE, PROPERTIES, PROPERTY};
 use crate::signal::Signal;
+use async_std::task::block_on;
+use std::borrow::Borrow;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
-use std::borrow::Borrow;
-use crate::hive::{PROPERTIES, PROPERTY, DELETE};
-use std::collections::HashMap;
-use async_std::task::block_on;
 use tracing::trace;
 
 pub type PropertyType = toml::Value;
 
-
 #[derive(Default)]
-pub struct Property
-{
+pub struct Property {
     name: Box<str>,
     pub value: Option<PropertyType>,
     pub on_changed: Signal<Option<PropertyType>>,
@@ -27,9 +25,9 @@ impl Property {
         return match &self.value {
             Some(t) => format!("{}={}", self.name, t.to_string()),
             None => format!("{}=None", self.name),
-        }
+        };
     }
-    pub fn from_table(table: &toml::value::Table) -> Option<Property>{
+    pub fn from_table(table: &toml::value::Table) -> Option<Property> {
         if table.keys().len() != 1 {
             // return None
         }
@@ -38,18 +36,16 @@ impl Property {
         let val = table.get(key);
         let p = Property::from_toml(key.as_str(), val);
         return Some(p);
-
-
     }
     pub fn get_name(&self) -> &str {
         self.name.borrow()
     }
-    pub fn new(name: &str, val: Option<PropertyType>) -> Property{
-        return Property{
-            name:Box::from(name),
+    pub fn new(name: &str, val: Option<PropertyType>) -> Property {
+        return Property {
+            name: Box::from(name),
             value: val,
-            on_changed: Default::default()
-        }
+            on_changed: Default::default(),
+        };
     }
     pub fn from_str(name: &str, val: &str) -> Property {
         Property::new(name, Some(PropertyType::from(val)))
@@ -60,23 +56,15 @@ impl Property {
     pub fn from_float(name: &str, val: f64) -> Property {
         Property::new(name, Some(PropertyType::from(val)))
     }
-    pub fn from_toml(name: &str, val:Option<&toml::Value>) -> Property{
+    pub fn from_toml(name: &str, val: Option<&toml::Value>) -> Property {
         //Property::new(name, Some(PropertyType::from(val.to_string())))
         let p = match val {
-            Some(v) if v.is_str() => {
-                Property::from_str(name, v.as_str().unwrap())
-            },
-            Some(v) if v.is_integer() => {
-                Property::from_int(name, v.as_integer().unwrap())
-            },
-            Some(v) if v.is_bool() => {
-                Property::from_bool(name, v.as_bool().unwrap())
-            },
-            Some(v) if v.is_float() => {
-                Property::from_float(name, v.as_float().unwrap())
-            },
+            Some(v) if v.is_str() => Property::from_str(name, v.as_str().unwrap()),
+            Some(v) if v.is_integer() => Property::from_int(name, v.as_integer().unwrap()),
+            Some(v) if v.is_bool() => Property::from_bool(name, v.as_bool().unwrap()),
+            Some(v) if v.is_float() => Property::from_float(name, v.as_float().unwrap()),
             _ => {
-                println ! ("<<Failed to convert Property: {:?}", name);
+                println!("<<Failed to convert Property: {:?}", name);
                 Property::new(name, None)
             }
         };
@@ -85,37 +73,34 @@ impl Property {
     pub fn from_int(name: &str, val: i64) -> Property {
         let small_int = u32::try_from(val);
         return match small_int {
-            Ok(si) => {
-                Property::new(name, Some(PropertyType::from(si)))
-            },
-            _ => {
-                Property::new(name, Some(PropertyType::from(val)))
-            }
+            Ok(si) => Property::new(name, Some(PropertyType::from(si))),
+            _ => Property::new(name, Some(PropertyType::from(val))),
         };
     }
-    pub fn set_str(&mut self, s: &str){
+    pub fn set_str(&mut self, s: &str) {
         let p = PropertyType::from(s);
         self.set(p);
     }
-    pub fn set_bool(&mut self, b: bool){
+    pub fn set_bool(&mut self, b: bool) {
         let p = PropertyType::from(b);
         self.set(p);
     }
-    pub fn set_int(&mut self, s: u32){
+    pub fn set_int(&mut self, s: u32) {
         let p = PropertyType::from(s);
         self.set(p);
     }
-    pub fn set_float(&mut self, s: f64){
+    pub fn set_float(&mut self, s: f64) {
         let p = PropertyType::from(s);
         self.set(p);
     }
 
-    pub fn set_from_prop(&mut self, v:Property)-> bool{
+    pub fn set_from_prop(&mut self, v: Property) -> bool {
         return self.set(v.value.as_ref().unwrap().clone());
     }
 
     pub fn set(&mut self, v: PropertyType) -> bool
-        where PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
+    where
+        PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
     {
         trace!("<<<< set thing {}", v);
         let v_clone = v.clone();
@@ -138,39 +123,31 @@ impl Property {
     }
 }
 /*
-    |P|one=1\ntwo=2\nthree=3
- */
+   |P|one=1\ntwo=2\nthree=3
+*/
 pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> String {
     let mut message = PROPERTIES.to_string();
     for p in properties {
-        message.push_str(
-            property_to_sock_str(Some(p.1), false).unwrap().as_str()
-        );
+        message.push_str(property_to_sock_str(Some(p.1), false).unwrap().as_str());
         message.push('\n');
     }
     return String::from(message);
 }
 /*
-    |p|one=1
- */
-pub(crate) fn property_to_sock_str(property:Option<&Property>, inc_head:bool) -> Option<String> {
+   |p|one=1
+*/
+pub(crate) fn property_to_sock_str(property: Option<&Property>, inc_head: bool) -> Option<String> {
     return match property {
         Some(p) if p.value.is_some() => {
-            let mut message = if inc_head {
-                PROPERTY.to_string()
-            } else {
-                String::from("")
-            };
+            let mut message = if inc_head { PROPERTY.to_string() } else { String::from("") };
             message.push_str(p.to_string().as_str());
             Some(message)
-        },
+        }
         Some(p) => {
             let mut message = DELETE.to_string();
             message.push_str(p.get_name());
             Some(message)
-        },
-        _ => None
-    }
-
-
+        }
+        _ => None,
+    };
 }

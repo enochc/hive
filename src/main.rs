@@ -1,4 +1,4 @@
-use std::{env};
+use std::env;
 
 // TODO this is work in progress
 fn main() {
