@@ -220,7 +220,7 @@ impl Hive {
 
         // I'm a client
         if !self.connect_to.is_none() {
-            info!("Connect To: {:?}", self.connect_to);
+            info!("Connecting To: {:?}", self.connect_to);
             let address = self.connect_to.as_ref().unwrap().to_string().clone();
             let send_chan = self.sender.clone();
             let (tx, mut rx) = mpsc::unbounded();
@@ -243,7 +243,8 @@ impl Hive {
                                 tx_clone.send(true).await.expect("Failed to send connected signal");
                             }
                             Err(e) => {
-                                error!("No peer address: {:?}", e)
+                                error!("No peer address: {:?}", e);
+                                tx_clone.send(false).await.expect("failed to send not connected signal");
                             }
                         },
                         Err(e) => {
