@@ -3,26 +3,21 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, SystemTime};
 
-use async_std::{
-    io::BufReader,
-    net::TcpStream,
-    prelude::*,
-    task,
-};
 use async_std::sync::{Arc, RwLock};
+use async_std::{io::BufReader, net::TcpStream, prelude::*, task};
 #[cfg(feature = "bluetooth")]
 use bluster::gatt::event::Response;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 // use futures::{AsyncBufReadExt, SinkExt, AsyncWriteExt};
-use futures::{AsyncBufReadExt, SinkExt};
 use futures::channel::mpsc::UnboundedSender;
 use futures::executor::block_on;
+use futures::{AsyncBufReadExt, SinkExt};
 #[allow(unused_imports)]
 use log::{debug, info, trace, warn};
-
+use tracing::error;
 #[cfg(feature = "bluetooth")]
-use crate::bluetooth::{central::Central};
-use crate::hive::{HEADER_NAME, HIVE_PROTOCOL, PING, PONG, Result, Sender, HEADER};
+use crate::bluetooth::central::Central;
+use crate::hive::{Hive, Result, Sender, HEADER, HEADER_NAME, HIVE_PROTOCOL, PING, PONG};
 #[cfg(feature = "websock")]
 use crate::websocket::WebSock;
 
@@ -39,7 +34,6 @@ pub struct WebSock {}
 #[cfg(not(feature = "bluetooth"))]
 #[derive(Debug)]
 pub struct Central {}
-
 
 #[derive(Debug)]
 pub enum SocketEvent {
@@ -89,12 +83,8 @@ pub struct Peer {
     peer_type: PeerType,
 }
 
-
 fn as_u32_be(array: &[u8; 4]) -> u32 {
-    ((array[0] as u32) << 24) +
-        ((array[1] as u32) << 16) +
-        ((array[2] as u32) << 8) +
-        ((array[3] as u32) << 0)
+    ((array[0] as u32) << 24) + ((array[1] as u32) << 16) + ((array[2] as u32) << 8) + ((array[3] as u32) << 0)
 }
 
 impl Peer {
@@ -104,7 +94,9 @@ impl Peer {
     pub fn to_string(&self) -> String {
         return format!("{:?},{:?}", self.get_name(), self.address);
     }
-    pub fn is_web_socket(&self) -> bool {return self.web_sock.is_some()}
+    pub fn is_web_socket(&self) -> bool {
+        return self.web_sock.is_some();
+    }
 
     pub async fn set_name(&self, name: &str) {
         debug!("{:?} set name = {:?}", self.get_id_name(), name);
@@ -119,12 +111,12 @@ impl Peer {
         name: String,
         mut stream: Option<TcpStream>,
         peripheral: Option<Sender<Bytes>>,
-        central: Option<Central>, sender: UnboundedSender<SocketEvent>,
+        central: Option<Central>,
+        sender: UnboundedSender<SocketEvent>,
         address: String,
         hive_name: String,
         peer_type: PeerType,
     ) -> Peer {
-
         return if stream.is_some() {
             let arc_str = stream.as_ref().unwrap().clone();
             let addr = arc_str.peer_addr().unwrap().to_string();
@@ -147,8 +139,8 @@ impl Peer {
 
             match stream.as_mut() {
                 Some(s) => {
-                    let msg = format!("Shake failed for {}", peer.get_id_name());
-                    &peer.handshake(s, &sender).await.expect(&msg);
+                    let error_msg = format!("Shake failed for {}", peer.get_id_name());
+                    let _ = &peer.handshake(s, &sender).await.expect(&error_msg);
                 }
                 None => {}
             };
@@ -162,9 +154,6 @@ impl Peer {
                     read_loop(send_clone, &arc_str, name_id).await;
                 });
             }
-
-
-
 
             return peer;
         } else {
@@ -183,11 +172,9 @@ impl Peer {
                 peer_type,
             }
         };
-
     }
 
     async fn handshake(&mut self, stream: &mut TcpStream, sender: &UnboundedSender<SocketEvent>) -> Result<()> {
-
         match self.peer_type {
             PeerType::TcpServer => {
                 debug!("<<<< SEND  CLIENT HANDSHAKE");
@@ -195,9 +182,10 @@ impl Peer {
                 bm.put_slice(format!("{}\n", HIVE_PROTOCOL).as_bytes());
                 bm.put_u8(HEADER_NAME);
                 bm.put_slice(format!("{}\n", self.hive_name).as_bytes());
+                debug!("sending:: {:?}", bm);
                 stream.write(bm.as_ref()).await.expect("write failed");
                 stream.flush().await.expect("flush failed");
-            },
+            }
             PeerType::TcpClient => {
                 let mut reader = BufReader::new(stream.clone());
                 debug!("{:?} handshake....", self.get_id_name());
@@ -215,7 +203,9 @@ impl Peer {
                     loop {
                         let mut bm = BytesMut::new();
                         str = "".to_string();
-                        AsyncBufReadExt::read_line(&mut reader, &mut str).await.expect("failed to read line post header");
+                        AsyncBufReadExt::read_line(&mut reader, &mut str)
+                            .await
+                            .expect("failed to read line post header");
                         debug!("next line:: {:?}", str);
                         bm.put_slice(str.as_bytes());
                         let my8 = bm.get_u8();
@@ -236,14 +226,11 @@ impl Peer {
                     }
                 } else if str.starts_with("GET") {
                     #[cfg(feature = "websock")]
-                        {
-                            debug!("do websocket");
-                            let sock = WebSock::from_stream(
-                                reader,
-                                stream.clone(),
-                                sender.clone()).await?;
-                            self.web_sock = Some(sock);
-                        }
+                    {
+                        debug!("do websocket");
+                        let sock = WebSock::from_stream(reader, stream.clone(), sender.clone()).await?;
+                        self.web_sock = Some(sock);
+                    }
                 };
                 // send headers
                 let name_bytes = self.hive_name.as_bytes();
@@ -255,8 +242,7 @@ impl Peer {
                 bytes.put_slice(name_bytes);
                 info!(".... send headers: {:?}", bytes);
                 self.send(bytes.freeze()).await?;
-
-            },
+            }
             _ => {
                 unimplemented!("finish this!!");
             }
@@ -268,12 +254,31 @@ impl Peer {
 
     pub fn get_name(&self) -> String {
         let name = &*block_on(self.name.read());
-        return String::from(name);
+        String::from(name)
     }
     pub fn get_id_name(&self) -> String {
-        let stream  =self.stream.as_ref().unwrap();
-        let mm = format!("{:?}/{:?}", stream.local_addr().unwrap(), stream.peer_addr().unwrap());
-        return format!("{}/{}, {:?}",self.hive_name, self.get_name(), mm);
+        match self.stream {
+            Some(ref s) => {
+                match s.peer_addr() {
+                    Ok(addr) => {
+                        let mm = format!("{:?} > {:?}", s.local_addr().unwrap(), addr);
+                        format!("{}/{}, {}", self.hive_name, self.get_name(), mm)
+                    },
+                    Err(e) => {
+                        error!("failed to get peer address: {:?}", e);
+                        String::from("No Address Found")
+                    }
+                }
+            },
+            None => String::from("No Stream")
+        }
+        // let stream = self.stream.as_ref().unwrap();
+        // let peer_addr= match stream.peer_addr() {
+        //     Ok(addr) => addr,
+        //     Err(e) => panic!("{}", e)
+        // };
+        // let mm = format!("{:?}/{:?}", stream.local_addr().unwrap(), peer_addr);
+        // return format!("{}/{}, {:?}", self.hive_name, self.get_name(), mm);
     }
     pub fn receive_pong(&self) {
         debug!("RECEIVED PING {:?}", self.to_string());
@@ -290,7 +295,7 @@ impl Peer {
         self.send(byte).await
     }
 
-    /** TODO, clean up, I'm not actually using this anyware, or refactor to a Ping/Pong */
+    /** TODO, clean up, I'm not actually using this anywhere, or refactor to a Ping/Pong */
     pub async fn _wave(&self) {
         let name_clone = self.name.clone();
         let addr_clone = self.address.clone();
@@ -322,7 +327,12 @@ impl Peer {
                     if ack_check_clone.load(Relaxed) {
                         // No hello
                         debug!("KILL THIS PEER IS DEAD:: {:?}", name_clone.read().await);
-                        sender_clone.send(SocketEvent::Hangup { from: adr_clone.clone() }).await.expect("failed to send hangup");
+                        sender_clone
+                            .send(SocketEvent::Hangup {
+                                from: adr_clone.clone(),
+                            })
+                            .await
+                            .expect("failed to send hangup");
                         break 'wave_loop;
                     }
                 }
@@ -335,28 +345,40 @@ impl Peer {
         debug!("SEND starts here {:?}", msg);
         if self.stream.is_some() {
             if self.web_sock.is_some() {
-                warn!("<<< fail webclient is broken >>>> Sending message to web client at {:?} = {:?}", self.address, msg);
+                warn!(
+                    "<<< fail webclient is broken >>>> Sending message to web client at {:?} = {:?}",
+                    self.address, msg
+                );
                 // self.web_sock.as_ref().unwrap().send_message(msg).await?;
             } else {
-                debug!("{:?} Send to peer {}: {:?}",self.get_id_name(), self.name.read().await, msg);
+                debug!(
+                    "{:?} ⭐️ Send to peer {}: {:?}",
+                    self.get_id_name(),
+                    self.name.read().await,
+                    msg
+                );
                 self.send_on_stream(msg).await?;
             }
         } else if self.central.is_some() {
             #[cfg(feature = "bluetooth")]
-                {
-                    debug!("SEND to bluetooth {:?} from {:?}", msg, self.name);
-                    let mut buff = BytesMut::new();
-                    buff.put_slice(msg.as_ref());
-                    let sender = self.central.as_ref().unwrap();
-                    sender.send(buff).await;
-                }
+            {
+                debug!("SEND to bluetooth {:?} from {:?}", msg, self.name);
+                let mut buff = BytesMut::new();
+                buff.put_slice(msg.as_ref());
+                let sender = self.central.as_ref().unwrap();
+                sender.send(buff).await;
+            }
         } else if self.peripheral.is_some() {
             debug!("Send via bt peripheral");
             let mut buff = BytesMut::with_capacity(msg.len());
             buff.put_slice(msg.as_ref());
             let b = buff.freeze();
-            self.peripheral.as_ref().unwrap()
-                .send(b.clone()).await.expect("failed to send something somewhere");
+            self.peripheral
+                .as_ref()
+                .unwrap()
+                .send(b.clone())
+                .await
+                .expect("failed to send something somewhere");
             debug!("sent...");
         } else {
             unimplemented!("cant send: {:?}", msg);
@@ -365,15 +387,19 @@ impl Peer {
         Ok(())
     }
 
-
     async fn send_on_stream(&self, message: Bytes) -> Result<bool> {
         let mut bytes = Vec::new();
         let msg_length: u32 = message.len() as u32;
         bytes.append(&mut msg_length.to_be_bytes().to_vec());
         bytes.append(&mut message.to_vec());
-        self.stream.as_ref().unwrap().write(&bytes).await.expect("Failed to write to stream");
+        self.stream
+            .as_ref()
+            .unwrap()
+            .write(&bytes)
+            .await
+            .expect("Failed to write to stream");
         self.stream.as_ref().unwrap().flush().await.expect("flush failed");
-        Result::Ok(true)
+        Ok(true)
     }
 }
 
@@ -386,8 +412,7 @@ more bytes to complete the message
  properties: |p|=(properties)
  */
 
-
-async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, peer_id_string:String) {
+async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, peer_id_string: String) {
     let mut reader = BufReader::new(&*stream);
     let from = match stream.peer_addr() {
         Ok(addr) => addr.to_string(),
@@ -406,7 +431,10 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, pee
                 if read == 0 {
                     // end connection, something bad happened, or the client just disconnected.
                     debug!("Read zero bytes");
-                    sender.send(SocketEvent::Hangup { from }).await.expect("Failed to send Hangup");
+                    sender
+                        .send(SocketEvent::Hangup { from })
+                        .await
+                        .expect("Failed to send Hangup");
                     is_running = false;
                 } else {
                     let message_size = as_u32_be(&size_buff);
@@ -418,10 +446,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, pee
                             let msg = Bytes::from(size_buff);
                             debug!("<<<<<<<<<<<<<<<<< {:?} Read message: {:?}", peer_id_string, &msg);
                             let debug = msg.clone();
-                            let se = SocketEvent::Message {
-                                from,
-                                msg,
-                            };
+                            let se = SocketEvent::Message { from, msg };
                             if !sender.is_closed() {
                                 sender.send(se).await.expect("Failed to send message");
                                 debug!("{:?} send message {:?}", peer_id_string, debug);
@@ -429,16 +454,19 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, pee
                         }
                         Err(e) => {
                             eprintln!("Failed to read message {:?}", e);
-                            sender.send(SocketEvent::Hangup {
-                                from
-                            }).await.expect("Failed to send Hangup");
+                            sender
+                                .send(SocketEvent::Hangup { from })
+                                .await
+                                .expect("Failed to send Hangup");
                         }
                     }
                 }
             }
             Err(e) => {
                 eprintln!("ERROR: {:?}", e);
-                sender.send(SocketEvent::Hangup { from }).await
+                sender
+                    .send(SocketEvent::Hangup { from })
+                    .await
                     .expect("Failed to send hangup");
                 is_running = false;
             }
