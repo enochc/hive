@@ -1,5 +1,6 @@
 
 connect = "localhost:3000"
+name = "Hive"
 [Properties]
 thingvalue= 1
 is_active = true

@@ -1,9 +1,11 @@
 use std::sync::{Arc};
 use async_std::task;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use async_std::sync::Mutex;
 use async_std::task::block_on;
-use tracing::trace;
+use tracing::{debug, trace};
+use futures::future::join_all;
 
 
 #[derive(Default)]
@@ -28,17 +30,21 @@ impl<T> Signal<T>
         where T: Sync + Clone + Send + 'static,
     {
         let count = self.counter.load(Ordering::Relaxed);
-        trace!("EMITTING:: {}", count);
+        debug!("EMITTING:: {}", count);
+        let mut futures = vec![];
+
         for s in self.slots.lock().await.iter() {
             let s_clone = s.clone();
             let val_clone = val.clone();
 
-            // TODO this works with streams example, but sometimes completes early
-            //  for properties example
-            task::spawn(async move{
+            let h = task::spawn(async move{
                 send_emit(s_clone, val_clone).await;
             });
+
+            futures.push(h);
         }
+        join_all(futures).await;
+
     }
 
     pub fn connect(&self, slot: impl Fn(T) + Send + Sync + 'static) {

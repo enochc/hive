@@ -1,0 +1,70 @@
+import { Slider } from "std-widgets.slint";
+
+component PropertyButton inherits Rectangle {
+    callback changed(float);
+    in property <string> name;
+    in-out property <string> value;
+
+    VerticalLayout{
+
+        HorizontalLayout {
+           min-width: 200px;
+           preferred-width: 400px;
+            alignment: start;
+            Text {
+                    text: name+": ";
+                }
+            Text {
+                text: value;
+            }
+        }
+        Slider {
+            value: value.to-float();
+            width: 300px;
+            changed => {
+                value = self.value;
+                changed(value.to-float());
+            }
+        }
+    }
+
+//    TouchArea {
+//        clicked => {
+//            // Delegate to the user of this element
+//            root.clicked();
+//        }
+//    }
+}
+
+struct HProperty {
+    name: string,
+    value: string,
+}
+
+export component MainWindow inherits Window {
+
+    min-width: 200px;
+    preferred-width: 500px;
+    callback prop_changed(string, float);
+
+    in-out property <[HProperty]> properties: [
+        {name:"1", value:"one"},
+        {name:"2", value:"two"}
+    ];
+
+    callback check_if_pair_solved();
+    in property <bool> disable_tiles;
+
+    VerticalLayout {
+    padding:20px;
+    width:parent.width;
+    alignment:center;
+        for prop[i] in properties: PropertyButton {
+            name: prop.name;
+            value: prop.value;
+            changed(v) => {
+                prop_changed(prop.name, v)
+            }
+        }
+    }
+}
