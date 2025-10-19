@@ -26,6 +26,7 @@ use ahash;
 use ahash::AHasher;
 use futures::future::ok;
 
+pub type PropertyType = toml::Value;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Clone, Debug)]
@@ -221,11 +222,10 @@ pub struct Property
 
 
 impl Property {
-
     pub fn hash_id(val: &str) -> u64 {
         let mut hasher = AHasher::default();
         hasher.write(val.as_bytes());
-        let rr= hasher.finish();
+        let rr = hasher.finish();
         // println!("<< {}: {}",val,  rr);
         rr
     }
@@ -238,7 +238,7 @@ impl Property {
             }
         }
     }
-    pub fn is_none(&self) ->bool {
+    pub fn is_none(&self) -> bool {
         return self.value.read().unwrap().is_none();
     }
     pub fn to_string(&self) -> String {
@@ -248,25 +248,25 @@ impl Property {
             None => format!("{}=None", self.name),
         };
     }
-    fn rest_get(&mut self) ->Result<bool>{
-        if cfg!(feature = "rest"){
+    fn rest_get(&mut self) -> Result<bool> {
+        if cfg!(feature = "rest") {
             let table = self.args.as_ref().unwrap();
-            match table.get("rest_get"){
+            match table.get("rest_get") {
                 Some(url) => {
                     println!("doing a thing: {:?}", url.as_str().unwrap());
                     return Ok(true);
                 },
-                _ =>{}
+                _ => {}
             }
         }
 
         return Ok(false)
-
-
     }
 
-    pub fn on_next<F>(&mut self, f: F) where
-        F: Fn(PropertyValue) + Send + Sync + 'static {
+    pub fn on_next<F>(&mut self, f: F)
+    where
+        F: Fn(PropertyValue) + Send + Sync + 'static
+    {
         self.on_next_holder = Arc::new(f);
     }
     pub fn from_table(table: &Table) -> Option<Property> {
@@ -284,16 +284,18 @@ impl Property {
         self.name.borrow()
     }
 
-    pub fn new(name: &str, val: Option<PropertyType>) -> Property {
-        return Property {
-            name: Box::from(name),
-            value: val,
-            on_changed: Default::default(),
-        };
-    }
+    // pub fn new(name: &str, val: Option<PropertyType>) -> Property {
+    //     return Property {
+    //         name: Box::from(name),
+    //         value: val,
+    //         on_changed: Default::default(),
+    //     };
+    // }
 
-    pub fn from_value(id: &u64, val:Value) -> Property
-        where Value: Into<PropertyValue> {
+    pub fn from_value(id: &u64, val: Value) -> Property
+    where
+        Value: Into<PropertyValue>
+    {
         return Property::from_id(id, Some(val.into()));
     }
     pub fn from_name(name: &str, val: Option<PropertyValue>) -> Property {
@@ -325,24 +327,7 @@ impl Property {
         };
     }
 
-    pub fn from_float(name: &str, val: f64) -> Property {
-        Property::new(name, Some(PropertyType::from(val)))
-    }
-    // pub fn from_toml(name: &str, val: Option<&toml::Value>) -> Property {
-    //     //Property::new(name, Some(PropertyType::from(val.to_string())))
-    //     let p = match val {
-    //         Some(v) if v.is_str() => Property::from_str(name, v.as_str().unwrap()),
-    //         Some(v) if v.is_integer() => Property::from_int(name, v.as_integer().unwrap()),
-    //         Some(v) if v.is_bool() => Property::from_bool(name, v.as_bool().unwrap()),
-    //         Some(v) if v.is_float() => Property::from_float(name, v.as_float().unwrap()),
-    //         _ => {
-    //             println!("<<Failed to convert Property: {:?}", name);
-    //             Property::new(name, None)
-    //         }
-    //     }
-    // }
-
-        pub fn from_toml(name: &str, val: Option<&Value>) -> Property {
+    pub fn from_toml(name: &str, val: Option<&Value>) -> Property {
         let p = match val {
             Some(v) if v.is_str() => {
                 Property::from_name(name, Some(v.into()))
@@ -364,11 +349,11 @@ impl Property {
                 match v.as_table() {
                     Some(t) => {
                         let mut params = Table::new();
-                        let mut val:Option<Value> = None;
-                        for key in t.keys(){
-                            match t.get(key){
+                        let mut val: Option<Value> = None;
+                        for key in t.keys() {
+                            match t.get(key) {
                                 Some(v) => {
-                                    if key == "val"{
+                                    if key == "val" {
                                         val = Some(v.clone())
                                     } else {
                                         params.insert(key.clone(), v.clone());
@@ -379,7 +364,7 @@ impl Property {
                         }
 
                         let mut p = Property::from_name(name, Some(val.unwrap().into()));
-                        if params.keys().len() >0 {
+                        if params.keys().len() > 0 {
                             p.args = Some(params);
                         }
                         p.rest_get().expect("Failed to get api and point");
@@ -388,7 +373,6 @@ impl Property {
                     _ => {}
                 };
                 Property::from_name(name, None)
-
             }
             _ => {
                 debug!("<<Failed to convert Property: {:?}: {:?}", name, val);
@@ -397,29 +381,30 @@ impl Property {
         };
         return p;
     }
-    pub fn from_int(name: &str, val: i64) -> Property {
-        let small_int = u32::try_from(val);
-        return match small_int {
-            Ok(si) => Property::new(name, Some(PropertyType::from(si))),
-            _ => Property::new(name, Some(PropertyType::from(val))),
-        };
-    }
-    pub fn set_str(&mut self, s: &str) {
-        let p = PropertyType::from(s);
-        self.set(p);
-    }
-    pub fn set_bool(&mut self, b: bool) {
-        let p = PropertyType::from(b);
-        self.set(p);
-    }
-    pub fn set_int(&mut self, s: u32) {
-        let p = PropertyType::from(s);
-        self.set(p);
-    }
-    pub fn set_float(&mut self, s: f64) {
-        let p = PropertyType::from(s);
-        self.set(p);
-    }
+    // pub fn from_int(name: &str, val: i64) -> Property {
+    //     let small_int = u32::try_from(val);
+    //     return match small_int {
+    //         Ok(si) => Property::new(name, Some(PropertyType::from(si))),
+    //         _ => Property::new(name, Some(PropertyType::from(val))),
+    //     };
+    // }
+    // pub fn set_str(&mut self, s: &str) {
+    //     let p = PropertyType::from(s);
+    //     self.set(p);
+    // }
+    // // todo check newmaster
+    // pub fn set_bool(&mut self, b: bool) {
+    //     let p = PropertyType::from(b);
+    //     self.set(p);
+    // }
+    // pub fn set_int(&mut self, s: u32) {
+    //     let p = PropertyType::from(s);
+    //     self.set(p);
+    // }
+    // pub fn set_float(&mut self, s: f64) {
+    //     let p = PropertyType::from(s);
+    //     self.set(p);
+    // }
 
     // pub fn set_from_prop(&mut self, v: Property) -> bool {
     //     return self.set(v.value.as_ref().unwrap().clone());
@@ -431,7 +416,8 @@ impl Property {
     }
 
     pub fn set_value(&mut self, new_prop: PropertyValue) -> bool
-        where PropertyValue: Debug + PartialEq + Sync + Send + Clone + 'static,
+    where
+        PropertyValue: Debug + PartialEq + Sync + Send + Clone + 'static,
     {
         let does_eq = match &*self.value.read().unwrap() {
             None => { false }
@@ -459,8 +445,31 @@ impl Property {
             false
         };
     }
- }
 
+    // pub fn set(&mut self, v: PropertyType) -> bool
+    // where
+    //     PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
+    // {
+    //     trace!("<<<< set thing {}", v);
+    //     let v_clone = v.clone();
+    //     let op_v = Some(v);
+    //
+    //     if !self.value.eq(&op_v) {
+    //         self.value = op_v;
+    //         trace!("<<<< emit change!!");
+    //
+    //         block_on(self.on_changed.emit(Some(v_clone)));
+    //         return true;
+    //     } else {
+    //         trace!("do nothing ");
+    //         return false;
+    //     }
+    // }
+    //
+    // pub fn get(&self) -> &Option<PropertyType> {
+    //     &self.value
+    // }
+}
 // I'm not currently using this anywhere
 impl SetProperty<&str> for Property{
     fn set(&mut self, v: &str) {
@@ -468,41 +477,36 @@ impl SetProperty<&str> for Property{
         self.set_value(p);
     }
 }
-
-    pub fn set(&mut self, v: PropertyType) -> bool
-    where
-        PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
-    {
-        trace!("<<<< set thing {}", v);
-        let v_clone = v.clone();
-        let op_v = Some(v);
-
-        if !self.value.eq(&op_v) {
-            self.value = op_v;
-            trace!("<<<< emit change!!");
-
-            block_on(self.on_changed.emit(Some(v_clone)));
-            return true;
-        } else {
-            trace!("do nothing ");
-            return false;
-        }
-    }
-
-    pub fn get(&self) -> &Option<PropertyType> {
-        &self.value
-    }
-
-/*
-   |P|one=1\ntwo=2\nthree=3
-*/
-pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> String {
-                let mut message = PROPERTIES.to_string();
-                for p in properties {
-                message.push_str(property_to_sock_str(Some(p.1), false).unwrap().as_str());
-                message.push('\n');
-            }
-        }
+// /*
+//    |P|one=1\ntwo=2\nthree=3
+// */
+// pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> String {
+//     let mut message = PROPERTIES.to_string();
+//     for p in properties {
+//         message.push_str(property_to_sock_str(Some(p.1), false).unwrap().as_str());
+//         message.push('\n');
+//     }
+//     return String::from(message);
+// }
+// /*
+//    |p|one=1
+// */
+// pub(crate) fn property_to_sock_str(property: Option<&Property>, inc_head: bool) -> Option<String> {
+//     return match property {
+//         // todo option or not?
+//         Some(p) if p.value.is_some() => {
+//             let mut message = if inc_head { PROPERTY.to_string() } else { String::from("") };
+//             message.push_str(p.to_string().as_str());
+//             Some(message)
+//         }
+//         Some(p) => {
+//             let mut message = DELETE.to_string();
+//             message.push_str(p.get_name());
+//             Some(message)
+//         }
+//         _ => None,
+//     };
+// }
 pub trait SetProperty<T> {
     fn set(&mut self, v:T);
 }
@@ -520,24 +524,6 @@ pub(crate) fn properties_to_bytes(properties: &HashMap<u64, Property>) -> Bytes 
         }
     }
     return bytes.freeze();
-}
-/*
-   |p|one=1
-*/
-pub(crate) fn property_to_sock_str(property: Option<&Property>, inc_head: bool) -> Option<String> {
-    return match property {
-        Some(p) if p.value.is_some() => {
-            let mut message = if inc_head { PROPERTY.to_string() } else { String::from("") };
-            message.push_str(p.to_string().as_str());
-            Some(message)
-        }
-        Some(p) => {
-            let mut message = DELETE.to_string();
-            message.push_str(p.get_name());
-            Some(message)
-        }
-        _ => None,
-    };
 }
 
 use num_traits::ToPrimitive;

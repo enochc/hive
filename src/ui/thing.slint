@@ -1,7 +1,7 @@
 import { Slider } from "std-widgets.slint";
 
 component PropertyButton inherits Rectangle {
-    callback changed(float);
+    callback p_changed(float);
     in property <string> name;
     in-out property <string> value;
 
@@ -21,10 +21,11 @@ component PropertyButton inherits Rectangle {
         Slider {
             value: value.to-float();
             width: 300px;
-            changed => {
-                value = self.value;
-                changed(value.to-float());
-            }
+
+//            changed(value) => {
+////                value = self.value;
+//                p_changed(value);
+//            }
         }
     }
 
@@ -62,7 +63,7 @@ export component MainWindow inherits Window {
         for prop[i] in properties: PropertyButton {
             name: prop.name;
             value: prop.value;
-            changed(v) => {
+            p_changed(v) => {
                 prop_changed(prop.name, v)
             }
         }

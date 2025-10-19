@@ -7,7 +7,7 @@ use log::{debug, error, info};
 
 use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
 use crate::peer::SocketEvent;
-use crate::property::{Property, property_to_bytes, PropertyValue};
+use crate::property::{Property, property_to_bytes, PropertyValue, PropertyType};
 
 #[derive(Clone)]
 pub struct Handler {

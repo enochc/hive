@@ -6,6 +6,9 @@ use chrono::Local;
 use log::{Metadata, Level, Record, LevelFilter};
 
 use std::os::raw::c_char;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use crate::hive::Hive;
@@ -62,14 +65,9 @@ pub fn init_logging(level:Option<LevelFilter>){
 #[no_mangle]
 pub unsafe extern "C" fn newHive(props: *const c_char) -> Hive {
     let c_str = CStr::from_ptr(props);
-    let prop_str_pointer = match c_str.to_str() {
-        Ok(s) => s,
-        Err(_) => "you",
-    };
+    let prop_str_pointer = c_str.to_str().unwrap_or_else(|_| "you");
 
     Hive::new_from_str("Hive1", prop_str_pointer )
-        // .unwrap()
-        // .into_raw()
 }
 
 // fn get_toml_config(file_path: &str) -> toml::Value{
@@ -77,3 +75,21 @@ pub unsafe extern "C" fn newHive(props: *const c_char) -> Hive {
 //     return toml::from_str(&foo).unwrap();
 // }
 
+pub fn panic_after<T, F>(d: Duration, f: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T,
+    F: Send + 'static,
+{
+    let (done_tx, done_rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let val = f();
+        done_tx.send(()).expect("Unable to send completion signal");
+        val
+    });
+
+    match done_rx.recv_timeout(d) {
+        Ok(_) => handle.join().expect("Thread panicked"),
+        Err(_) => panic!("Thread took too long"),
+    }
+}

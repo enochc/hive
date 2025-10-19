@@ -24,6 +24,7 @@ use crate::property::{properties_to_bytes, Property, bytes_to_property, property
 use crate::signal::Signal;
 use std::sync::{Condvar, Mutex, Weak};
 use std::fmt::{Debug, Formatter};
+use ctrlc::Error;
 use toml::Value;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub type Sender<T> = mpsc::UnboundedSender<T>;
@@ -121,6 +122,7 @@ async fn spawn_bluetooth_central(ble_name: String, sender: Sender<SocketEvent>) 
 
 pub(crate) const REQUEST_PEERS: &str = "<p|";
 
+
 impl Hive {
     pub fn is_sever(&self) -> bool {
         self.listen_port.is_some() || self.bt_listen.is_some()
@@ -130,7 +132,7 @@ impl Hive {
         return self.connected.load(Ordering::Relaxed);
     }
 
-    pub fn go(mut self, wait:bool)->Handler {
+    pub fn go(mut self, wait:bool, with_kill_handle: bool)->Handler {
         //This consumes the Hive and returns a handler and spawns it's run thread in a task
         if wait {
             self.ready = Some(
@@ -141,7 +143,7 @@ impl Hive {
         let handler = self.get_handler();
         let ready_clone = self.ready.clone();
         task::spawn(async move {
-            self.run().await.expect("Failed to run Hive");
+            self.run(with_kill_handle).await.expect("Failed to run Hive");
         });
 
         return match ready_clone {
@@ -166,9 +168,12 @@ impl Hive {
         }
     }
 
-    pub fn new_from_str(properties: &str) -> Hive {
+    pub fn new_from_str_unknown(properties: &str) -> Hive {
+        Self::new_from_str("Unknown", properties)
+    }
 
-        let config: toml::Value = toml::from_str(properties).unwrap();
+    pub fn new_from_str(name: &str, properties: &str) -> Hive {
+        let config: Value = toml::from_str(properties).unwrap();
         let prop = |p: &str| {
             return match config.get(p) {
                 Some(v) => Some(String::from(v.as_str().unwrap())),
@@ -176,7 +181,7 @@ impl Hive {
             };
         };
         let name = prop("name").or_else(|| {
-            Some("Unnamed".to_string())
+            Some(name.to_string())
         }).unwrap();
 
         let connect_to = prop("connect");
@@ -256,13 +261,9 @@ impl Hive {
         };
     }
 
-    pub fn new(name: &str, toml_path: &str) -> Hive {
-    //         from_name: self.name.clone(),
-    //     };
-    // }
+    pub fn new(toml_path: &str) -> Hive {
         let foo: String = fs::read_to_string(toml_path).unwrap().parse().unwrap();
-        Hive::new_from_str(name, foo.as_str())
-        // Hive::new_from_str(foo.as_str())
+        Hive::new_from_str_unknown(foo.as_str())
     }
 
     pub fn get_mut_property(&mut self, key: &u64) -> Option<&mut Property> {
@@ -363,24 +364,27 @@ impl Hive {
     }
 
     pub fn get_advertising(&self) -> Arc<AtomicBool> {
-        return self.advertising.clone();
+        self.advertising.clone()
     }
 
-    // fn setup_stop_listener(&self) {
-    //     let sender = self.sender.clone();
-    //     simple_signal::set_handler(&[
-    //         simple_signal::Signal::Int,
-    //         simple_signal::Signal::Term], {
-    //                                    move |s| {
-    //                                        println!("Signal {:?} received.", s);
-    //                                        sender.close_channel();
-    //                                    }
-    //                                });
-    // }
+    fn setup_stop_listener(&self) -> std::result::Result<(), Error> {
+        let sender = self.sender.clone();
 
+        let res = ctrlc::set_handler(move || {
+            println!("Signal received (Ctrl+C or termination).");
+            sender.close_channel();
+        });
+        if res.is_err() {
+            error!("<<<<Error setting Ctrl-C handler");
+        }
+        res
+    }
 
-    pub async fn run(& mut self) -> Result<()> {
-        self.setup_stop_listener();
+    pub async fn run(& mut self, with_kill_handler: bool) -> Result<()> {
+        if with_kill_handler {
+            self.setup_stop_listener()?;
+        }
+        info!("<<<< next!!");
         self.advertising.store(true, Ordering::Relaxed);
 
         // I'm a bluetooth client
@@ -406,7 +410,6 @@ impl Hive {
             let (tx, mut rx) = mpsc::unbounded();
             let mut connected = false;
             /* loop indefinitely to connect to remote server */
->>>>>>> master
             while !connected {
                 let addr = address.clone();
                 let send_chan_clone = send_chan.clone();
@@ -603,7 +606,7 @@ impl Hive {
         Ok(())
     }
 
-    fn peer_string(&self) -> Option<String> {
+    fn peer_string(&self) -> String {
         let mut peers_string = String::new();
 
         // Add self to peers list
@@ -622,7 +625,7 @@ impl Hive {
             // let name =
             peers_string.push_str(&format!("{}|{}", name, adr))
         };
-        return peers_string;
+        peers_string
     }
 
     async fn notify_peers_change(&mut self) {
