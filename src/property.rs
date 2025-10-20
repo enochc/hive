@@ -1,4 +1,3 @@
-
 use crate::hive::{DELETE, PROPERTIES, PROPERTY};
 use crate::signal::Signal;
 use std::convert::TryFrom;
@@ -14,24 +13,23 @@ use std::task::{Context, Poll};
 use async_std::stream::Stream;
 use async_std::sync::Arc;
 use async_std::task::block_on;
-use bytes::{BufMut, Bytes, BytesMut, Buf};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 #[allow(unused_imports)]
 use log::{debug, info};
 use toml::Value;
 
-use toml::value::Table;
-use std::fmt::{Debug, Formatter, Display};
-use std::hash::{BuildHasherDefault, Hash, Hasher};
 use ahash;
 use ahash::AHasher;
-use futures::future::ok;
+use std::fmt::{Debug, Display, Formatter};
+use std::hash::Hasher;
+use toml::value::Table;
 
 pub type PropertyType = toml::Value;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Clone, Debug)]
 pub struct PropertyValue {
-    pub val: Value
+    pub val: Value,
 }
 
 impl PropertyValue {
@@ -56,58 +54,58 @@ impl PropertyValue {
 
 impl Display for PropertyValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::result::Result<(), fmt::Error> {
-        write!(f, "{}",self.val)
+        write!(f, "{}", self.val)
     }
 }
 
 impl PartialEq for PropertyValue {
     fn eq(&self, other: &Self) -> bool {
-        return self.val.eq(&other.val)
+        return self.val.eq(&other.val);
     }
 }
 impl From<Value> for PropertyValue {
     fn from(v: Value) -> Self {
-        PropertyValue {val:v}
+        PropertyValue { val: v }
     }
 }
 impl From<&Value> for PropertyValue {
     fn from(v: &Value) -> Self {
-        PropertyValue {val:v.clone()}
+        PropertyValue { val: v.clone() }
     }
 }
 impl From<&str> for PropertyValue {
     fn from(v: &str) -> Self {
-        PropertyValue {val:Value::from(v)}
+        PropertyValue { val: Value::from(v) }
     }
 }
 impl From<bool> for PropertyValue {
     fn from(v: bool) -> Self {
-        PropertyValue {val:Value::from(v)}
+        PropertyValue { val: Value::from(v) }
     }
 }
 impl From<u32> for PropertyValue {
     fn from(v: u32) -> Self {
-        PropertyValue {val:Value::from(v)}
+        PropertyValue { val: Value::from(v) }
     }
 }
 impl From<i32> for PropertyValue {
     fn from(v: i32) -> Self {
-        PropertyValue {val:Value::from(v)}
+        PropertyValue { val: Value::from(v) }
     }
 }
 impl From<f32> for PropertyValue {
     fn from(v: f32) -> Self {
-        PropertyValue {val:Value::from(v)}
+        PropertyValue { val: Value::from(v) }
     }
 }
 impl From<f64> for PropertyValue {
     fn from(v: f64) -> Self {
-        PropertyValue {val:Value::from(v)}
+        PropertyValue { val: Value::from(v) }
     }
 }
 impl From<i64> for PropertyValue {
     fn from(v: i64) -> Self {
-        PropertyValue {val:Value::from(v)}
+        PropertyValue { val: Value::from(v) }
     }
 }
 
@@ -127,11 +125,9 @@ pub(crate) const IS_FLOAT: i8 = 0x17; // 64 bits
 pub(crate) const IS_NONE: i8 = 0x18;
 
 #[derive(Default, Clone)]
-pub struct PropertyStream
-{
+pub struct PropertyStream {
     has_next: Arc<(Mutex<bool>, Condvar)>,
     pub value: Arc<RwLock<Option<PropertyValue>>>,
-
 }
 
 // impl Sink<PropertyType> for PropertyStream {
@@ -159,28 +155,37 @@ impl Stream for PropertyStream {
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let (lock, cvar) = &*self.has_next;
-        let is_reeady = lock.lock().unwrap();
+        let is_ready = lock.lock().unwrap();
 
-        let _unused = cvar.wait(is_reeady).unwrap();
+        let _unused = cvar.wait(is_ready).unwrap();
         let a = &*self.value.read().unwrap();
 
-
-        return Poll::Ready(a.clone());
+        Poll::Ready(a.clone())
     }
 }
 
 impl Debug for Property {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{} value = {:?}, args = {:?}", self.name, *self.value.read().unwrap(), self.args)
+        write!(
+            f,
+            "{} value = {:?}, args = {:?}",
+            self.name,
+            *self.value.read().unwrap(),
+            self.args
+        )
     }
 }
 
-struct NAME(Option<String>);
+pub struct NAME(Option<String>);
 impl Display for NAME {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self.0 {
-            None => { write!(f, "unnamed") }
-            Some(n) => { write!(f, "{}", n) }
+            None => {
+                write!(f, "unnamed")
+            }
+            Some(n) => {
+                write!(f, "{}", n)
+            }
         }
     }
 }
@@ -189,25 +194,24 @@ impl From<&str> for NAME {
         NAME(Some(String::from(value)))
     }
 }
-impl Borrow<str> for NAME{
+impl Borrow<str> for NAME {
     fn borrow(&self) -> &str {
         match &self.0 {
-            None => {""}
-            Some(n) => {n}
+            None => "",
+            Some(n) => n,
         }
     }
 }
-impl Clone for NAME{
+impl Clone for NAME {
     fn clone(&self) -> Self {
         match &self.0 {
-            None => {NAME(None)}
-            Some(n) => {NAME(Some(String::from(n)))}
+            None => NAME(None),
+            Some(n) => NAME(Some(String::from(n))),
         }
     }
 }
 #[derive(Clone)]
-pub struct Property
-{
+pub struct Property {
     pub name: NAME,
     pub id: u64,
     pub value: Arc<RwLock<Option<PropertyValue>>>,
@@ -217,9 +221,7 @@ pub struct Property
     pub stream: PropertyStream,
     on_next_holder: Arc<dyn Fn(PropertyValue) + Send + Sync + 'static>,
     pub args: Option<Table>,
-
 }
-
 
 impl Property {
     pub fn hash_id(val: &str) -> u64 {
@@ -232,21 +234,19 @@ impl Property {
     pub fn get_value(&self) -> Option<Value> {
         let rr = &*self.value.read().unwrap();
         match rr {
-            None => { None }
-            Some(v) => {
-                Some(v.clone().val)
-            }
+            None => None,
+            Some(v) => Some(v.clone().val),
         }
     }
     pub fn is_none(&self) -> bool {
-        return self.value.read().unwrap().is_none();
+        self.value.read().unwrap().is_none()
     }
     pub fn to_string(&self) -> String {
         let v = &*self.value.read().unwrap();
-        return match v {
+        match v {
             Some(t) => format!("{}={}", self.name, t.val.to_string()),
             None => format!("{}=None", self.name),
-        };
+        }
     }
     fn rest_get(&mut self) -> Result<bool> {
         if cfg!(feature = "rest") {
@@ -255,17 +255,17 @@ impl Property {
                 Some(url) => {
                     println!("doing a thing: {:?}", url.as_str().unwrap());
                     return Ok(true);
-                },
+                }
                 _ => {}
             }
         }
 
-        return Ok(false)
+        Ok(false)
     }
 
     pub fn on_next<F>(&mut self, f: F)
     where
-        F: Fn(PropertyValue) + Send + Sync + 'static
+        F: Fn(PropertyValue) + Send + Sync + 'static,
     {
         self.on_next_holder = Arc::new(f);
     }
@@ -277,7 +277,7 @@ impl Property {
         let key = table.keys().nth(0).unwrap();
         let val = table.get(key);
         let p = Property::from_toml(key.as_str(), val);
-        return Some(p);
+        Some(p)
     }
 
     pub fn get_name(&self) -> &str {
@@ -294,13 +294,14 @@ impl Property {
 
     pub fn from_value(id: &u64, val: Value) -> Property
     where
-        Value: Into<PropertyValue>
+        Value: Into<PropertyValue>,
     {
-        return Property::from_id(id, Some(val.into()));
+        Property::from_id(id, Some(val.into()))
     }
+
     pub fn from_name(name: &str, val: Option<PropertyValue>) -> Property {
         let arc_val = Arc::new(RwLock::new(val));
-        return Property {
+        Property {
             name: NAME(Some(name.to_string())),
             id: Property::hash_id(&name),
             value: arc_val.clone(),
@@ -310,7 +311,7 @@ impl Property {
             },
             on_next_holder: Arc::new(|_| {}),
             args: None,
-        };
+        }
     }
     pub fn from_id(id: &u64, val: Option<PropertyValue>) -> Property {
         let arc_val = Arc::new(RwLock::new(val));
@@ -329,18 +330,10 @@ impl Property {
 
     pub fn from_toml(name: &str, val: Option<&Value>) -> Property {
         let p = match val {
-            Some(v) if v.is_str() => {
-                Property::from_name(name, Some(v.into()))
-            }
-            Some(v) if v.is_integer() => {
-                Property::from_name(name, Some(v.into()))
-            }
-            Some(v) if v.is_bool() => {
-                Property::from_name(name, Some(v.into()))
-            }
-            Some(v) if v.is_float() => {
-                Property::from_name(name, Some(v.into()))
-            }
+            Some(v) if v.is_str() => Property::from_name(name, Some(v.into())),
+            Some(v) if v.is_integer() => Property::from_name(name, Some(v.into())),
+            Some(v) if v.is_bool() => Property::from_name(name, Some(v.into())),
+            Some(v) if v.is_float() => Property::from_name(name, Some(v.into())),
             Some(v) if v.is_table() => {
                 /*
                 If the value is also a table, we look for the "val" in the table to set as the default value.
@@ -379,7 +372,7 @@ impl Property {
                 Property::from_name(name, None)
             }
         };
-        return p;
+        p
     }
     // pub fn from_int(name: &str, val: i64) -> Property {
     //     let small_int = u32::try_from(val);
@@ -420,8 +413,8 @@ impl Property {
         PropertyValue: Debug + PartialEq + Sync + Send + Clone + 'static,
     {
         let does_eq = match &*self.value.read().unwrap() {
-            None => { false }
-            Some(pt) => { pt.eq(&new_prop) }
+            None => false,
+            Some(pt) => pt.eq(&new_prop),
         };
 
         return if !does_eq {
@@ -471,7 +464,7 @@ impl Property {
     // }
 }
 // I'm not currently using this anywhere
-impl SetProperty<&str> for Property{
+impl SetProperty<&str> for Property {
     fn set(&mut self, v: &str) {
         let p = PropertyValue::from(v);
         self.set_value(p);
@@ -508,26 +501,23 @@ impl SetProperty<&str> for Property{
 //     };
 // }
 pub trait SetProperty<T> {
-    fn set(&mut self, v:T);
+    fn set(&mut self, v: T);
 }
 /*
-    |P|one=1\ntwo=2\nthree=3
- */
+   |P|one=1\ntwo=2\nthree=3
+*/
 pub(crate) fn properties_to_bytes(properties: &HashMap<u64, Property>) -> Bytes {
     let mut bytes = BytesMut::new();
     bytes.put_u8(PROPERTIES);
     for p in properties {
         if p.1.value.read().unwrap().is_some() {
-            bytes.put_slice(
-                &property_to_bytes(p.1, false)
-            );
+            bytes.put_slice(&property_to_bytes(p.1, false));
         }
     }
-    return bytes.freeze();
+    bytes.freeze()
 }
 
 use num_traits::ToPrimitive;
-// use sha1::Digest;
 
 pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
     let mut bytes = BytesMut::new();
@@ -557,33 +547,27 @@ pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
                         bytes.put_i8(IS_SHORT);
                         bytes.put_i8(i);
                     }
-                    None => {
-                        match int.to_i16() {
-                            Some(i) => {
-                                bytes.put_i8(IS_SMALL);
-                                bytes.put_i16(i);
-                            }
-                            None => {
-                                match int.to_i32() {
-                                    Some(i) => {
-                                        bytes.put_i8(IS_LONG);
-                                        bytes.put_i32(i);
-                                    }
-                                    None => {
-                                        match int.to_i64() {
-                                            Some(i) => {
-                                                bytes.put_i8(IS_INT);
-                                                bytes.put_i64(i);
-                                            }
-                                            None => {
-                                                unimplemented!("You really shouldn't be here {:?}", p)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                    None => match int.to_i16() {
+                        Some(i) => {
+                            bytes.put_i8(IS_SMALL);
+                            bytes.put_i16(i);
                         }
-                    }
+                        None => match int.to_i32() {
+                            Some(i) => {
+                                bytes.put_i8(IS_LONG);
+                                bytes.put_i32(i);
+                            }
+                            None => match int.to_i64() {
+                                Some(i) => {
+                                    bytes.put_i8(IS_INT);
+                                    bytes.put_i64(i);
+                                }
+                                None => {
+                                    unimplemented!("You really shouldn't be here {:?}", p)
+                                }
+                            },
+                        },
+                    },
                 }
             } else if p.val.is_float() {
                 match p.val.as_float() {
@@ -600,7 +584,7 @@ pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
             }
         }
     }
-    return bytes.freeze();
+    bytes.freeze()
     // let prop_str = p.to_string();
     // let bytes = if inc_head {
     //     let mut b = BytesMut::with_capacity(prop_str.len() + 1);
@@ -612,7 +596,7 @@ pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
     // };
 }
 
-pub(crate) fn bytes_to_property(bytes:&mut Bytes) -> Option<Property> {
+pub(crate) fn bytes_to_property(bytes: &mut Bytes) -> Option<Property> {
     // let name_length = bytes.get_u8() as usize;
     // let name = String::from_utf8(bytes.slice(..name_length).to_vec());
     let property_id = bytes.get_u64();
@@ -628,35 +612,33 @@ pub(crate) fn bytes_to_property(bytes:&mut Bytes) -> Option<Property> {
             bytes.advance(str_length);
             debug!("<<<<<<<<<<<<<<<<<<<<<<<<< string {:?} = {:?}", str_length, value);
             let v = value.ok().unwrap();
-            return Some(Property::from_value(&property_id, v.into()));
-        },
+            Some(Property::from_value(&property_id, v.into()))
+        }
         IS_BOOL => {
             let bool = bytes.get_u8() > 0;
-            return Some(Property::from_value(&property_id, bool.into()));
+            Some(Property::from_value(&property_id, bool.into()))
         }
         IS_SHORT => {
             let short = bytes.get_i8();
-            return Some(Property::from_value(&property_id, short.into()));
+            Some(Property::from_value(&property_id, short.into()))
         }
         IS_SMALL => {
             let small = bytes.get_i16();
-            return Some(Property::from_value(&property_id, (small as i32).into()));
+            Some(Property::from_value(&property_id, (small as i32).into()))
         }
         IS_LONG => {
             let long = bytes.get_i32();
-            return Some(Property::from_value(&property_id, long.into()));
+            Some(Property::from_value(&property_id, long.into()))
         }
         IS_INT => {
             let int = bytes.get_i64();
-            return Some(Property::from_value(&property_id, int.into()));
+            Some(Property::from_value(&property_id, int.into()))
         }
         IS_FLOAT => {
             let float = bytes.get_f64();
-            return Some(Property::from_value(&property_id, float.into()));
+            Some(Property::from_value(&property_id, float.into()))
         }
-        IS_NONE => {
-            return Some(Property::from_id(&property_id, None));
-        }
+        IS_NONE => Some(Property::from_id(&property_id, None)),
         _ => {
             unimplemented!(".... doh, finish me {:?}", value_type)
             // return None

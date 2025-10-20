@@ -1,16 +1,12 @@
-
-use hive::property::Property;
-use async_std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread::sleep;
-use std::time::Duration;
-use hive::property::SetProperty;
-use futures::StreamExt;
 use async_std;
+use async_std::sync::Arc;
+use hive::property::Property;
+use hive::property::SetProperty;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn main() {
     //test
-    let mut p = Property::from_value("test",4.into());
+    let mut p = Property::from_name("test", Some(4.into()));
     let counter = Arc::new(AtomicUsize::new(0));
     let c2 = Arc::clone(&counter);
 
@@ -30,5 +26,4 @@ fn main() {
     let ret = counter.load(Ordering::Relaxed);
     assert_eq!(ret, 4);
     println!("Done: {:?} ran {:?} times", p.to_string(), ret);
-
 }

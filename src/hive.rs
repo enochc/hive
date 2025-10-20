@@ -139,7 +139,7 @@ impl Hive {
             self.run(with_kill_handle).await.expect("Failed to run Hive");
         });
 
-        return match ready_clone {
+        match ready_clone {
             None => handler,
             Some(r) => {
                 let (lock, cvar) = &*r;
@@ -147,7 +147,7 @@ impl Hive {
                 let guard = cvar.wait(lock).expect("Wait on lock failed");
                 handler
             }
-        };
+        }
     }
     fn broadcast_ready(&self) {
         match self.ready.clone() {

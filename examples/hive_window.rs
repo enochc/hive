@@ -1,11 +1,18 @@
 use std::rc::{Rc};
 use std::sync::{Arc, Weak, Mutex};
+use log::warn;
 use hive::hive::Hive;
+#[cfg(feature = "gui")]
 use hive::hive_gui::{HiveWindow, Gui};
 use hive::property::Property;
+
+#[cfg(feature = "gui")]
 slint::include_modules!();
 
 fn main(){
+    if !cfg!(feature = "gui") {
+        warn!("Feature \"GUI\" is not enabled.")
+    }
     let mut h = Hive::new("examples/motors.toml");
     h.get_mut_property(&Property::hash_id("m1")).expect("oops").on_next(|v|{
         println!("M1:: {}", v);
@@ -26,6 +33,6 @@ fn main(){
         }
     });
 
-
+    #[cfg(feature = "gui")]
     HiveWindow::launch(Some(h));
 }

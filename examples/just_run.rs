@@ -1,19 +1,18 @@
 #![allow(unused_imports)]
-use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
-use hive::hive::Hive;
-use async_std::task;
-use futures::{SinkExt, StreamExt};
-use hive::property::Property;
-use futures::executor::block_on;
-use std::thread::sleep;
-use log::{Metadata, Level, Record, LevelFilter};
-use hive::init_logging;
-use log::{debug, info, error};
 use async_std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use simple_signal::{self, Signal};
-use std::sync::{Mutex, Condvar};
+use async_std::task;
+use futures::channel::{mpsc, mpsc::UnboundedReceiver, mpsc::UnboundedSender};
+use futures::executor::block_on;
+use futures::{SinkExt, StreamExt};
+use hive::hive::Hive;
+use hive::init_logging;
+use hive::property::Property;
+use log::{debug, error, info};
+use log::{warn, Level, LevelFilter, Metadata, Record};
 use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, Mutex};
+use std::thread::sleep;
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 fn main() {
@@ -24,38 +23,33 @@ fn main() {
     debug!("<< debug {:?}", args[1]);
     let mut server_hive = Hive::new(&args[1]);
 
-    use simple_signal::{self, Signal};
-
-    server_hive.get_mut_property("turn").unwrap().on_next(move |value|{
+    server_hive.get_mut_property_by_name("turn").unwrap().on_next(move |value| {
         debug!("<<<< TURN: {:?}", value);
     });
 
     let advertising = server_hive.get_advertising();
 
     let is_running: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(true), Condvar::new()));
-
-    // listens for termination signal: (ctrl+c)
-    simple_signal::set_handler(&[Signal::Int, Signal::Term], {
-        let run_clone = is_running.clone();
-
-        move |_| {
-            info!("Stopping...");
-            let (lock, cvar) = &*run_clone;
-            let mut running = lock.lock().unwrap();
-            *running = false;
-            cvar.notify_one();
-        }
+    
+    let run_clone = is_running.clone();
+    let res = ctrlc::set_handler(move || {
+        info!("Stopping...");
+        let (lock, cvar) = &*run_clone;
+        let mut running = lock.lock().unwrap();
+        *running = false;
+        cvar.notify_one();
     });
+    if res.is_err() {
+        error!("<<<<Error setting Ctrl-C handler");
+    }
     let (lock, cvar) = &*is_running;
 
-    let handler = server_hive.go(true);
+    let handler = server_hive.go(true, false);
 
     let mut running = lock.lock().unwrap();
     while *running {
         running = cvar.wait(running).unwrap();
     }
 
-
     debug!("Done!! ");
-
 }
