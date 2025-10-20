@@ -513,6 +513,7 @@ impl Hive {
 
                     let is_tcp_server = self.listen_port.is_some();
                     let is_tcp_client = self.connect_to.is_some();
+
                     if has_peer.is_none() {
                         debug!("----------------------- {:?} building peer: {:?}", self.name, name);
                         let ptype_clne = ptype.clone();
@@ -527,26 +528,28 @@ impl Hive {
                             ptype_clne,
                         )
                         .await;
-                        debug!(".... PEER: {:?}, {}", p, is_tcp_server);
+                        if p.is_ok() {
+                            debug!(".... PEER: {:?}, {}", p, is_tcp_server);
+                            let peer = p?;
+                            // we auto send all the peers via TCP because it prevents un additional request
+                            // TODO should this be moved into the Peer handshake
+                            if ptype == PeerType::TcpClient {
+                                self.send_properties(&peer).await?;
+                            }
 
-                        // we auto send all the peers via TCP because it prevents un additional request
-                        // TODO should this be moved into the Peer handshake
-                        if ptype == PeerType::TcpClient {
-                            self.send_properties(&p).await?;
-                        }
+                            debug!("<<<< NEW PEER for {:?}: {:?}", self.name, peer.get_name());
+                            let is_web_sock_peer = peer.is_web_socket();
 
-                        debug!("<<<< NEW PEER for {:?}: {:?}", self.name, p.get_name());
-                        let is_web_sock_peer = p.is_web_socket();
+                            self.peers.push(peer);
 
-                        self.peers.push(p);
-
-                        if !is_tcp_client {
-                            // I'm a server and another tcp hive client connected
-                            // a websock sends a separate Header package with it's name, other
-                            // tcp sockets send the name in the handshake so we can update peers
-                            // right away, instead of waiting for the header update
-                            if !is_web_sock_peer {
-                                self.notify_peers_change().await;
+                            if !is_tcp_client {
+                                // I'm a server and another tcp hive client connected
+                                // a websock sends a separate Header package with it's name, other
+                                // tcp sockets send the name in the handshake so we can update peers
+                                // right away, instead of waiting for the header update
+                                if !is_web_sock_peer {
+                                    self.notify_peers_change().await;
+                                }
                             }
                         }
                     } else {

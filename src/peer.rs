@@ -4,6 +4,7 @@ use async_std::{io::BufReader, net::TcpStream, prelude::*, task};
 use bluster::gatt::event::Response;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::fmt::Debug;
+use std::io;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, SystemTime};
@@ -115,7 +116,7 @@ impl Peer {
         address: String,
         hive_name: String,
         peer_type: PeerType,
-    ) -> Peer {
+    ) -> Result<Peer> {
         if stream.is_some() {
             let arc_str = stream.as_ref().unwrap().clone();
             let addr = arc_str.peer_addr().unwrap().to_string();
@@ -142,8 +143,7 @@ impl Peer {
                 _ => String::from("no peer address"),
             };
 
-            let error_msg = format!("Shake failed for {}", peer.get_id_name());
-            let reader: BufReader<TcpStream> = peer.handshake(arc_str, &sender).await.expect(&error_msg);
+            let reader: BufReader<TcpStream> = peer.handshake(arc_str, &sender).await?;
 
             // WebSock runs it's own read loop
             if !is_websocket {
@@ -154,13 +154,12 @@ impl Peer {
                     read_loop(send_clone, name_id, from, reader)
                         .await
                         .expect("Read Loop Failed");
-                    // read_loop(send_clone, &arc_str, name_id).await;
                 });
             }
 
-            peer
+            Ok(peer)
         } else {
-            Peer {
+            Ok(Peer {
                 name: Arc::new(RwLock::new(name)),
                 stream,
                 update_peers: false,
@@ -173,7 +172,7 @@ impl Peer {
                 web_sock: None,
                 hive_name,
                 peer_type,
-            }
+            })
         }
     }
 
@@ -197,23 +196,14 @@ impl Peer {
                 Ok(BufReader::new(stream))
             }
             PeerType::TcpClient => {
-                // let mut reader = BufReader::new(stream.clone());
-                // let mut size_buff: [u8;4] = [0; 4];
-                // let thing = AsyncReadExt::read(&mut stream, &mut size_buff).await?;
-                // info!("<<<<<{} 🔥🔥🔥🔥:: {:?} >>>>",thing, size_buff);
                 let mut reader = BufReader::new(stream);
-
-                // debug!("{:?} handshake....", self.get_id_name());
                 debug!("<<<< READ CLIENT HANDSHAKE ⭐️⭐️🔺 ");
                 let mut str = String::new();
-
-                // AsyncReadExt::read_exact(&mut reader, &mut size_buff).await.expect("read failed");
-
-                // while str.is_empty() {
-                    let bytes = AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
-                    debug!("READ🔥🔥🔥🔥: {}, {:?}", bytes, str);
-                    task::sleep(Duration::from_millis(300)).await;
-                // }
+                let bytes = AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
+                debug!("READ🔥🔥🔥🔥: {}, {:?}", bytes, str);
+                if bytes == 0 {  // EOF drop client peer
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Client disconnected").into());
+                }
                 info!("BYTES READ ***** : {:?}",str);
                 if str == "\u{0}\u{0}\u{0}\n" {
                     // WTF!!!
