@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::thread::sleep;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 fn main() {
@@ -36,15 +37,18 @@ fn main() {
     let is_running: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(true), Condvar::new()));
 
     let run_clone = is_running.clone();
+    let cancellation_token = CancellationToken::new();
+    let cancellation_token_clone = cancellation_token.clone();
     let res = ctrlc::set_handler(move || {
         info!("Stopping...");
         let (lock, cvar) = &*run_clone;
         let mut running = lock.lock().unwrap();
         *running = false;
         cvar.notify_one();
+        cancellation_token_clone.cancelled();
     });
 
-    let handler = server_hive.go(true, false);
+    let handler = server_hive.go(true, cancellation_token);
 
     let (lock, cvar) = &*is_running;
     let mut running = lock.lock().unwrap();

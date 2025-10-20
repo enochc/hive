@@ -8,10 +8,8 @@ use log::LevelFilter;
 use log::{debug, info};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Condvar, Mutex};
-use std::thread;
 use std::time::Duration;
-
-
+use tokio_util::sync::CancellationToken;
 
 #[test]
 fn main() {
@@ -43,8 +41,8 @@ fn main() {
             *done += 1;
             cvar.notify_one();
         });
-
-        server_hive.go(true, true);
+        let cancellation_token = CancellationToken::new();
+        server_hive.go(true, cancellation_token.clone());
 
         let props_str = r#"
     name = "MiddleMan"
@@ -52,7 +50,7 @@ fn main() {
     listen="3001"
     "#;
         let middle_man = Hive::new_from_str_unknown(props_str);
-        let mut middle_hand = middle_man.go(true, false);
+        let mut middle_hand = middle_man.go(true, cancellation_token.clone());
 
         let props_str = r#"
     connect="3001"
@@ -70,7 +68,7 @@ fn main() {
             cvar.notify_one();
         });
 
-        let mut client_hand = client_hive.go(true, false);
+        let mut client_hand = client_hive.go(true, cancellation_token);
 
         block_on(async {
             middle_hand

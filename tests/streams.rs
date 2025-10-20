@@ -15,6 +15,7 @@ use log::{debug, info, error, LevelFilter};
 use std::sync::{Condvar, Mutex};
 use std::ops::Index;
 use ctrlc::Error;
+use tokio_util::sync::CancellationToken;
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 #[test]
@@ -91,7 +92,8 @@ fn main() {
 
 
         let server_connected = server_hive.connected.clone();
-        let mut server_hand = server_hive.go(true, true);
+        let cancellation_token = CancellationToken::new();
+        let mut server_hand = server_hive.go(true, cancellation_token.clone());
 
         let ack_clone = ack.clone();
         let mut client_hive = Hive::new_from_str_unknown("connect = \"127.0.0.1:3000\"\nname=\"client1\"");
@@ -162,14 +164,9 @@ fn main() {
         });
 
 
-        let mut client_hand = client_hive.go(true, false);
+        let mut client_hand = client_hive.go(true, cancellation_token);
 
         let ack_clone = ack.clone();
-
-        // let mut client_hive_2 = Hive::new_from_str("connect = \"127.0.0.1:3000\"\nname=\"client2\"");
-        // let mut client_2_handler = client_hive_2.go(true);
-
-        // let mut client_handl_clone = client_hand.clone();
 
         let (mut sender, mut receiver) = mpsc::unbounded();
         task::spawn(async move {
