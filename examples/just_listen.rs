@@ -12,6 +12,7 @@ use log::{Level, LevelFilter, Metadata, Record};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::thread::sleep;
+use tokio_util::sync::CancellationToken;
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 fn main() {
@@ -49,19 +50,21 @@ fn main() {
 
     let is_running: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(true), Condvar::new()));
 
+    let c_token = CancellationToken::new();
+    let c_token2 = c_token.child_token();
     let run_clone = is_running.clone();
-    
     let res = ctrlc::set_handler(move || {
         info!("Stopping...");
         let (lock, cvar) = &*run_clone;
         let mut running = lock.lock().unwrap();
         *running = false;
         cvar.notify_one();
+        c_token2.cancelled();
     });
 
     let (lock, cvar) = &*is_running;
 
-    let handler = server_hive.go(true, true);
+    let handler = server_hive.go(true, c_token);
 
     let mut running = lock.lock().unwrap();
     while *running {

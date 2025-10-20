@@ -25,6 +25,7 @@ use crate::signal::Signal;
 use ctrlc::Error;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Condvar, Mutex, Weak};
+use tokio_util::sync::CancellationToken;
 use toml::Value;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub type Sender<T> = mpsc::UnboundedSender<T>;
@@ -127,7 +128,7 @@ impl Hive {
         return self.connected.load(Ordering::Relaxed);
     }
 
-    pub fn go(mut self, wait: bool, with_kill_handle: bool) -> Handler {
+    pub fn go(mut self, wait: bool, cancellation_token: CancellationToken) -> Handler {
         //This consumes the Hive and returns a handler and spawns it's run thread in a task
         if wait {
             self.ready = Some(Arc::new((Mutex::new(false), Condvar::new())));
@@ -135,8 +136,9 @@ impl Hive {
 
         let handler = self.get_handler();
         let ready_clone = self.ready.clone();
+        let cancellation_token_clone = cancellation_token.clone();
         task::spawn(async move {
-            self.run(with_kill_handle).await.expect("Failed to run Hive");
+            self.run(cancellation_token_clone).await.expect("Failed to run Hive");
         });
 
         match ready_clone {
@@ -357,24 +359,7 @@ impl Hive {
         self.advertising.clone()
     }
 
-    fn setup_stop_listener(&self) -> std::result::Result<(), Error> {
-        let sender = self.sender.clone();
-
-        let res = ctrlc::set_handler(move || {
-            warn!("Ctrl-C signal received. Stopping !!! 🛑🛑");
-            sender.close_channel();
-        });
-        if res.is_err() {
-            error!("<<<<Error setting Ctrl-C handler");
-        }
-        res
-    }
-
-    pub async fn run(&mut self, with_kill_handler: bool) -> Result<()> {
-        if with_kill_handler {
-            self.setup_stop_listener()?;
-        }
-        info!("<<<< next!!");
+    pub async fn run(&mut self, cancellation_token: CancellationToken) -> Result<()> {
         self.advertising.store(true, Ordering::Relaxed);
 
         // I'm a bluetooth client
@@ -489,7 +474,15 @@ impl Hive {
 
         if self.connected.load(Ordering::Relaxed) {
             //This is where we sit for a long time and just receive events
-            self.receive_events().await?;
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    warn!("Task Canceled!");
+                },
+                _ = self.receive_events() => {
+                    debug!("DONE receive_events");
+                }
+            }
+            // self.receive_events().await?;
         }
         debug!("Hive DONE");
         Ok(())
