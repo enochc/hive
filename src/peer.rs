@@ -1,25 +1,24 @@
-use std::fmt::Debug;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::Relaxed;
-use std::time::{Duration, SystemTime};
-
 use async_std::sync::{Arc, RwLock};
 use async_std::{io::BufReader, net::TcpStream, prelude::*, task};
 #[cfg(feature = "bluetooth")]
 use bluster::gatt::event::Response;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use std::fmt::Debug;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::Relaxed;
+use std::time::{Duration, SystemTime};
 // use futures::{AsyncBufReadExt, SinkExt, AsyncWriteExt};
+#[cfg(feature = "bluetooth")]
+use crate::bluetooth::central::Central;
+use crate::hive::{Result, Sender, HEADER, HEADER_NAME, HIVE_PROTOCOL, PING, PONG};
+#[cfg(feature = "websock")]
+use crate::websocket::WebSock;
 use futures::channel::mpsc::UnboundedSender;
 use futures::executor::block_on;
-use futures::{AsyncBufReadExt, SinkExt};
+use futures::{AsyncBufReadExt, AsyncReadExt, SinkExt};
 #[allow(unused_imports)]
 use log::{debug, info, trace, warn};
 use tracing::error;
-#[cfg(feature = "bluetooth")]
-use crate::bluetooth::central::Central;
-use crate::hive::{Hive, Result, Sender, HEADER, HEADER_NAME, HIVE_PROTOCOL, PING, PONG};
-#[cfg(feature = "websock")]
-use crate::websocket::WebSock;
 
 const ACK_DURATION: u64 = 30;
 
@@ -117,7 +116,7 @@ impl Peer {
         hive_name: String,
         peer_type: PeerType,
     ) -> Peer {
-        return if stream.is_some() {
+        if stream.is_some() {
             let arc_str = stream.as_ref().unwrap().clone();
             let addr = arc_str.peer_addr().unwrap().to_string();
             let mut peer = Peer {
@@ -136,26 +135,30 @@ impl Peer {
             };
 
             let send_clone = sender.clone();
+            let is_websocket = peer.is_web_socket();
 
-            match stream.as_mut() {
-                Some(s) => {
-                    let error_msg = format!("Shake failed for {}", peer.get_id_name());
-                    let _ = &peer.handshake(s, &sender).await.expect(&error_msg);
-                }
-                None => {}
+            let from = match arc_str.peer_addr() {
+                Ok(addr) => addr.to_string(),
+                _ => String::from("no peer address"),
             };
 
+            let error_msg = format!("Shake failed for {}", peer.get_id_name());
+            let reader: BufReader<TcpStream> = peer.handshake(arc_str, &sender).await.expect(&error_msg);
+
             // WebSock runs it's own read loop
-            if peer.web_sock.is_none() {
+            if !is_websocket {
                 let name_id = String::from(&*peer.get_id_name());
                 debug!("start tcp socket read loop for({})", name_id);
 
                 task::spawn(async move {
-                    read_loop(send_clone, &arc_str, name_id).await;
+                    read_loop(send_clone, name_id, from, reader)
+                        .await
+                        .expect("Read Loop Failed");
+                    // read_loop(send_clone, &arc_str, name_id).await;
                 });
             }
 
-            return peer;
+            peer
         } else {
             Peer {
                 name: Arc::new(RwLock::new(name)),
@@ -171,27 +174,46 @@ impl Peer {
                 hive_name,
                 peer_type,
             }
-        };
+        }
     }
 
-    async fn handshake(&mut self, stream: &mut TcpStream, sender: &UnboundedSender<SocketEvent>) -> Result<()> {
+    async fn handshake(
+        &mut self,
+        mut stream: TcpStream,
+        _sender: &UnboundedSender<SocketEvent>,
+    ) -> Result<BufReader<TcpStream>> {
         match self.peer_type {
             PeerType::TcpServer => {
-                debug!("<<<< SEND  CLIENT HANDSHAKE");
+                // send name of client connecting to server
+                debug!("<<<< SEND CLIENT HANDSHAKE ⭐️🔻 ");
                 let mut bm = BytesMut::new();
                 bm.put_slice(format!("{}\n", HIVE_PROTOCOL).as_bytes());
                 bm.put_u8(HEADER_NAME);
                 bm.put_slice(format!("{}\n", self.hive_name).as_bytes());
-                debug!("sending:: {:?}", bm);
+                debug!("<<<<< SENDING:: {:?} >>>>>>", bm);
                 stream.write(bm.as_ref()).await.expect("write failed");
                 stream.flush().await.expect("flush failed");
+
+                Ok(BufReader::new(stream))
             }
             PeerType::TcpClient => {
-                let mut reader = BufReader::new(stream.clone());
-                debug!("{:?} handshake....", self.get_id_name());
+                // let mut reader = BufReader::new(stream.clone());
+                let mut size_buff: [u8;4] = [0; 4];
+                let thing = AsyncReadExt::read(&mut stream, &mut size_buff).await?;
+                info!("<<<<<{} 🔥🔥🔥🔥:: {:?} >>>>",thing, size_buff);
+                let mut reader = BufReader::new(stream);
+
+                // debug!("{:?} handshake....", self.get_id_name());
+                debug!("<<<< READ CLIENT HANDSHAKE ⭐️⭐️🔺 ");
                 let mut str = String::new();
-                AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
-                debug!("start shake: {:?}", str);
+
+                AsyncReadExt::read_exact(&mut reader, &mut size_buff).await.expect("read failed");
+
+                while str.is_empty() {
+                    let bytes = AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
+                    debug!("READ: {}, {:?}", bytes, str);
+                    task::sleep(Duration::from_millis(300)).await;
+                }
                 if str == "\u{0}\u{0}\u{0}\n" {
                     // WTF!!!
                     str = "".to_string();
@@ -234,22 +256,22 @@ impl Peer {
                 };
                 // send headers
                 let name_bytes = self.hive_name.as_bytes();
-                // let mut bytes = BytesMut::with_capacity(name_bytes.len() + 3);
                 let mut bytes = BytesMut::with_capacity(name_bytes.len() + 2);
                 bytes.put_u8(HEADER);
-                // bytes.put_u8(PEER_REQUESTS);
                 bytes.put_u8(HEADER_NAME);
                 bytes.put_slice(name_bytes);
                 info!(".... send headers: {:?}", bytes);
                 self.send(bytes.freeze()).await?;
+                // Ok(None)
+                Ok(reader)
             }
             _ => {
                 unimplemented!("finish this!!");
             }
         }
 
-        debug!("shook");
-        Ok(())
+        // debug!("shook");
+        // Ok(())
     }
 
     pub fn get_name(&self) -> String {
@@ -258,19 +280,17 @@ impl Peer {
     }
     pub fn get_id_name(&self) -> String {
         match self.stream {
-            Some(ref s) => {
-                match s.peer_addr() {
-                    Ok(addr) => {
-                        let mm = format!("{:?} > {:?}", s.local_addr().unwrap(), addr);
-                        format!("{}/{}, {}", self.hive_name, self.get_name(), mm)
-                    },
-                    Err(e) => {
-                        error!("failed to get peer address: {:?}", e);
-                        String::from("No Address Found")
-                    }
+            Some(ref s) => match s.peer_addr() {
+                Ok(addr) => {
+                    let mm = format!("{:?} > {:?}", s.local_addr().unwrap(), addr);
+                    format!("{}/{}, {}", self.hive_name, self.get_name(), mm)
+                }
+                Err(e) => {
+                    error!("failed to get peer address: {:?}", e);
+                    String::from("No Address Found")
                 }
             },
-            None => String::from("No Stream")
+            None => String::from("No Stream"),
         }
         // let stream = self.stream.as_ref().unwrap();
         // let peer_addr= match stream.peer_addr() {
@@ -412,19 +432,30 @@ more bytes to complete the message
  properties: |p|=(properties)
  */
 
-async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, peer_id_string: String) {
-    let mut reader = BufReader::new(&*stream);
-    let from = match stream.peer_addr() {
-        Ok(addr) => addr.to_string(),
-        _ => String::from("no peer address"),
-    };
+async fn read_loop(
+    sender: UnboundedSender<SocketEvent>,
+    // stream: TcpStream,
+    peer_id_string: String,
+    from: String,
+    mut reader: BufReader<TcpStream>,
+) -> Result<()> {
+    // let from = match stream.peer_addr() {
+    //     Ok(addr) => addr.to_string(),
+    //     _ => String::from("no peer address"),
+    // };
+
+    // let mut reader = match reader {
+    //     Some(reader) => reader,
+    //     None => BufReader::new(stream)
+    // };
+
     let mut is_running = true;
     while is_running {
         let mut sender = sender.clone();
         let mut size_buff = [0; 4];
         // let r = AsyncReadExt::read(&mut reader, &mut size_buff).await;
-        debug!("{:?} waiting for read", peer_id_string);
-        let r = reader.read(&mut size_buff).await;
+        debug!("{:?} READING!!!!", peer_id_string);
+        let r = AsyncReadExt::read(&mut reader, &mut size_buff).await;
         let from = String::from(&from);
         match r {
             Ok(read) => {
@@ -439,7 +470,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, pee
                 } else {
                     let message_size = as_u32_be(&size_buff);
                     let mut size_buff = vec![0u8; message_size as usize];
-                    let red = reader.read_exact(&mut size_buff).await;
+                    let red = AsyncReadExt::read_exact(&mut reader, &mut size_buff).await;
                     match red {
                         Ok(_t) => {
                             // let msg = String::from(std::str::from_utf8(&size_buff).unwrap());
@@ -453,7 +484,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, pee
                             }
                         }
                         Err(e) => {
-                            eprintln!("Failed to read message {:?}", e);
+                            error!("Error reading from socket: {:?}", e);
                             sender
                                 .send(SocketEvent::Hangup { from })
                                 .await
@@ -463,7 +494,7 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, pee
                 }
             }
             Err(e) => {
-                eprintln!("ERROR: {:?}", e);
+                error!("ERROR: {:?}", e);
                 sender
                     .send(SocketEvent::Hangup { from })
                     .await
@@ -473,4 +504,5 @@ async fn read_loop(sender: UnboundedSender<SocketEvent>, stream: &TcpStream, pee
         }
     }
     debug!("<< Peer run done");
+    Ok(())
 }
