@@ -108,7 +108,7 @@ impl Peer {
 
     pub async fn new(
         name: String,
-        mut stream: Option<TcpStream>,
+        stream: Option<TcpStream>,
         peripheral: Option<Sender<Bytes>>,
         central: Option<Central>,
         sender: UnboundedSender<SocketEvent>,
@@ -198,22 +198,23 @@ impl Peer {
             }
             PeerType::TcpClient => {
                 // let mut reader = BufReader::new(stream.clone());
-                let mut size_buff: [u8;4] = [0; 4];
-                let thing = AsyncReadExt::read(&mut stream, &mut size_buff).await?;
-                info!("<<<<<{} 🔥🔥🔥🔥:: {:?} >>>>",thing, size_buff);
+                // let mut size_buff: [u8;4] = [0; 4];
+                // let thing = AsyncReadExt::read(&mut stream, &mut size_buff).await?;
+                // info!("<<<<<{} 🔥🔥🔥🔥:: {:?} >>>>",thing, size_buff);
                 let mut reader = BufReader::new(stream);
 
                 // debug!("{:?} handshake....", self.get_id_name());
                 debug!("<<<< READ CLIENT HANDSHAKE ⭐️⭐️🔺 ");
                 let mut str = String::new();
 
-                AsyncReadExt::read_exact(&mut reader, &mut size_buff).await.expect("read failed");
+                // AsyncReadExt::read_exact(&mut reader, &mut size_buff).await.expect("read failed");
 
-                while str.is_empty() {
+                // while str.is_empty() {
                     let bytes = AsyncBufReadExt::read_line(&mut reader, &mut str).await?;
-                    debug!("READ: {}, {:?}", bytes, str);
+                    debug!("READ🔥🔥🔥🔥: {}, {:?}", bytes, str);
                     task::sleep(Duration::from_millis(300)).await;
-                }
+                // }
+                info!("BYTES READ ***** : {:?}",str);
                 if str == "\u{0}\u{0}\u{0}\n" {
                     // WTF!!!
                     str = "".to_string();
