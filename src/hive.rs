@@ -12,8 +12,8 @@ use async_std::{
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
-#[allow(unused_imports)]
-use log::{debug, error, info, trace, warn};
+use tracing::{info, debug, warn, error};
+
 use toml;
 
 #[cfg(feature = "bluetooth")]
@@ -476,7 +476,7 @@ impl Hive {
             //This is where we sit for a long time and just receive events
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
-                    warn!("Task Canceled!");
+                    warn!("Hive Canceled! *******");
                 },
                 _ = self.receive_events() => {
                     debug!("DONE receive_events");
@@ -642,7 +642,8 @@ impl Hive {
             }
             _ => {
                 let err_msg = format!("No peer {} ... {}", peer_name, self.name);
-                panic!("{}", err_msg);
+                error!("Send Error: {}", err_msg);
+                return Err(err_msg.into());
             }
         };
         Ok(())
