@@ -2,7 +2,7 @@
 use bytes::{BufMut, BytesMut};
 use futures::channel::mpsc::{SendError, UnboundedSender};
 use futures::executor::block_on;
-use futures::SinkExt;
+use crate::SinkExt;
 #[allow(unused_imports)]
 use log::{debug, error, info};
 use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};

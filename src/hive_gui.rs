@@ -7,7 +7,7 @@ use std::ops::Index;
 use crate::hive::Hive;
 use crate::property::{Property, SetProperty};
 
-use futures::{SinkExt, StreamExt};
+use crate::{SinkExt, StreamExt};
 use std::rc::Rc;
 use log::kv::{Source, Value};
 use toml::macros::IntoDeserializer;

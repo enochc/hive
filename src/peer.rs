@@ -17,7 +17,7 @@ use crate::hive::{Result, Sender, HEADER, HEADER_NAME, HIVE_PROTOCOL, PING, PONG
 #[cfg(feature = "websock")]
 use crate::websocket::WebSock;
 use futures::channel::mpsc::UnboundedSender;
-use futures::SinkExt;
+use crate::SinkExt;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 #[allow(unused_imports)]
 use log::{debug, info, trace, warn};
