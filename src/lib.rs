@@ -6,6 +6,7 @@ use chrono::Local;
 use log::{Metadata, Level, Record};
 pub use log::LevelFilter;
 pub use tokio_util::sync::CancellationToken;
+pub use futures::{SinkExt, StreamExt};
 
 use std::os::raw::c_char;
 use std::sync::mpsc;

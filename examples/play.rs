@@ -66,7 +66,7 @@ impl Stream for Counter {
 #[tokio::main]
 async fn main(){
     // And now we can use it!
-    use tokio_stream::StreamExt;
+    use hive::StreamExt;
 
     let mut counter = Counter::new();
 

@@ -8,7 +8,7 @@ use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::channel::mpsc;
-use futures::{SinkExt, StreamExt};
+use crate::{SinkExt, StreamExt};
 use tracing::{info, debug, warn, error};
 
 use toml;

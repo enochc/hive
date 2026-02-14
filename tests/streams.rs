@@ -1,19 +1,47 @@
 #![allow(unused_imports)]
 use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
 use hive::hive::Hive;
-use futures::{SinkExt, StreamExt};
+use hive::{SinkExt, StreamExt};
 use hive::property::{Property, PropertyValue};
-use std::sync::{Arc, WaitTimeoutResult};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread::sleep;
 use std::time::Duration;
 use hive::init_logging;
-use log::{debug, info, error, LevelFilter};
+use log::{debug, info, error};
+use hive::LevelFilter;
 
-use std::sync::{Condvar, Mutex};
-use std::ops::Index;
-use ctrlc::Error;
-use tokio_util::sync::CancellationToken;
+use hive::CancellationToken;
+
+/// Drain the notification channel looking for a message that matches `target`.
+/// Every notification is queued, so we never lose one.
+async fn wait_for(rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>, target: &str) {
+    while let Some(val) = rx.recv().await {
+        info!("wait_for({}) got: {:?}", target, val);
+        if val == target {
+            return;
+        }
+    }
+    panic!("Channel closed before receiving {:?}", target);
+}
+
+/// Drain the notification channel until `counter` exceeds `min_count`.
+async fn wait_for_count(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
+    counter: &AtomicUsize,
+    min_count: usize,
+) {
+    loop {
+        if counter.load(Ordering::SeqCst) > min_count {
+            return;
+        }
+        match rx.recv().await {
+            Some(val) => {
+                info!("wait_for_count({}) got: {:?}, counter={}", min_count, val, counter.load(Ordering::SeqCst));
+            }
+            None => panic!("Channel closed before count reached {}", min_count),
+        }
+    }
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn streams_test() {
@@ -33,7 +61,10 @@ async fn streams_test() {
         let thing_value = Arc::new(AtomicUsize::new(0));
         let thing_value_1 = thing_value.clone();
 
-        let ack: Arc<(Mutex<String>, Condvar)> = Arc::new((Mutex::new("".into()), Condvar::new()));
+        // Use an async mpsc channel instead of Condvar.
+        // Every callback sends a string notification here; the test task
+        // reads them sequentially so nothing is ever lost.
+        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
         let props_str = r#"
     listen = "127.0.0.1:3000"
@@ -55,50 +86,48 @@ async fn streams_test() {
 
         let v = prop.value.read().unwrap().as_ref().unwrap().to_string();
         let matches = v.eq("\"orig therm name\"");
-        info!("maths: {}",matches);
+        info!("maths: {}", matches);
         assert_eq!(v, "\"orig therm name\"".to_string());
-        let ack_clone = ack.clone();
 
-        let messages_received = Arc::new(Mutex::new(0));
+        // Track how many times the thermostat-name stream fires (server + client combined).
+        let messages_received = Arc::new(AtomicUsize::new(0));
         let mr_clone = messages_received.clone();
         let mr_clone2 = messages_received.clone();
-        let mut ff = server_hive.get_mut_property_by_name("thermostatName", ).unwrap().stream.clone();
+
+        // --- server thermostat-name stream listener ---
+        let mut ff = server_hive.get_mut_property_by_name("thermostatName").unwrap().stream.clone();
+        let ntx = notify_tx.clone();
         tokio::task::spawn(async move {
             while let Some(x) = ff.next().await {
                 info!("+++++++++++++++++++++ SERV|| THERMOSTAT NAME CHANGED: {:?}", x);
                 counter_1.fetch_add(1, Ordering::SeqCst);
-                let (lock, cvar) = &*ack_clone;
-                let mut ack = lock.lock().unwrap();
-                *ack = x.to_string();
-                *mr_clone.lock().unwrap() += 1;
-                cvar.notify_one();
+                mr_clone.fetch_add(1, Ordering::SeqCst);
+                let _ = ntx.send(x.to_string());
             }
         });
 
-
-        let ack_clone = ack.clone();
+        // --- server message_received handler ---
+        let ntx = notify_tx.clone();
         server_hive.message_received.connect(move |message| {
             info!("+++++++++++++++++++++  server MESSAGE {}", message);
             counter_4.fetch_add(1, Ordering::SeqCst);
             let newc = counter_4.load(Ordering::SeqCst);
             info!("<<<< {:?}", newc);
-            let (lock, cvar) = &*ack_clone;
-            let mut ack = lock.lock().unwrap();
-            *ack = message.clone();
-            cvar.notify_one();
+            let _ = ntx.send(message);
         });
-
 
         let server_connected = server_hive.connected.clone();
         let cancellation_token = CancellationToken::new();
         let mut server_hand = server_hive.go(true, cancellation_token.clone());
 
-        let ack_clone = ack.clone();
         let mut client_hive = Hive::new_from_str_unknown("connect = \"127.0.0.1:3000\"\nname=\"client1\"");
 
         let client_thermostat_name_property = client_hive.get_mut_property_by_name("thermostatName").unwrap();
         let mut client_therm_prop_clone = client_thermostat_name_property.clone();
         let mut stream = client_thermostat_name_property.stream.clone();
+
+        // --- client thermostat-name stream listener ---
+        let ntx = notify_tx.clone();
         tokio::task::spawn(async move {
             let mut count = 1;
             while let Some(x) = stream.next().await {
@@ -113,33 +142,26 @@ async fn streams_test() {
                     panic!("verify that the property has been deleted");
                 }
                 counter_3.fetch_add(1, Ordering::SeqCst);
-                let (lock, cvar) = &*ack_clone;
-                let mut ack = lock.lock().unwrap();
-                *ack = x.to_string();
-                *mr_clone2.lock().unwrap() += 1;
-                cvar.notify_one();
+                mr_clone2.fetch_add(1, Ordering::SeqCst);
+                let _ = ntx.send(x.to_string());
             }
         });
 
-        let ack_clone = ack.clone();
+        // --- client message_received handler ---
+        let ntx = notify_tx.clone();
         client_hive.message_received.connect(move |message| {
             info!("+++++++++++++++++++++ client MESSAGE {}", message);
             counter_2.fetch_add(1, Ordering::SeqCst);
-            let (lock, cvar) = &*ack_clone;
-            let mut ack = lock.lock().unwrap();
-            *ack = message;
-            cvar.notify_one();
+            let _ = ntx.send(message);
         });
 
-        let ack_clone = ack.clone();
+        // --- client thingvalue handler ---
+        let ntx = notify_tx.clone();
         client_hive.get_mut_property_by_name("thingvalue").unwrap().on_next(move |value| {
             info!(" +++++++++++++++++++++ CLIENT thing value::::::::::::::::::::: {:?}", value);
-            let (lock, cvar) = &*ack_clone;
             let t2 = value.val.as_integer().unwrap() as usize;
             thing_value_1.store(t2, Ordering::Relaxed);
-            let mut ack = lock.lock().unwrap();
-            *ack = value.to_string();
-            cvar.notify_one();
+            let _ = ntx.send(value.to_string());
         });
 
         client_hive.get_mut_property_by_name("thermostatTarget_temp").unwrap().on_next(move |value| {
@@ -160,79 +182,31 @@ async fn streams_test() {
             counter_8.fetch_add(1, Ordering::Relaxed);
         });
 
-
         let mut client_hand = client_hive.go(true, cancellation_token);
-
-        let ack_clone = ack.clone();
 
         let (mut sender, mut receiver) = mpsc::unbounded();
         tokio::spawn(async move {
 
-            //+2 on prop initialization
-            let (lock, cvar) = &*ack;
-
             let sent1 = server_hand.send_to_peer("client1", "hey you").await; //+ 1
             info!("send: {:?}", sent1);
-            {
-                let mut got = lock.lock().unwrap();
-                while &*got != "hey you" {
-                    info!(":::::::::::::::::::: Wait for hey you: {:?}", got);
-                    got = cvar.wait(got).unwrap();
-                    // let res: WaitTimeoutResult;
-                    // (got, res) = cvar.wait_timeout(got, Duration::from_secs(2)).unwrap();
-                    // if res.timed_out() {
-                    //     panic!("timed out waiting for hey you");
-                    // }
-                    info!("                ACK hey you: {:?}", got);
-                }
-            }
+            wait_for(&mut notify_rx, "hey you").await;
+
             let sent2 = client_hand.send_to_peer("Server", "hey mr man").await; // + 1
             info!("send: {:?}", sent2);
-            {
-                let mut got = lock.lock().unwrap();
-                while &*got != "hey mr man" {
-                    info!(":::::::::::::::::::: Wait for hey mr man");
-                    got = cvar.wait(got).unwrap();
-                    // let res: WaitTimeoutResult;
-                    // (got, res) = cvar.wait_timeout(got, Duration::from_secs(2)).unwrap();
-                    // if res.timed_out() {
-                    //     panic!("timed out waiting for hey you");
-                    // }
-                    info!("                ACK mr man: {:?}", got);
-                }
-            }
+            wait_for(&mut notify_rx, "hey mr man").await;
 
             info!("SENT thermostatName = Before");
             client_hand.set_property("thermostatName", Some(&"Before".into())).await; // +2
-            {
-                let mut done = lock.lock().unwrap();
-                while *messages_received.lock().unwrap() <= 2 {
-                    info!(":::::::::::::::::::: Wait for thermostat name update {:?}, {:?}",done, messages_received);
-                    done = cvar.wait(done).unwrap();
-                    // let res: WaitTimeoutResult;
-                    // (done, res) = cvar.wait_timeout(done, Duration::from_secs(2)).unwrap();
-                    // if res.timed_out() {
-                    //     panic!("timed out waiting for hey you");
-                    // }
-                }
-                info!("                ACK thermostatName: {:?}", done);
-            }
-            info!("DELETE thermostatName");
+            // Wait until BOTH the server and client thermostat streams have fired.
+            // Initial sync gives 1 (client gets "orig therm name"), then "Before"
+            // fires on both client and server streams → total 3.
+            wait_for_count(&mut notify_rx, &messages_received, 2).await;
+            info!("thermostatName update confirmed");
 
+            info!("DELETE thermostatName");
             server_hand.delete_property("thermostatName").await;
             server_hand.set_property("thingvalue", Some(&10.into())).await; // +1
-            {
-                let mut done = lock.lock().unwrap();
-                while &*done != "10" {
-                    info!("Wait for thingvalue update to 10");
-                    done = cvar.wait(done).unwrap();
-                    // let res: WaitTimeoutResult;
-                    // (done, res) = cvar.wait_timeout(done, Duration::from_secs(2)).unwrap();
-                    // if res.timed_out() {
-                    //     panic!("timed out waiting for hey you");
-                    // }
-                }
-            }
+            wait_for(&mut notify_rx, "10").await;
 
             client_hand.hangup();
 
@@ -240,7 +214,6 @@ async fn streams_test() {
             server_hand.set_property("thermostatName", Some(&"After".into())).await;
 
             sender.send(1 as i32).await;
-
         });
 
         let done = receiver.next().await;
@@ -255,6 +228,6 @@ async fn streams_test() {
     }).await;
 
     if result.is_err() {
-        panic!("Test timed out after 3 seconds");
+        panic!("Test timed out after 50 seconds");
     }
 }

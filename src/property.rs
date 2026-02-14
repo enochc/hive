@@ -1,7 +1,4 @@
-use crate::hive::{DELETE, PROPERTIES, PROPERTY};
-use crate::signal::Signal;
-use std::convert::TryFrom;
-use tracing::trace;
+use crate::hive::{PROPERTIES, PROPERTY};
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
@@ -37,20 +34,6 @@ impl PropertyValue {
         self.val.clone()
     }
 }
-// #[derive(Default)]
-// pub struct Property {
-//     name: Box<str>,
-//     pub value: Option<PropertyType>,
-//     pub on_changed: Signal<Option<PropertyType>>,
-// }
-// impl Property {
-//     pub fn to_string(&self) -> String {
-//         return match &self.value {
-//             Some(t) => format!("{}={}", self.name, t.to_string()),
-//             None => format!("{}=None", self.name),
-//         };
-//     }
-//     pub fn from_table(table: &toml::value::Table) -> Option<Property> {
 
 impl Display for PropertyValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::result::Result<(), fmt::Error> {
@@ -109,12 +92,6 @@ impl From<i64> for PropertyValue {
     }
 }
 
-// impl Into<PropertyType> for toml::Value{
-//     fn into(self) -> PropertyType {
-//         PropertyType{toml:self}
-//     }
-// }
-
 pub(crate) const IS_BOOL: i8 = 0x19;
 pub(crate) const IS_STR: i8 = 0x20;
 pub(crate) const IS_SHORT: i8 = 0x21; // 8 bits
@@ -151,26 +128,6 @@ impl Default for PropertyStream {
         }
     }
 }
-
-// impl Sink<PropertyType> for PropertyStream {
-//     type Error = ();
-//
-//     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-//         unimplemented!()
-//     }
-//
-//     fn start_send(self: Pin<&mut Self>, item: PropertyType) -> Result<(), Self::Error> {
-//         unimplemented!()
-//     }
-//
-//     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-//         unimplemented!()
-//     }
-//
-//     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-//         unimplemented!()
-//     }
-// }
 
 impl Stream for PropertyStream {
     type Item = PropertyValue;
@@ -309,13 +266,6 @@ impl Property {
         self.name.borrow()
     }
 
-    // pub fn new(name: &str, val: Option<PropertyType>) -> Property {
-    //     return Property {
-    //         name: Box::from(name),
-    //         value: val,
-    //         on_changed: Default::default(),
-    //     };
-    // }
 
     pub fn from_value(id: &u64, val: Value) -> Property
     where
@@ -407,38 +357,10 @@ impl Property {
         };
         p
     }
-    // pub fn from_int(name: &str, val: i64) -> Property {
-    //     let small_int = u32::try_from(val);
-    //     return match small_int {
-    //         Ok(si) => Property::new(name, Some(PropertyType::from(si))),
-    //         _ => Property::new(name, Some(PropertyType::from(val))),
-    //     };
-    // }
-    // pub fn set_str(&mut self, s: &str) {
-    //     let p = PropertyType::from(s);
-    //     self.set(p);
-    // }
-    // // todo check newmaster
-    // pub fn set_bool(&mut self, b: bool) {
-    //     let p = PropertyType::from(b);
-    //     self.set(p);
-    // }
-    // pub fn set_int(&mut self, s: u32) {
-    //     let p = PropertyType::from(s);
-    //     self.set(p);
-    // }
-    // pub fn set_float(&mut self, s: f64) {
-    //     let p = PropertyType::from(s);
-    //     self.set(p);
-    // }
-
-    // pub fn set_from_prop(&mut self, v: Property) -> bool {
-    //     return self.set(v.value.as_ref().unwrap().clone());
-    // }
 
     pub fn set_from_prop(&mut self, v: Property) -> bool {
         let other = &*v.value.read().unwrap();
-        return self.set_value(other.as_ref().unwrap().clone());
+        self.set_value(other.as_ref().unwrap().clone())
     }
 
     pub fn set_value(&mut self, new_prop: PropertyValue) -> bool
@@ -468,29 +390,6 @@ impl Property {
         }
     }
 
-    // pub fn set(&mut self, v: PropertyType) -> bool
-    // where
-    //     PropertyType: std::fmt::Debug + PartialEq + Sync + Send + Clone + 'static,
-    // {
-    //     trace!("<<<< set thing {}", v);
-    //     let v_clone = v.clone();
-    //     let op_v = Some(v);
-    //
-    //     if !self.value.eq(&op_v) {
-    //         self.value = op_v;
-    //         trace!("<<<< emit change!!");
-    //
-    //         block_on(self.on_changed.emit(Some(v_clone)));
-    //         return true;
-    //     } else {
-    //         trace!("do nothing ");
-    //         return false;
-    //     }
-    // }
-    //
-    // pub fn get(&self) -> &Option<PropertyType> {
-    //     &self.value
-    // }
 }
 // I'm not currently using this anywhere
 impl SetProperty<&str> for Property {
@@ -499,36 +398,7 @@ impl SetProperty<&str> for Property {
         self.set_value(p);
     }
 }
-// /*
-//    |P|one=1\ntwo=2\nthree=3
-// */
-// pub(crate) fn properties_to_sock_str(properties: &HashMap<String, Property>) -> String {
-//     let mut message = PROPERTIES.to_string();
-//     for p in properties {
-//         message.push_str(property_to_sock_str(Some(p.1), false).unwrap().as_str());
-//         message.push('\n');
-//     }
-//     return String::from(message);
-// }
-// /*
-//    |p|one=1
-// */
-// pub(crate) fn property_to_sock_str(property: Option<&Property>, inc_head: bool) -> Option<String> {
-//     return match property {
-//         // todo option or not?
-//         Some(p) if p.value.is_some() => {
-//             let mut message = if inc_head { PROPERTY.to_string() } else { String::from("") };
-//             message.push_str(p.to_string().as_str());
-//             Some(message)
-//         }
-//         Some(p) => {
-//             let mut message = DELETE.to_string();
-//             message.push_str(p.get_name());
-//             Some(message)
-//         }
-//         _ => None,
-//     };
-// }
+
 pub trait SetProperty<T> {
     fn set(&mut self, v: T);
 }
@@ -614,22 +484,10 @@ pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
         }
     }
     bytes.freeze()
-    // let prop_str = p.to_string();
-    // let bytes = if inc_head {
-    //     let mut b = BytesMut::with_capacity(prop_str.len() + 1);
-    //     b.put_u8(PROPERTY);
-    //     b.put_slice(prop_str.as_bytes());
-    //     b.freeze()
-    // } else {
-    //     Bytes::from(prop_str)
-    // };
 }
 
 pub(crate) fn bytes_to_property(bytes: &mut Bytes) -> Option<Property> {
-    // let name_length = bytes.get_u8() as usize;
-    // let name = String::from_utf8(bytes.slice(..name_length).to_vec());
     let property_id = bytes.get_u64();
-    // bytes.advance(64);
     debug!("id: {:?}", property_id);
 
     let value_type = bytes.get_i8();
@@ -670,7 +528,6 @@ pub(crate) fn bytes_to_property(bytes: &mut Bytes) -> Option<Property> {
         IS_NONE => Some(Property::from_id(&property_id, None)),
         _ => {
             unimplemented!(".... doh, finish me {:?}", value_type)
-            // return None
         }
     }
 }
