@@ -41,7 +41,7 @@ use crate::bluetooth::blurz_cross::{BluetoothAdapter,
 };
 use crate::hive::Sender;
 use crate::peer::{SocketEvent, PeerType};
-use async_std::sync::Arc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use futures::executor::block_on;
@@ -86,7 +86,7 @@ impl Central {
         let char_path_clone = self.char_object_path.clone();
         let peer_address_clone = self.peer_address.clone();
         let mut sender_clone = self.sender.clone();
-        async_std::task::spawn(async move{
+        tokio::spawn(async move {
             debug!("LOPING OVER RECEIVER");
             loop {
                 for event in BluetoothSession::create_session(None).unwrap().incoming(1000).map(BluetoothEvent::from) {
@@ -304,7 +304,7 @@ impl Central {
                                     let sender_clone2 = tx.clone();
                                     let cc = c.get_id();
                                     *self.char_object_path.lock().unwrap() = cc.clone();
-                                    async_std::task::spawn(async move{
+                                    tokio::spawn(async move {
                                         let session: BluetoothSession = BluetoothSession::create_session(None).unwrap();
                                         let c = Characteristic::new(&session, cc);
 

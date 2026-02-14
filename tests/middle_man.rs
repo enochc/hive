@@ -1,19 +1,18 @@
-use async_std::sync::Arc;
-use futures::executor::block_on;
+use std::sync::Arc;
 use hive::hive::Hive;
-use hive::{init_logging, panic_after};
+use hive::init_logging;
 use hive::property::Property;
 use log::LevelFilter;
 #[allow(unused_imports)]
 use log::{debug, info};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Condvar, Mutex};
+use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-#[test]
-fn main() {
-    panic_after(Duration::from_millis(3_000), || {
+#[tokio::test(flavor = "multi_thread", worker_threads = 5)]
+async fn middle_man_test() {
+    let result = tokio::time::timeout(Duration::from_millis(3_000), async {
         init_logging(Some(LevelFilter::Debug));
         info!("blah blah blah");
         let counter = Arc::new(AtomicUsize::new(0));
@@ -70,29 +69,39 @@ fn main() {
 
         let mut client_hand = client_hive.go(true, cancellation_token);
 
-        block_on(async {
-            middle_hand
-                .set_property("something_else_entirely", Some(&4.into()))
-                .await;
+        middle_hand
+            .set_property("something_else_entirely", Some(&4.into()))
+            .await;
+        {
             let (lock, cvar) = &*ack;
             let mut done = lock.lock().unwrap();
 
             while *done < 2 {
-                info!(":::: hmmmm, {:?}", done);
+                info!("::::1 hmmmm, {:?}", done);
                 done = cvar.wait(done).unwrap();
             }
-            assert_eq!(counter.load(Ordering::Relaxed), 2);
+        }
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
 
-            client_hand
-                .set_property("something_else_entirely", Some(&5.into()))
-                .await;
+        client_hand
+            .set_property("something_else_entirely", Some(&5.into()))
+            .await;
 
+        {
+            let (lock, cvar) = &*ack;
+            let mut done = lock.lock().unwrap();
             while *done < 4 {
-                info!(":::: hmmmm, {:?}", done);
+                info!("::::2 hmmmm, {:?}", done);
                 done = cvar.wait(done).unwrap();
             }
+        }
 
-            assert_eq!(counter.load(Ordering::Relaxed), 4);
-        });
-    });
+        assert_eq!(counter.load(Ordering::Relaxed), 4);
+        info!("AND THAN SOME");
+    }).await;
+    info!("<<<< {:?}", result);
+
+    if result.is_err() {
+        panic!("Test timed out after 3 seconds");
+    }
 }

@@ -1,5 +1,4 @@
-use async_std;
-use async_std::sync::Arc;
+use std::sync::Arc;
 use hive::property::Property;
 use hive::property::SetProperty;
 use std::sync::atomic::{AtomicUsize, Ordering};

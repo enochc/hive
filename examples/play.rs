@@ -1,14 +1,12 @@
 
-use async_std::stream::Stream;
 use std::pin::Pin;
-use async_std::task::{Context, Poll};
-use async_std::sync::Arc;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Context, Poll};
 use hive::property::PropertyValue;
 use toml::Value;
 use std::time::Duration;
 use std::thread::sleep;
-
+use tokio_stream::{Stream};
 
 /// A stream which counts from one to five
 #[derive(Clone)]
@@ -29,7 +27,8 @@ impl Counter {
             ready,
         };
 
-        async_std::task::spawn(async move {
+        // async_std::task::spawn(async move {
+        tokio::task::spawn(async move {
             let (_lock, cvar) = &*ready_clone;
             println!("__ task spawn");
             loop {
@@ -53,7 +52,7 @@ impl Stream for Counter {
 
         let _unused = cvar.wait(is_ready).unwrap();
 
-        return if self.count < 6 {
+        if self.count < 6 {
             let op = PropertyValue::from(self.count);
             let ss = Some(op.val);
             Poll::Ready(ss)
@@ -64,14 +63,15 @@ impl Stream for Counter {
 
     }
 }
-fn main(){
+#[tokio::main]
+async fn main(){
     // And now we can use it!
-    use async_std::stream::StreamExt;
+    use tokio_stream::StreamExt;
 
     let mut counter = Counter::new();
 
     let mut counter_clone = counter.clone();
-    async_std::task::spawn(async move {
+    tokio::task::spawn(async move {
         while let Some(x) = counter_clone.next().await {
             println!("me too: {}", x);
         }
@@ -79,13 +79,13 @@ fn main(){
 
     });
 
-    async_std::task::block_on(async {
+    tokio::task::spawn(async move {
         while let Some(x) = counter.next().await {
-            println!("{}", x);
+            println!("me: {}", x);
         }
         println!("really done");
 
     });
 
-
+    println!("whatever");
 }

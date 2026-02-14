@@ -10,9 +10,9 @@ use std::pin::Pin;
 use std::sync::{Condvar, Mutex, RwLock};
 use std::task::{Context, Poll};
 
-use async_std::stream::Stream;
-use async_std::sync::Arc;
-use async_std::task::block_on;
+use tokio_stream::Stream;
+use std::sync::Arc;
+use futures::executor::block_on;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 #[allow(unused_imports)]
 use log::{debug, info};

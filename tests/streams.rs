@@ -1,15 +1,13 @@
 #![allow(unused_imports)]
 use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
 use hive::hive::Hive;
-use async_std::task;
 use futures::{SinkExt, StreamExt};
 use hive::property::{Property, PropertyValue};
-use async_std::sync::Arc;
+use std::sync::{Arc, WaitTimeoutResult};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use async_std::task::block_on;
 use std::thread::sleep;
 use std::time::Duration;
-use hive::{init_logging, panic_after};
+use hive::init_logging;
 use log::{debug, info, error, LevelFilter};
 
 use std::sync::{Condvar, Mutex};
@@ -17,12 +15,11 @@ use std::ops::Index;
 use ctrlc::Error;
 use tokio_util::sync::CancellationToken;
 
-#[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
-#[test]
-fn main() {
-    panic_after(Duration::from_millis(3_000), || {
-        init_logging(Some(LevelFilter::Debug));
-
+#[tokio::test]
+async fn streams_test() {
+    init_logging(Some(LevelFilter::Debug));
+    info!("RUNNING HIVE_HANDLER");
+    let result = tokio::time::timeout(Duration::from_millis(50_000), async {
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_1 = counter.clone();
         let counter_2 = counter.clone();
@@ -35,7 +32,6 @@ fn main() {
 
         let thing_value = Arc::new(AtomicUsize::new(0));
         let thing_value_1 = thing_value.clone();
-        // let count6 = counter.clone();
 
         let ack: Arc<(Mutex<String>, Condvar)> = Arc::new((Mutex::new("".into()), Condvar::new()));
 
@@ -67,7 +63,7 @@ fn main() {
         let mr_clone = messages_received.clone();
         let mr_clone2 = messages_received.clone();
         let mut ff = server_hive.get_mut_property_by_name("thermostatName", ).unwrap().stream.clone();
-        async_std::task::spawn(async move {
+        tokio::task::spawn(async move {
             while let Some(x) = ff.next().await {
                 info!("+++++++++++++++++++++ SERV|| THERMOSTAT NAME CHANGED: {:?}", x);
                 counter_1.fetch_add(1, Ordering::SeqCst);
@@ -84,6 +80,8 @@ fn main() {
         server_hive.message_received.connect(move |message| {
             info!("+++++++++++++++++++++  server MESSAGE {}", message);
             counter_4.fetch_add(1, Ordering::SeqCst);
+            let newc = counter_4.load(Ordering::SeqCst);
+            info!("<<<< {:?}", newc);
             let (lock, cvar) = &*ack_clone;
             let mut ack = lock.lock().unwrap();
             *ack = message.clone();
@@ -101,7 +99,7 @@ fn main() {
         let client_thermostat_name_property = client_hive.get_mut_property_by_name("thermostatName").unwrap();
         let mut client_therm_prop_clone = client_thermostat_name_property.clone();
         let mut stream = client_thermostat_name_property.stream.clone();
-        async_std::task::spawn(async move {
+        tokio::task::spawn(async move {
             let mut count = 1;
             while let Some(x) = stream.next().await {
                 info!("+++++++++++++++++++++ CLIENT THERMOSTAT NAME CHANGED: {:?}", x);
@@ -134,7 +132,6 @@ fn main() {
         });
 
         let ack_clone = ack.clone();
-        // client_hive.get_mut_property("thingvalue").unwrap().on_changed.connect(move |value|{
         client_hive.get_mut_property_by_name("thingvalue").unwrap().on_next(move |value| {
             info!(" +++++++++++++++++++++ CLIENT thing value::::::::::::::::::::: {:?}", value);
             let (lock, cvar) = &*ack_clone;
@@ -169,26 +166,38 @@ fn main() {
         let ack_clone = ack.clone();
 
         let (mut sender, mut receiver) = mpsc::unbounded();
-        task::spawn(async move {
+        tokio::spawn(async move {
 
             //+2 on prop initialization
             let (lock, cvar) = &*ack;
 
-            server_hand.send_to_peer("client1", "hey you").await; //+ 1
+            let sent1 = server_hand.send_to_peer("client1", "hey you").await; //+ 1
+            info!("send: {:?}", sent1);
             {
                 let mut got = lock.lock().unwrap();
                 while &*got != "hey you" {
                     info!(":::::::::::::::::::: Wait for hey you: {:?}", got);
                     got = cvar.wait(got).unwrap();
+                    // let res: WaitTimeoutResult;
+                    // (got, res) = cvar.wait_timeout(got, Duration::from_secs(2)).unwrap();
+                    // if res.timed_out() {
+                    //     panic!("timed out waiting for hey you");
+                    // }
                     info!("                ACK hey you: {:?}", got);
                 }
             }
-            client_hand.send_to_peer("Server", "hey mr man").await; // + 1
+            let sent2 = client_hand.send_to_peer("Server", "hey mr man").await; // + 1
+            info!("send: {:?}", sent2);
             {
                 let mut got = lock.lock().unwrap();
                 while &*got != "hey mr man" {
                     info!(":::::::::::::::::::: Wait for hey mr man");
                     got = cvar.wait(got).unwrap();
+                    // let res: WaitTimeoutResult;
+                    // (got, res) = cvar.wait_timeout(got, Duration::from_secs(2)).unwrap();
+                    // if res.timed_out() {
+                    //     panic!("timed out waiting for hey you");
+                    // }
                     info!("                ACK mr man: {:?}", got);
                 }
             }
@@ -200,6 +209,11 @@ fn main() {
                 while *messages_received.lock().unwrap() <= 2 {
                     info!(":::::::::::::::::::: Wait for thermostat name update {:?}, {:?}",done, messages_received);
                     done = cvar.wait(done).unwrap();
+                    // let res: WaitTimeoutResult;
+                    // (done, res) = cvar.wait_timeout(done, Duration::from_secs(2)).unwrap();
+                    // if res.timed_out() {
+                    //     panic!("timed out waiting for hey you");
+                    // }
                 }
                 info!("                ACK thermostatName: {:?}", done);
             }
@@ -212,6 +226,11 @@ fn main() {
                 while &*done != "10" {
                     info!("Wait for thingvalue update to 10");
                     done = cvar.wait(done).unwrap();
+                    // let res: WaitTimeoutResult;
+                    // (done, res) = cvar.wait_timeout(done, Duration::from_secs(2)).unwrap();
+                    // if res.timed_out() {
+                    //     panic!("timed out waiting for hey you");
+                    // }
                 }
             }
 
@@ -224,7 +243,7 @@ fn main() {
 
         });
 
-        let done = block_on(receiver.next());
+        let done = receiver.next().await;
 
         let c6 = thing_value.load(Ordering::Relaxed);
         assert_eq!(c6, 10);
@@ -233,7 +252,9 @@ fn main() {
         assert_eq!(c, 8);
 
         info!("done with stuff");
+    }).await;
 
-    });
+    if result.is_err() {
+        panic!("Test timed out after 3 seconds");
+    }
 }
-

@@ -1,9 +1,7 @@
-use std::sync::{Arc};
-use async_std::task;
-
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use async_std::sync::Mutex;
-use async_std::task::block_on;
+use tokio::sync::Mutex;
+use futures::executor::block_on;
 use tracing::{debug, trace};
 use futures::future::join_all;
 
@@ -37,7 +35,7 @@ impl<T> Signal<T>
             let s_clone = s.clone();
             let val_clone = val.clone();
 
-            let h = task::spawn(async move{
+            let h = tokio::spawn(async move {
                 send_emit(s_clone, val_clone).await;
             });
 
@@ -46,10 +44,14 @@ impl<T> Signal<T>
         join_all(futures).await;
 
     }
-
-    pub fn connect(&self, slot: impl Fn(T) + Send + Sync + 'static) {
+    pub async fn connect(&self, slot: impl Fn(T) + Send + Sync + 'static) {
         self.counter.fetch_add(1, Ordering::SeqCst);
-        let mut slots = block_on(self.slots.lock());
+        let mut slots = self.slots.lock().await;
         slots.push(Arc::new(slot));
     }
+    // pub fn connect(&self, slot: impl Fn(T) + Send + Sync + 'static) {
+    //     self.counter.fetch_add(1, Ordering::SeqCst);
+    //     let mut slots = block_on(self.slots.lock());
+    //     slots.push(Arc::new(slot));
+    // }
 }
