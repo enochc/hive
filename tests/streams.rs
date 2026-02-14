@@ -15,7 +15,7 @@ use std::ops::Index;
 use ctrlc::Error;
 use tokio_util::sync::CancellationToken;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn streams_test() {
     init_logging(Some(LevelFilter::Debug));
     info!("RUNNING HIVE_HANDLER");

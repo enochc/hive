@@ -2,13 +2,13 @@ use std::sync::Arc;
 use hive::hive::Hive;
 use hive::init_logging;
 use hive::property::Property;
-use log::LevelFilter;
+use hive::LevelFilter;
 #[allow(unused_imports)]
 use log::{debug, info};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
+use hive::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
 async fn middle_man_test() {

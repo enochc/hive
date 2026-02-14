@@ -3,14 +3,14 @@
 
 use std::ffi::CStr;
 use chrono::Local;
-use log::{Metadata, Level, Record, LevelFilter};
+use log::{Metadata, Level, Record};
+pub use log::LevelFilter;
+pub use tokio_util::sync::CancellationToken;
 
 use std::os::raw::c_char;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 use crate::hive::Hive;
 
 #[cfg(feature = "gui")]

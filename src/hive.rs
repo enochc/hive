@@ -146,10 +146,16 @@ impl Hive {
             None => handler,
             Some(r) => {
                 let (lock, cvar) = &*r;
-                let lock = lock.lock().unwrap();
+                let mut is_ready = lock.lock().unwrap();
                 info!("Waiting for Hive connection");
-                // let _guard = cvar.wait(lock).expect("Wait on lock failed");
-                let _guard = cvar.wait_timeout(lock, Duration::from_secs(3)).expect("Wait on lock failed");
+                while !*is_ready {
+                    let (guard, timeout_result) = cvar.wait_timeout(is_ready, Duration::from_secs(3)).expect("Wait on lock failed");
+                    is_ready = guard;
+                    if timeout_result.timed_out() {
+                        warn!("Hive connection wait timed out");
+                        break;
+                    }
+                }
                 handler
             }
         }
@@ -158,7 +164,9 @@ impl Hive {
         match self.ready.clone() {
             None => {}
             Some(ready) => {
-                let (_lock, cvar) = &*ready;
+                let (lock, cvar) = &*ready;
+                let mut is_ready = lock.lock().unwrap();
+                *is_ready = true;
                 cvar.notify_all();
             }
         }
@@ -328,8 +336,7 @@ impl Hive {
     */
 
     // servers run this to accept client connections
-    async fn accept_loop(mut sender: Sender<SocketEvent>, addr: impl ToSocketAddrs, hive_name: String) -> Result<()> {
-        let listener = TcpListener::bind(addr).await?;
+    async fn accept_loop(mut sender: Sender<SocketEvent>, listener: TcpListener, hive_name: String) -> Result<()> {
         loop {
             let (stream, peer_addr) = listener.accept().await?;
             debug!("{:?} ------------  Accepting from: {}", hive_name, peer_addr);
@@ -439,19 +446,20 @@ impl Hive {
                     port = format!("{}:{}", addr, port);
                 }
                 debug!("{:?} Listening for connections on {:?}", self.name, port);
+                // Bind the listener BEFORE spawning the accept loop
+                // so the port is guaranteed to be ready when broadcast_ready fires
+                let listener = TcpListener::bind(&port).await?;
                 let send_chan = self.sender.clone();
-                // listen for connections loop
-                let p = port.clone();
                 let name_clone = self.name.clone();
                 tokio::spawn(async move {
-                    match Hive::accept_loop(send_chan, p, name_clone).await {
+                    match Hive::accept_loop(send_chan, listener, name_clone).await {
                         Err(e) => {
                             panic!("Failed accept loop: {:?}", e)
                         }
                         _ => (),
                     }
                 });
-                // Ima TCP listener and I'm listening
+                // Port is bound and accepting — safe to signal ready
                 self.broadcast_ready();
             }
 

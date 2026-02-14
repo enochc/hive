@@ -7,12 +7,12 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt;
 use std::pin::Pin;
-use std::sync::{Condvar, Mutex, RwLock};
+use std::sync::RwLock;
 use std::task::{Context, Poll};
 
 use tokio_stream::Stream;
+use tokio_stream::wrappers::BroadcastStream;
 use std::sync::Arc;
-use futures::executor::block_on;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 #[allow(unused_imports)]
 use log::{debug, info};
@@ -124,10 +124,32 @@ pub(crate) const IS_INT: i8 = 0x16; // 64 bits
 pub(crate) const IS_FLOAT: i8 = 0x17; // 64 bits
 pub(crate) const IS_NONE: i8 = 0x18;
 
-#[derive(Default, Clone)]
 pub struct PropertyStream {
-    has_next: Arc<(Mutex<bool>, Condvar)>,
     pub value: Arc<RwLock<Option<PropertyValue>>>,
+    sender: Arc<tokio::sync::broadcast::Sender<PropertyValue>>,
+    stream: BroadcastStream<PropertyValue>,
+}
+
+impl Clone for PropertyStream {
+    fn clone(&self) -> Self {
+        PropertyStream {
+            value: self.value.clone(),
+            sender: self.sender.clone(),
+            stream: BroadcastStream::new(self.sender.subscribe()),
+        }
+    }
+}
+
+impl Default for PropertyStream {
+    fn default() -> Self {
+        let (sender, _) = tokio::sync::broadcast::channel(16);
+        let stream = BroadcastStream::new(sender.subscribe());
+        PropertyStream {
+            value: Arc::new(RwLock::new(None)),
+            sender: Arc::new(sender),
+            stream,
+        }
+    }
 }
 
 // impl Sink<PropertyType> for PropertyStream {
@@ -153,14 +175,17 @@ pub struct PropertyStream {
 impl Stream for PropertyStream {
     type Item = PropertyValue;
 
-    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let (lock, cvar) = &*self.has_next;
-        let is_ready = lock.lock().unwrap();
-
-        let _unused = cvar.wait(is_ready).unwrap();
-        let a = &*self.value.read().unwrap();
-
-        Poll::Ready(a.clone())
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.stream).poll_next(cx) {
+            Poll::Ready(Some(Ok(val))) => Poll::Ready(Some(val)),
+            Poll::Ready(Some(Err(_))) => {
+                // Lagged behind - wake to retry
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -301,13 +326,17 @@ impl Property {
 
     pub fn from_name(name: &str, val: Option<PropertyValue>) -> Property {
         let arc_val = Arc::new(RwLock::new(val));
+        let (sender, _) = tokio::sync::broadcast::channel(16);
+        let sender = Arc::new(sender);
+        let stream = BroadcastStream::new(sender.subscribe());
         Property {
             name: NAME(Some(name.to_string())),
             id: Property::hash_id(&name),
             value: arc_val.clone(),
             stream: PropertyStream {
                 value: arc_val,
-                has_next: Arc::new((Mutex::new(false), Condvar::new())),
+                sender,
+                stream,
             },
             on_next_holder: Arc::new(|_| {}),
             args: None,
@@ -315,17 +344,21 @@ impl Property {
     }
     pub fn from_id(id: &u64, val: Option<PropertyValue>) -> Property {
         let arc_val = Arc::new(RwLock::new(val));
-        return Property {
+        let (sender, _) = tokio::sync::broadcast::channel(16);
+        let sender = Arc::new(sender);
+        let stream = BroadcastStream::new(sender.subscribe());
+        Property {
             name: NAME(None),
             id: *id,
             value: arc_val.clone(),
             stream: PropertyStream {
                 value: arc_val,
-                has_next: Arc::new((Mutex::new(false), Condvar::new())),
+                sender,
+                stream,
             },
             on_next_holder: Arc::new(|_| {}),
             args: None,
-        };
+        }
     }
 
     pub fn from_toml(name: &str, val: Option<&Value>) -> Property {
@@ -417,26 +450,22 @@ impl Property {
             Some(pt) => pt.eq(&new_prop),
         };
 
-        return if !does_eq {
+        if !does_eq {
             let mut rr = self.value.write().unwrap();
             *rr = Some(new_prop.clone());
+            drop(rr);
             debug!("emit change");
-            let stream = self.stream.has_next.clone();
 
-            let on_next = async {
-                let (_, cvar) = &*stream;
-                cvar.notify_all();
-            };
-            (self.on_next_holder)(new_prop);
+            (self.on_next_holder)(new_prop.clone());
 
-            block_on(async {
-                on_next.await;
-            });
+            // Notify stream subscribers via broadcast channel
+            let _ = self.stream.sender.send(new_prop);
+
             true
         } else {
             debug!("value is the same, do nothing ");
             false
-        };
+        }
     }
 
     // pub fn set(&mut self, v: PropertyType) -> bool

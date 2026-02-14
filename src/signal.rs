@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::Mutex;
-use futures::executor::block_on;
+use std::sync::Mutex;
 use tracing::{debug, trace};
 use futures::future::join_all;
 
@@ -21,7 +20,7 @@ async fn send_emit<T>(func: Arc<dyn Fn(T) + Send + Sync + 'static>, val: T)
 impl<T> Signal<T>
     where T: Send, {
     pub async fn num_slots(self) -> usize {
-        return self.slots.lock().await.len();
+        self.slots.lock().unwrap().len()
     }
 
     pub async fn emit(&mut self, val: T)
@@ -31,7 +30,8 @@ impl<T> Signal<T>
         debug!("EMITTING:: {}", count);
         let mut futures = vec![];
 
-        for s in self.slots.lock().await.iter() {
+        let slots = self.slots.lock().unwrap().clone();
+        for s in slots.iter() {
             let s_clone = s.clone();
             let val_clone = val.clone();
 
@@ -44,14 +44,9 @@ impl<T> Signal<T>
         join_all(futures).await;
 
     }
-    pub async fn connect(&self, slot: impl Fn(T) + Send + Sync + 'static) {
+    pub fn connect(&self, slot: impl Fn(T) + Send + Sync + 'static) {
         self.counter.fetch_add(1, Ordering::SeqCst);
-        let mut slots = self.slots.lock().await;
+        let mut slots = self.slots.lock().unwrap();
         slots.push(Arc::new(slot));
     }
-    // pub fn connect(&self, slot: impl Fn(T) + Send + Sync + 'static) {
-    //     self.counter.fetch_add(1, Ordering::SeqCst);
-    //     let mut slots = block_on(self.slots.lock());
-    //     slots.push(Arc::new(slot));
-    // }
 }
