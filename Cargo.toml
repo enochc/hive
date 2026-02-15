@@ -10,11 +10,6 @@ license-file = "LICENSE.txt"
 default = []
 #default = ["gui"]
 
-[profile.dev]
-panic = "abort"
-#
-#[profile.release]
-#panic = "abort"
 
 bluetooth = ["bluster", "blurz", "uuid", "lazy_static", "regex"]
 websock = ["websocket-codec", "base64", "sha-1"]

@@ -3,7 +3,7 @@ use async_std::sync::Arc;
 use async_std::task;
 use futures::channel::{mpsc, mpsc::UnboundedReceiver, mpsc::UnboundedSender};
 use futures::executor::block_on;
-use futures::{SinkExt, StreamExt};
+use hive::{SinkExt, StreamExt};
 use hive::hive::Hive;
 use hive::init_logging;
 use hive::property::Property;

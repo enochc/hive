@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
-use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
+use hive::futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
 use hive::hive::Hive;
-use hive::{SinkExt, StreamExt};
+use hive::futures::{SinkExt, StreamExt};
 use hive::property::{Property, PropertyValue};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -53,7 +53,6 @@ async fn streams_test() {
         let counter_2 = counter.clone();
         let counter_3 = counter.clone();
         let counter_4 = counter.clone();
-        let counter_5 = counter.clone();
         let counter_6 = counter.clone();
         let counter_7 = counter.clone();
         let counter_8 = counter.clone();
@@ -116,14 +115,12 @@ async fn streams_test() {
             let _ = ntx.send(message);
         });
 
-        let server_connected = server_hive.connected.clone();
         let cancellation_token = CancellationToken::new();
-        let mut server_hand = server_hive.go(true, cancellation_token.clone());
+        let mut server_hand = server_hive.go(true, cancellation_token.clone()).await;
 
         let mut client_hive = Hive::new_from_str_unknown("connect = \"127.0.0.1:3000\"\nname=\"client1\"");
 
         let client_thermostat_name_property = client_hive.get_mut_property_by_name("thermostatName").unwrap();
-        let mut client_therm_prop_clone = client_thermostat_name_property.clone();
         let mut stream = client_thermostat_name_property.stream.clone();
 
         // --- client thermostat-name stream listener ---
@@ -182,13 +179,20 @@ async fn streams_test() {
             counter_8.fetch_add(1, Ordering::Relaxed);
         });
 
-        let mut client_hand = client_hive.go(true, cancellation_token);
+        let mut client_hand = client_hive.go(true, cancellation_token).await;
 
         let (mut sender, mut receiver) = mpsc::unbounded();
         tokio::spawn(async move {
+            // Wait for the initial property sync to complete.
+            // When the client receives "orig therm name" from the server,
+            // it means the server has registered the client peer AND
+            // the full handshake (including property transfer) is done.
+            wait_for_count(&mut notify_rx, &messages_received, 0).await;
+            info!("Initial property sync confirmed, proceeding with test");
 
             let sent1 = server_hand.send_to_peer("client1", "hey you").await; //+ 1
             info!("send: {:?}", sent1);
+            // test sometimes failing here, client appears to disconnect
             wait_for(&mut notify_rx, "hey you").await;
 
             let sent2 = client_hand.send_to_peer("Server", "hey mr man").await; // + 1
@@ -208,12 +212,12 @@ async fn streams_test() {
             server_hand.set_property("thingvalue", Some(&10.into())).await; // +1
             wait_for(&mut notify_rx, "10").await;
 
-            client_hand.hangup();
+            client_hand.hangup().await;
 
             // These should not be counted, because we deleted the ThermostatName
             server_hand.set_property("thermostatName", Some(&"After".into())).await;
 
-            sender.send(1 as i32).await;
+            sender.send(1i32).await.expect("TODO: panic message");
         });
 
         let done = receiver.next().await;

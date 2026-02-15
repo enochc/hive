@@ -1,8 +1,7 @@
 // use std::sync::mpmc::SendError;
 use bytes::{BufMut, BytesMut};
 use futures::channel::mpsc::{SendError, UnboundedSender};
-use futures::executor::block_on;
-use crate::SinkExt;
+use crate::futures::SinkExt;
 #[allow(unused_imports)]
 use log::{debug, error, info};
 use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
@@ -71,8 +70,8 @@ impl Handler {
 
     }
 
-    pub fn hangup(&mut self) {
-        block_on(self.sender.send(SocketEvent::Hangup{from:String::from("")}))
+    pub async fn hangup(&mut self) {
+        self.sender.send(SocketEvent::Hangup{from:String::from("")}).await
             .expect("failed to hangup");
     }
 

@@ -9,7 +9,7 @@ use tokio::{
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use base64::{Engine as _, engine::general_purpose};
 use bytes::{Bytes, BytesMut};
-use futures::SinkExt;
+use crate::SinkExt;
 use futures::channel::mpsc::UnboundedSender;
 #[allow(unused_imports)]
 use log::{debug, info, trace};

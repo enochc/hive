@@ -4,11 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{collections::HashMap, fs};
 
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use futures::channel::mpsc;
-use crate::{SinkExt, StreamExt};
+use crate::futures::channel::mpsc;
+use crate::futures::{SinkExt, StreamExt};
 use tracing::{info, debug, warn, error};
 
 use toml;
@@ -21,7 +21,7 @@ use crate::property::{bytes_to_property, properties_to_bytes, property_to_bytes,
 use crate::signal::Signal;
 use ctrlc::Error;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Condvar, Mutex, Weak};
+use std::sync::{Mutex, Weak};
 use tokio_util::sync::CancellationToken;
 use toml::Value;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -43,7 +43,7 @@ pub struct Hive {
     pub message_received: Signal<String>,
     pub connected: Arc<AtomicBool>,
     advertising: Arc<AtomicBool>,
-    ready: Option<Arc<(Mutex<bool>, Condvar)>>,
+    ready: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl Debug for Hive {
@@ -129,46 +129,31 @@ impl Hive {
         return self.connected.load(Ordering::Relaxed);
     }
 
-    pub fn go(mut self, wait: bool, cancellation_token: CancellationToken) -> Handler {
+    pub async fn go(mut self, wait: bool, cancellation_token: CancellationToken) -> Handler {
         //This consumes the Hive and returns a handler and spawns it's run thread in a task
-        if wait {
-            self.ready = Some(Arc::new((Mutex::new(false), Condvar::new())));
-        }
+        let notify = if wait {
+            let n = Arc::new(tokio::sync::Notify::new());
+            self.ready = Some(n.clone());
+            Some(n)
+        } else {
+            None
+        };
 
         let handler = self.get_handler();
-        let ready_clone = self.ready.clone();
-        let cancellation_token_clone = cancellation_token.clone();
         tokio::spawn(async move {
-            self.run(cancellation_token_clone).await.expect("Failed to run Hive");
+            self.run(cancellation_token).await.expect("Failed to run Hive");
         });
 
-        match ready_clone {
-            None => handler,
-            Some(r) => {
-                let (lock, cvar) = &*r;
-                let mut is_ready = lock.lock().unwrap();
-                info!("Waiting for Hive connection");
-                while !*is_ready {
-                    let (guard, timeout_result) = cvar.wait_timeout(is_ready, Duration::from_secs(3)).expect("Wait on lock failed");
-                    is_ready = guard;
-                    if timeout_result.timed_out() {
-                        warn!("Hive connection wait timed out");
-                        break;
-                    }
-                }
-                handler
-            }
+        if let Some(n) = notify {
+            info!("Waiting for Hive connection");
+            n.notified().await;
+            info!("Hive connection ready");
         }
+        handler
     }
     fn broadcast_ready(&self) {
-        match self.ready.clone() {
-            None => {}
-            Some(ready) => {
-                let (lock, cvar) = &*ready;
-                let mut is_ready = lock.lock().unwrap();
-                *is_ready = true;
-                cvar.notify_all();
-            }
+        if let Some(notify) = &self.ready {
+            notify.notify_one();
         }
     }
 
