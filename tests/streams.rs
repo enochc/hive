@@ -83,7 +83,7 @@ async fn streams_test() {
         let mut server_hive = Hive::new_from_str_unknown(props_str);
         let prop = server_hive.get_mut_property_by_name("thermostatName").unwrap();
 
-        let v = prop.value.read().unwrap().as_ref().unwrap().to_string();
+        let v = prop.get_value().unwrap().to_string();
         let matches = v.eq("\"orig therm name\"");
         info!("maths: {}", matches);
         assert_eq!(v, "\"orig therm name\"".to_string());

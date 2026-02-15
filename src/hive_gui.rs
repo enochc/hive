@@ -7,12 +7,10 @@ use std::ops::Index;
 use crate::hive::Hive;
 use crate::property::{Property, SetProperty};
 
-use crate::{SinkExt, StreamExt};
+use crate::futures::{SinkExt, StreamExt};
 use std::rc::Rc;
-use log::kv::{Source, Value};
 use toml::macros::IntoDeserializer;
 use crossbeam_channel::{bounded, RecvError, select, Sender};
-use async_std::task::block_on;
 
 pub trait Gui {
     fn launch(hive: Option<Hive>);
@@ -71,7 +69,7 @@ impl Gui for HiveWindow {
         // let mut sender2 = sender.clone();
         let mut done:bool = false;
 
-        async_std::task::spawn(async move {
+        tokio::task::spawn(async move {
             loop {
                 while !done {
                     match receiver.recv() {//next().await {

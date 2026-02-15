@@ -9,7 +9,8 @@ use hive::property::Property;
 #[cfg(feature = "gui")]
 slint::include_modules!();
 
-fn main(){
+#[tokio::main]
+async fn main(){
     if !cfg!(feature = "gui") {
         warn!("Feature \"GUI\" is not enabled.")
     }

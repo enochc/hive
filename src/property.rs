@@ -1,14 +1,13 @@
 use crate::hive::{PROPERTIES, PROPERTY};
 
-use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt;
 use std::pin::Pin;
-use std::sync::RwLock;
 use std::task::{Context, Poll};
 
+use tokio::sync::watch;
 use tokio_stream::Stream;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::WatchStream;
 use std::sync::Arc;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 #[allow(unused_imports)]
@@ -101,30 +100,47 @@ pub(crate) const IS_INT: i8 = 0x16; // 64 bits
 pub(crate) const IS_FLOAT: i8 = 0x17; // 64 bits
 pub(crate) const IS_NONE: i8 = 0x18;
 
+/// Reactive stream for observing property value changes.
+///
+/// Backed by a `tokio::sync::watch` channel — a single current value shared
+/// between one writer and many readers. Each clone gets an independent stream
+/// cursor that yields only values changed *after* the clone was created.
+///
+/// The watch channel also serves as the canonical storage for the property's
+/// current value, eliminating the need for a separate `Arc<RwLock<...>>`.
 pub struct PropertyStream {
-    pub value: Arc<RwLock<Option<PropertyValue>>>,
-    sender: Arc<tokio::sync::broadcast::Sender<PropertyValue>>,
-    stream: BroadcastStream<PropertyValue>,
+    sender: Arc<watch::Sender<Option<PropertyValue>>>,
+    stream: WatchStream<Option<PropertyValue>>,
 }
 
 impl Clone for PropertyStream {
     fn clone(&self) -> Self {
+        // subscribe() creates a new independent receiver starting from the current value.
+        // from_changes() skips the current value and only yields future updates,
+        // matching the semantics of the previous broadcast-based implementation.
         PropertyStream {
-            value: self.value.clone(),
             sender: self.sender.clone(),
-            stream: BroadcastStream::new(self.sender.subscribe()),
+            stream: WatchStream::from_changes(self.sender.subscribe()),
         }
     }
 }
 
 impl Default for PropertyStream {
     fn default() -> Self {
-        let (sender, _) = tokio::sync::broadcast::channel(16);
-        let stream = BroadcastStream::new(sender.subscribe());
+        let (sender, rx) = watch::channel(None);
         PropertyStream {
-            value: Arc::new(RwLock::new(None)),
             sender: Arc::new(sender),
-            stream,
+            stream: WatchStream::from_changes(rx),
+        }
+    }
+}
+
+impl PropertyStream {
+    fn new(initial: Option<PropertyValue>) -> Self {
+        let (sender, rx) = watch::channel(initial);
+        PropertyStream {
+            sender: Arc::new(sender),
+            stream: WatchStream::from_changes(rx),
         }
     }
 }
@@ -133,26 +149,28 @@ impl Stream for PropertyStream {
     type Item = PropertyValue;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match Pin::new(&mut self.stream).poll_next(cx) {
-            Poll::Ready(Some(Ok(val))) => Poll::Ready(Some(val)),
-            Poll::Ready(Some(Err(_))) => {
-                // Lagged behind - wake to retry
-                cx.waker().wake_by_ref();
-                Poll::Pending
+        // WatchStream yields Option<PropertyValue>.
+        // We filter out None (property cleared/deleted) and only surface real values.
+        // When the watch sender is dropped, the stream closes naturally.
+        loop {
+            match Pin::new(&mut self.stream).poll_next(cx) {
+                Poll::Ready(Some(Some(val))) => return Poll::Ready(Some(val)),
+                Poll::Ready(Some(None)) => continue, // Value cleared, keep waiting
+                Poll::Ready(None) => return Poll::Ready(None), // Sender dropped, stream ends
+                Poll::Pending => return Poll::Pending,
             }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
         }
     }
 }
 
 impl Debug for Property {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let val = self.stream.sender.borrow();
         write!(
             f,
             "{} value = {:?}, args = {:?}",
             self.name,
-            *self.value.read().unwrap(),
+            &*val,
             self.args
         )
     }
@@ -176,7 +194,7 @@ impl From<&str> for NAME {
         NAME(Some(String::from(value)))
     }
 }
-impl Borrow<str> for NAME {
+impl std::borrow::Borrow<str> for NAME {
     fn borrow(&self) -> &str {
         match &self.0 {
             None => "",
@@ -196,10 +214,6 @@ impl Clone for NAME {
 pub struct Property {
     pub name: NAME,
     pub id: u64,
-    pub value: Arc<RwLock<Option<PropertyValue>>>,
-    // on_changed was fun, kind of QT like signal/slot binding, but it's not necessary
-    // without it the onChanged signal I can implement Clone if I feel so inclined
-    // pub on_changed: Signal<Option<PropertyType>>,
     pub stream: PropertyStream,
     on_next_holder: Arc<dyn Fn(PropertyValue) + Send + Sync + 'static>,
     pub args: Option<Table>,
@@ -209,27 +223,32 @@ impl Property {
     pub fn hash_id(val: &str) -> u64 {
         let mut hasher = AHasher::default();
         hasher.write(val.as_bytes());
-        let rr = hasher.finish();
-        // println!("<< {}: {}",val,  rr);
-        rr
+        hasher.finish()
     }
+
+    /// Returns a clone of the current toml Value, if set.
     pub fn get_value(&self) -> Option<Value> {
-        let rr = &*self.value.read().unwrap();
-        match rr {
-            None => None,
-            Some(v) => Some(v.clone().val),
-        }
+        let current = self.stream.sender.borrow();
+        current.as_ref().map(|v| v.val.clone())
     }
+
+    /// Returns a clone of the current PropertyValue, if set.
+    pub fn current_value(&self) -> Option<PropertyValue> {
+        self.stream.sender.borrow().clone()
+    }
+
     pub fn is_none(&self) -> bool {
-        self.value.read().unwrap().is_none()
+        self.stream.sender.borrow().is_none()
     }
+
     pub fn to_string(&self) -> String {
-        let v = &*self.value.read().unwrap();
-        match v {
+        let v = self.stream.sender.borrow();
+        match &*v {
             Some(t) => format!("{}={}", self.name, t.val.to_string()),
             None => format!("{}=None", self.name),
         }
     }
+
     fn rest_get(&mut self) -> Result<bool> {
         if cfg!(feature = "rest") {
             let table = self.args.as_ref().unwrap();
@@ -255,7 +274,6 @@ impl Property {
         if table.keys().len() != 1 {
             // return None
         }
-        // for key in table.keys(){
         let key = table.keys().nth(0).unwrap();
         let val = table.get(key);
         let p = Property::from_toml(key.as_str(), val);
@@ -263,9 +281,11 @@ impl Property {
     }
 
     pub fn get_name(&self) -> &str {
-        self.name.borrow()
+        match &self.name.0 {
+            None => "",
+            Some(n) => n.as_str(),
+        }
     }
-
 
     pub fn from_value(id: &u64, val: Value) -> Property
     where
@@ -275,37 +295,20 @@ impl Property {
     }
 
     pub fn from_name(name: &str, val: Option<PropertyValue>) -> Property {
-        let arc_val = Arc::new(RwLock::new(val));
-        let (sender, _) = tokio::sync::broadcast::channel(16);
-        let sender = Arc::new(sender);
-        let stream = BroadcastStream::new(sender.subscribe());
         Property {
             name: NAME(Some(name.to_string())),
-            id: Property::hash_id(&name),
-            value: arc_val.clone(),
-            stream: PropertyStream {
-                value: arc_val,
-                sender,
-                stream,
-            },
+            id: Property::hash_id(name),
+            stream: PropertyStream::new(val),
             on_next_holder: Arc::new(|_| {}),
             args: None,
         }
     }
+
     pub fn from_id(id: &u64, val: Option<PropertyValue>) -> Property {
-        let arc_val = Arc::new(RwLock::new(val));
-        let (sender, _) = tokio::sync::broadcast::channel(16);
-        let sender = Arc::new(sender);
-        let stream = BroadcastStream::new(sender.subscribe());
         Property {
             name: NAME(None),
             id: *id,
-            value: arc_val.clone(),
-            stream: PropertyStream {
-                value: arc_val,
-                sender,
-                stream,
-            },
+            stream: PropertyStream::new(val),
             on_next_holder: Arc::new(|_| {}),
             args: None,
         }
@@ -359,29 +362,32 @@ impl Property {
     }
 
     pub fn set_from_prop(&mut self, v: Property) -> bool {
-        let other = &*v.value.read().unwrap();
-        self.set_value(other.as_ref().unwrap().clone())
+        let other = v.stream.sender.borrow();
+        match &*other {
+            Some(pv) => self.set_value(pv.clone()),
+            None => false,
+        }
     }
 
     pub fn set_value(&mut self, new_prop: PropertyValue) -> bool
     where
         PropertyValue: Debug + PartialEq + Sync + Send + Clone + 'static,
     {
-        let does_eq = match &*self.value.read().unwrap() {
-            None => false,
-            Some(pt) => pt.eq(&new_prop),
-        };
+        let does_eq = {
+            let current = self.stream.sender.borrow();
+            match &*current {
+                None => false,
+                Some(pt) => pt.eq(&new_prop),
+            }
+        }; // borrow dropped before we modify
 
         if !does_eq {
-            let mut rr = self.value.write().unwrap();
-            *rr = Some(new_prop.clone());
-            drop(rr);
             debug!("emit change");
 
-            (self.on_next_holder)(new_prop.clone());
-
-            // Notify stream subscribers via broadcast channel
-            let _ = self.stream.sender.send(new_prop);
+            // Store value in watch channel and notify all stream subscribers in one step.
+            // send_modify borrows in-place — only the on_next callback needs a clone.
+            self.stream.sender.send_modify(|val| *val = Some(new_prop.clone()));
+            (self.on_next_holder)(new_prop);
 
             true
         } else {
@@ -409,7 +415,7 @@ pub(crate) fn properties_to_bytes(properties: &HashMap<u64, Property>) -> Bytes 
     let mut bytes = BytesMut::new();
     bytes.put_u8(PROPERTIES);
     for p in properties {
-        if p.1.value.read().unwrap().is_some() {
+        if p.1.stream.sender.borrow().is_some() {
             bytes.put_slice(&property_to_bytes(p.1, false));
         }
     }
@@ -425,7 +431,8 @@ pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
     }
     bytes.put_u64(property.id);
 
-    match &*property.value.read().unwrap() {
+    let val = property.stream.sender.borrow();
+    match &*val {
         None => {
             bytes.put_i8(IS_NONE);
         }

@@ -1,16 +1,15 @@
 #![allow(unused_imports)]
-use async_std::sync::Arc;
-use async_std::task;
-use futures::channel::{mpsc, mpsc::UnboundedReceiver, mpsc::UnboundedSender};
-use futures::executor::block_on;
-use hive::{SinkExt, StreamExt};
+
+use hive::futures::channel::{mpsc, mpsc::UnboundedReceiver, mpsc::UnboundedSender};
+use hive::futures::executor::block_on;
+use hive::futures::{SinkExt, StreamExt};
 use hive::hive::Hive;
 use hive::init_logging;
 use hive::property::Property;
 use log::{debug, error, info};
 use log::{Level, LevelFilter, Metadata, Record};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::sleep;
 use tokio_util::sync::CancellationToken;
 

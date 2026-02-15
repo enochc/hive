@@ -41,7 +41,7 @@ async fn middle_man_test() {
             cvar.notify_one();
         });
         let cancellation_token = CancellationToken::new();
-        server_hive.go(true, cancellation_token.clone());
+        server_hive.go(true, cancellation_token.clone()).await;
 
         let props_str = r#"
     name = "MiddleMan"
@@ -49,7 +49,7 @@ async fn middle_man_test() {
     listen="3001"
     "#;
         let middle_man = Hive::new_from_str_unknown(props_str);
-        let mut middle_hand = middle_man.go(true, cancellation_token.clone());
+        let mut middle_hand = middle_man.go(true, cancellation_token.clone()).await;
 
         let props_str = r#"
     connect="3001"
@@ -67,7 +67,7 @@ async fn middle_man_test() {
             cvar.notify_one();
         });
 
-        let mut client_hand = client_hive.go(true, cancellation_token);
+        let mut client_hand = client_hive.go(true, cancellation_token).await;
 
         middle_hand
             .set_property("something_else_entirely", Some(&4.into()))

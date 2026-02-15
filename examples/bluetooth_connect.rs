@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
 use futures::channel::{mpsc, mpsc::UnboundedReceiver, mpsc::UnboundedSender};
 use futures::executor::block_on;
-use hive::{SinkExt, StreamExt};
+use hive::futures::{SinkExt, StreamExt};
 use hive::hive::Hive;
 use hive::init_logging;
 use hive::property::Property;
