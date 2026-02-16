@@ -10,7 +10,7 @@ use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 use hive::CancellationToken;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 5)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn middle_man_test() {
     let result = tokio::time::timeout(Duration::from_millis(3_000), async {
         init_logging(Some(LevelFilter::Debug));
