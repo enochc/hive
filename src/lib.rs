@@ -22,6 +22,8 @@ pub mod hive;
 pub mod peer;
 pub mod handler;
 
+pub mod backoff;
+
 #[cfg(feature = "websock")]
 pub mod websocket;
 

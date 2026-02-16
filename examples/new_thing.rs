@@ -2,7 +2,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
 use std::thread;
 use std::time::Duration;
-use async_std::task;
 use futures::executor::block_on;
 use log::debug;
 use slint::private_unstable_api::re_exports::Size;
@@ -12,13 +11,10 @@ use hive::hive::Hive;
 
 
 
-
-fn main() {
-    block_on(done2());
+#[tokio::main]
+async fn main() {
     // block_on(doit());
-}
 
-async fn done2(){
     let b = BackOff::new(Duration::from_millis(1_000),||{
         println!("<<< **** 1");
     }).await;
