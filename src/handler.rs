@@ -1,13 +1,12 @@
+// use std::sync::mpmc::SendError;
 use bytes::{BufMut, BytesMut};
-use futures::channel::mpsc::UnboundedSender;
-use futures::executor::block_on;
-use futures::SinkExt;
+use futures::channel::mpsc::{SendError, UnboundedSender};
+use crate::futures::SinkExt;
 #[allow(unused_imports)]
 use log::{debug, error, info};
-
 use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
 use crate::peer::SocketEvent;
-use crate::property::{Property, property_to_bytes, PropertyValue};
+use crate::property::{Property, property_to_bytes, PropertyValue, PropertyType};
 
 #[derive(Clone)]
 pub struct Handler {
@@ -15,8 +14,13 @@ pub struct Handler {
     pub from_name: String,
 }
 
-
 impl Handler {
+
+    pub async fn send_property_value(&mut self, prop_name: &str, prop_value: Option<&PropertyType>) {
+        let p = Property::from_toml(prop_name, prop_value);
+        self.send_property(p).await;
+    }
+
     pub fn set_str(&self, id:&u64, value:&str){
         let _prop = Property::from_value(id, value.into());
     }
@@ -51,7 +55,7 @@ impl Handler {
         self.sender.send(socket_event).await.unwrap();
     }
 
-    pub async fn send_to_peer(&mut self, peer_name:&str, msg:&str){
+    pub async fn send_to_peer(&mut self, peer_name:&str, msg:&str) -> Result<(), SendError>{
         let mut bytes = BytesMut::with_capacity(peer_name.len()+msg.len()+2);
         bytes.put_u8(PEER_MESSAGE);
         bytes.put_slice(peer_name.as_bytes());
@@ -62,12 +66,12 @@ impl Handler {
             from: String::from(""),
             msg: bytes.freeze()
         };
-        self.sender.send(socket_event).await.expect("failed to send to peer");
+        self.sender.send(socket_event).await //.expect("failed to send to peer");
 
     }
 
-    pub fn hangup(&mut self) {
-        block_on(self.sender.send(SocketEvent::Hangup{from:String::from("")}))
+    pub async fn hangup(&mut self) {
+        self.sender.send(SocketEvent::Hangup{from:String::from("")}).await
             .expect("failed to hangup");
     }
 

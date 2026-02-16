@@ -1,18 +1,17 @@
 #![allow(unused_imports)]
-use futures::channel::{mpsc, mpsc::UnboundedSender, mpsc::UnboundedReceiver};
+
+use hive::futures::channel::{mpsc, mpsc::UnboundedReceiver, mpsc::UnboundedSender};
+use hive::futures::executor::block_on;
+use hive::futures::{SinkExt, StreamExt};
 use hive::hive::Hive;
-use async_std::task;
-use futures::{SinkExt, StreamExt};
-use hive::property::Property;
-use futures::executor::block_on;
-use std::thread::sleep;
-use log::{Metadata, Level, Record, LevelFilter};
 use hive::init_logging;
-use log::{debug, info, error};
-use async_std::sync::Arc;
+use hive::property::Property;
+use log::{debug, error, info};
+use log::{Level, LevelFilter, Metadata, Record};
 use std::sync::atomic::{AtomicBool, Ordering};
-use simple_signal::{self, Signal};
-use std::sync::{Mutex, Condvar};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::sleep;
+use tokio_util::sync::CancellationToken;
 
 #[allow(unused_must_use, unused_variables, unused_mut, unused_imports)]
 fn main() {
@@ -37,40 +36,39 @@ fn main() {
     #get = "http://127.0.0.1:8000/hive/get"
 
     "#;
-    let mut server_hive = Hive::new_from_str(props_str);
+    let mut server_hive = Hive::new_from_str_unknown(props_str);
 
-    use simple_signal::{self, Signal};
-
-    server_hive.get_mut_property(&Property::hash_id("turn")).unwrap().on_next(move |value|{
-        debug!("<<<< TURN: {:?}", value);
-    });
+    server_hive
+        .get_mut_property(&Property::hash_id("turn"))
+        .unwrap()
+        .on_next(move |value| {
+            debug!("<<<< TURN: {:?}", value);
+        });
 
     let advertising = server_hive.get_advertising();
 
     let is_running: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(true), Condvar::new()));
 
-    // listens for termination signal: (ctrl+c)
-    simple_signal::set_handler(&[Signal::Int, Signal::Term], {
-        let run_clone = is_running.clone();
-
-        move |_| {
-            info!("Stopping...");
-            let (lock, cvar) = &*run_clone;
-            let mut running = lock.lock().unwrap();
-            *running = false;
-            cvar.notify_one();
-        }
+    let c_token = CancellationToken::new();
+    let c_token2 = c_token.child_token();
+    let run_clone = is_running.clone();
+    let res = ctrlc::set_handler(move || {
+        info!("Stopping...");
+        let (lock, cvar) = &*run_clone;
+        let mut running = lock.lock().unwrap();
+        *running = false;
+        cvar.notify_one();
+        c_token2.cancelled();
     });
+
     let (lock, cvar) = &*is_running;
 
-    let handler = server_hive.go(true);
+    let handler = server_hive.go(true, c_token);
 
     let mut running = lock.lock().unwrap();
     while *running {
         running = cvar.wait(running).unwrap();
     }
 
-
     debug!("Done!! ");
-
 }

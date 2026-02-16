@@ -74,7 +74,7 @@ impl Peripheral {
         let subscription: Arc<RwLock<Option<NotifySubscribe>>> = Arc::new(RwLock::new(None));
         let sub_clone = subscription.clone();
 
-        async_std::task::spawn(async move {
+        tokio::spawn(async move {
             debug!("Starting notify loop");
             while let Some(bytes) = bytes_rx.next().await {
                 debug!("notify: {:?}", bytes);

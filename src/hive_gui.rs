@@ -89,7 +89,7 @@ impl Gui for HiveWindow {
         window.set_properties(properties_rc);
         let mut sender2 = sender.clone();
 
-        async_std::task::spawn(async move {
+        tokio::task::spawn(async move {
             loop {
                 while (!sender2.is_closed()) {
                     match receiver.next().await {
