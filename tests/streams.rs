@@ -121,6 +121,7 @@ async fn streams_test() {
         let mut client_hive = Hive::new_from_str_unknown("connect = \"127.0.0.1:3000\"\nname=\"client1\"");
 
         let client_thermostat_name_property = client_hive.get_mut_property_by_name("thermostatName").unwrap();
+
         let mut stream = client_thermostat_name_property.stream.clone();
 
         // --- client thermostat-name stream listener ---

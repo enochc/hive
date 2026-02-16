@@ -57,7 +57,11 @@ pub static LOGGER: SimpleLogger = SimpleLogger;
 
 pub fn init_logging(level:Option<LevelFilter>){
     let my_level = level.unwrap_or_else(|| LevelFilter::Trace);
-    log::set_logger(&LOGGER).map(|()| log::set_max_level(my_level)).expect("failed to init logger");
+    // set_logger can only succeed once per process; ignore AlreadySet
+    // errors so multiple tests sharing a process don't panic.
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(my_level);
+    }
 }
 
 
