@@ -18,7 +18,9 @@
 ///
 /// Each Hive property name maps to an MQTT topic via a configurable prefix:
 ///
-///     <topic_prefix>/<property_name>
+/// ```text
+/// <topic_prefix>/<property_name>
+/// ```
 ///
 /// For example, with prefix `"hive/home"` and property `"lightValue"`, the
 /// topic would be `"hive/home/lightValue"`.

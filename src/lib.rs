@@ -22,7 +22,7 @@ pub mod hive;
 pub mod peer;
 pub mod handler;
 
-pub mod backoff;
+// mod backoff; // unused — property debounce is handled in Property::set_value
 
 #[cfg(feature = "websock")]
 pub mod websocket;

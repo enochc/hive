@@ -834,16 +834,23 @@ impl Hive {
                                 self.properties.remove(&p.id);
                             } else {
                                 self.broadcast(PROPERTY, &p, from).await?;
-                                // Publish to MQTT if the change did NOT originate from MQTT
+                                let prop_id = p.id;
+                                self.set_property(p);
+                                // Publish to MQTT if the change did NOT originate from MQTT.
+                                // We look up the property from self.properties by ID because
+                                // the property decoded from the wire format carries only the
+                                // numeric hash — not the name — and we need the name to
+                                // build the MQTT topic.
                                 #[cfg(feature = "mqtt")]
                                 if from != "mqtt" {
                                     if let Some(ref handle) = self.mqtt_handle {
-                                        if let Err(e) = handle.publish(&p).await {
-                                            warn!("MQTT publish failed: {:?}", e);
+                                        if let Some(named_prop) = self.properties.get(&prop_id) {
+                                            if let Err(e) = handle.publish(named_prop).await {
+                                                warn!("MQTT publish failed: {:?}", e);
+                                            }
                                         }
                                     }
                                 }
-                                self.set_property(p);
                             }
                         }
                     }

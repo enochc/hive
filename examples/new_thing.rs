@@ -2,11 +2,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
 use std::thread;
 use std::time::Duration;
-use futures::executor::block_on;
-use log::debug;
-use slint::private_unstable_api::re_exports::Size;
-use hive::backoff::BackOff;
-use hive::hive::Hive;
+
 
 
 
@@ -15,20 +11,20 @@ use hive::hive::Hive;
 async fn main() {
     // block_on(doit());
 
-    let b: BackOff = BackOff::new(Duration::from_millis(1_000),||{
-        println!("<<< **** 1");
-    }).await;
-    // task::sleep(Duration::from_millis(100)).await;
-    b.update(||{
-        println!("<<< **** 2");
-    }).await;
-    let www = b.update(||{
-        println!("<<< **** 2");
-    }).await;
-    let (x,y) = &*www;
-    let some = x.lock().unwrap();
-    let ss = y.wait(some).unwrap();
-    println!("<<< done that!! {}", *ss);
+    // let b: BackOff = BackOff::new(Duration::from_millis(1_000),||{
+    //     println!("<<< **** 1");
+    // }).await;
+    // // task::sleep(Duration::from_millis(100)).await;
+    // b.update(||{
+    //     println!("<<< **** 2");
+    // }).await;
+    // let www = b.update(||{
+    //     println!("<<< **** 2");
+    // }).await;
+    // let (x,y) = &*www;
+    // let some = x.lock().unwrap();
+    // let ss = y.wait(some).unwrap();
+    // println!("<<< done that!! {}", *ss);
 }
 async fn done() {
     let b1 = Arc::new(Mutex::new(true));
@@ -103,7 +99,7 @@ async fn doit(){
     *&counter.load( Ordering::Acquire);
     *started = "no";
 
-    task::sleep(Duration::from_millis(1_000)).await;
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
     cvar.notify_all();
     counter.store(0, Ordering::Relaxed);
     println!("<<< counted:: {}",counter.load(Ordering::Relaxed));

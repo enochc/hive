@@ -1,3 +1,6 @@
+#![allow(unused_imports)]
+#![cfg(feature = "mqtt")]
+
 /// Integration test for the MQTT peer.
 ///
 /// Requires an MQTT broker running on 127.0.0.1:1883.
@@ -7,8 +10,7 @@
 ///     docker run -it -p 1883:1883 eclipse-mosquitto:2 \
 ///         mosquitto -c /mosquitto-no-auth.conf
 
-#![allow(unused_imports)]
-#![cfg(feature = "mqtt")]
+
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,6 +46,7 @@ fn should_skip() -> bool {
 /// synchronize property values through MQTT topics.
 ///
 /// Hive A publishes a property change → MQTT broker → Hive B receives it.
+/// Run with mosquitto -c mosquitto.conf -v
 #[tokio::test(flavor = "multi_thread")]
 async fn mqtt_property_sync() {
     if should_skip() {
