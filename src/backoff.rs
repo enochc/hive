@@ -1,8 +1,7 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
-use async_std::task;
-use async_std::task::JoinHandle;
-// use tokio::task::JoinHandle;
+use tokio::task;
+use tokio::task::JoinHandle;
 
 
 pub struct BackOff {
@@ -15,7 +14,7 @@ impl BackOff {
     pub async fn update<F>(mut self, f:F)->Arc<(Mutex<bool>, Condvar)>
     where F: FnOnce(), F: Send + 'static {
         println!("<<< update!");
-        self.handle.cancel().await;
+        self.handle.abort();
         println!("<<< canceled");
         let w2 = self.waiting.clone();
         self.handle = task::spawn(async move {
@@ -45,7 +44,7 @@ impl BackOff {
         let t2 = timeout.clone();
 
         task::spawn(async move {
-            task::sleep(t2).await;
+            tokio::time::sleep(t2).await;
             let ( x,y) = &*w3;
             *x.lock().unwrap() = false;
             let ( x,y) = &*w4;

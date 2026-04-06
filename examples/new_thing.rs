@@ -15,7 +15,7 @@ use hive::hive::Hive;
 async fn main() {
     // block_on(doit());
 
-    let b = BackOff::new(Duration::from_millis(1_000),||{
+    let b: BackOff = BackOff::new(Duration::from_millis(1_000),||{
         println!("<<< **** 1");
     }).await;
     // task::sleep(Duration::from_millis(100)).await;
