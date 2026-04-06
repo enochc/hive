@@ -30,6 +30,9 @@ pub mod websocket;
 #[cfg(feature = "bluetooth")]
 pub mod bluetooth;
 
+#[cfg(feature = "mqtt")]
+pub mod mqtt;
+
 
 #[cfg(feature="bluetooth")]
 #[macro_use]

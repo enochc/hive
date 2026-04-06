@@ -1,0 +1,17 @@
+
+name = "MqttHive"
+listen = "127.0.0.1:3000"
+
+[MQTT]
+host = "127.0.0.1"
+port = 1883
+client_id = "hive-example"
+topic_prefix = "hive/home"
+qos = 1
+keep_alive = 30
+subscribe = ["lightValue", "thermostatName", "thermostatTemperature"]
+
+[Properties]
+lightValue = 0
+thermostatName = "living room"
+thermostatTemperature = "72"

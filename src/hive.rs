@@ -16,6 +16,8 @@ use toml;
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::central::Central;
 use crate::handler::Handler;
+#[cfg(feature = "mqtt")]
+use crate::mqtt::mqtt_peer::{MqttConfig, MqttPeerHandle, spawn_mqtt_peer};
 use crate::peer::{Peer, PeerType, SocketEvent};
 use crate::property::{bytes_to_property, properties_to_bytes, property_to_bytes, Property};
 use crate::signal::Signal;
@@ -44,6 +46,10 @@ pub struct Hive {
     pub connected: Arc<AtomicBool>,
     advertising: Arc<AtomicBool>,
     ready: Option<Arc<tokio::sync::Notify>>,
+    #[cfg(feature = "mqtt")]
+    mqtt_config: Option<MqttConfig>,
+    #[cfg(feature = "mqtt")]
+    mqtt_handle: Option<MqttPeerHandle>,
 }
 
 impl Debug for Hive {
@@ -176,6 +182,9 @@ impl Hive {
         let bt_listen = prop("bt_listen");
         let bt_connect_to = prop("bt_connect");
 
+        #[cfg(feature = "mqtt")]
+        let mqtt_config = config.get("MQTT").and_then(MqttConfig::from_toml);
+
         let props: HashMap<u64, Property> = HashMap::new();
 
         let (send_chan, receive_chan) = mpsc::unbounded();
@@ -193,6 +202,10 @@ impl Hive {
             connected: Arc::new(AtomicBool::new(false)),
             advertising: Arc::new(AtomicBool::new(false)),
             ready: None,
+            #[cfg(feature = "mqtt")]
+            mqtt_config,
+            #[cfg(feature = "mqtt")]
+            mqtt_handle: None,
         };
 
         let properties = config.get("Properties");
@@ -468,6 +481,22 @@ impl Hive {
             }
 
             self.connected.store(true, Ordering::Relaxed);
+        }
+
+        // I'm an MQTT client
+        #[cfg(feature = "mqtt")]
+        if let Some(mqtt_cfg) = self.mqtt_config.take() {
+            debug!("{} connecting MQTT to {}:{}", self.name, mqtt_cfg.host, mqtt_cfg.port);
+            match spawn_mqtt_peer(mqtt_cfg, self.sender.clone()).await {
+                Ok(handle) => {
+                    self.mqtt_handle = Some(handle);
+                    info!("MQTT peer connected and running");
+                    self.connected.store(true, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    error!("Failed to spawn MQTT peer: {:?}", e);
+                }
+            }
         }
 
         if self.connected.load(Ordering::Relaxed) {
@@ -805,6 +834,15 @@ impl Hive {
                                 self.properties.remove(&p.id);
                             } else {
                                 self.broadcast(PROPERTY, &p, from).await?;
+                                // Publish to MQTT if the change did NOT originate from MQTT
+                                #[cfg(feature = "mqtt")]
+                                if from != "mqtt" {
+                                    if let Some(ref handle) = self.mqtt_handle {
+                                        if let Err(e) = handle.publish(&p).await {
+                                            warn!("MQTT publish failed: {:?}", e);
+                                        }
+                                    }
+                                }
                                 self.set_property(p);
                             }
                         }
