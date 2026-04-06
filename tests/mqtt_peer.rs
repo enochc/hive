@@ -19,7 +19,7 @@ use std::time::Duration;
 use hive::hive::Hive;
 use hive::futures::{SinkExt, StreamExt};
 use hive::init_logging;
-use hive::property::PropertyValue;
+use hive::property::{Property, PropertyValue, property_value_to_bytes};
 use hive::LevelFilter;
 use hive::CancellationToken;
 use log::{debug, info};
@@ -202,10 +202,13 @@ async fn mqtt_external_publish_received() {
         // Small delay for the external client to connect
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // Publish as if we're an external device
-        info!("External publish: hive/ext_test/sensor = 99");
+        // Publish as if we're an external device, using the Hive binary
+        // value-only format (type_tag + value, no property ID).
+        let ext_prop = Property::from_name("sensor", Some(99.into()));
+        let ext_payload = property_value_to_bytes(&ext_prop);
+        info!("External publish: hive/ext_test/sensor = 99 ({} bytes)", ext_payload.len());
         client
-            .publish("hive/ext_test/sensor", rumqttc::QoS::AtLeastOnce, false, b"99")
+            .publish("hive/ext_test/sensor", rumqttc::QoS::AtLeastOnce, false, ext_payload.to_vec())
             .await
             .expect("external publish failed");
 

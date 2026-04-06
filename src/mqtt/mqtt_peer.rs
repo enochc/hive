@@ -38,7 +38,7 @@ use log::{debug, error, info, trace, warn};
 
 use crate::hive::Result;
 use crate::peer::SocketEvent;
-use crate::property::{Property, property_to_bytes};
+use crate::property::{Property, property_to_bytes, property_value_to_bytes, bytes_to_property_value};
 
 /// Configuration for the MQTT peer, typically parsed from the Hive TOML config.
 ///
@@ -183,10 +183,9 @@ impl MqttPeer {
 
     /// Publish a Hive property value to the broker.
     ///
-    /// The payload is the raw UTF-8 string representation of the toml value
-    /// (e.g. `"42"`, `"true"`, `"\"hello\""`) which keeps things simple and
-    /// human-readable on the MQTT side.  The subscriber side parses it back
-    /// with `toml::Value::try_from`.
+    /// The payload is the value-only portion of the Hive binary wire
+    /// format: `[type_tag][value_bytes]`.  The 8-byte property hash ID
+    /// is omitted because the MQTT topic already identifies the property.
     pub async fn publish_property(&self, property: &Property) -> Result<()> {
         let name = property.get_name();
         if name.is_empty() {
@@ -195,14 +194,11 @@ impl MqttPeer {
         }
         let topic = format!("{}/{}", self.config.topic_prefix, name);
 
-        let payload = match property.get_value() {
-            Some(val) => val.to_string(),
-            None => String::new(),
-        };
+        let payload = property_value_to_bytes(property);
 
-        debug!("MQTT publish {} = {:?}", topic, payload);
+        debug!("MQTT publish {} ({} bytes)", topic, payload.len());
         self.client
-            .publish(&topic, self.config.qos, false, payload.as_bytes())
+            .publish(&topic, self.config.qos, false, payload.to_vec())
             .await
             .map_err(|e| {
                 let msg = format!("MQTT publish error: {:?}", e);
@@ -216,6 +212,12 @@ impl MqttPeer {
     /// The main ingest loop.  Receives MQTT messages from the background
     /// event-loop task and forwards them into the Hive event channel as
     /// `SocketEvent::Message` with a properly encoded property payload.
+    ///
+    /// Incoming payloads are value-only: `[type_tag][value_bytes]` without
+    /// the 8-byte property hash ID (the MQTT topic carries the identity).
+    /// We decode with `bytes_to_property_value`, reconstruct a named
+    /// `Property`, and re-encode with `property_to_bytes` (which adds the
+    /// ID + `PROPERTY` header) for the Hive event channel.
     ///
     /// The `from` address is set to `"mqtt"` so the Hive event handler can
     /// distinguish MQTT-originated changes and avoid re-publishing them
@@ -235,27 +237,17 @@ impl MqttPeer {
                 incoming.payload.len()
             );
 
-            // Parse the MQTT payload back into a toml Value.
-            let payload_str = match std::str::from_utf8(&incoming.payload) {
-                Ok(s) => s.to_string(),
-                Err(e) => {
-                    warn!("MQTT payload is not valid UTF-8: {:?}", e);
-                    continue;
-                }
-            };
+            // Decode the value-only binary payload.  The property
+            // identity comes from the MQTT topic, not an in-band hash,
+            // so we use bytes_to_property_value (type_tag + value only)
+            // and rebuild a named Property for the Hive event channel.
+            let mut payload = incoming.payload;
+            let prop_value = bytes_to_property_value(&mut payload);
 
-            // Try to parse the string as a TOML value.  MQTT payloads from
-            // our own publish are plain TOML scalars (e.g. `42`, `true`,
-            // `"hello"`).  If parsing fails, treat the whole payload as a
-            // string value.
-            let toml_val: toml::Value = payload_str
-                .parse::<toml::Value>()
-                .unwrap_or_else(|_| toml::Value::String(payload_str.clone()));
-
-            let prop = Property::from_name(&incoming.property_name, Some(toml_val.into()));
+            let prop = Property::from_name(&incoming.property_name, prop_value);
             let msg = property_to_bytes(&prop, true);
 
-            debug!("MQTT → Hive SocketEvent::Message for {}", incoming.property_name);
+            debug!("MQTT -> Hive SocketEvent::Message for {}", incoming.property_name);
 
             let se = SocketEvent::Message {
                 from: String::from("mqtt"),
@@ -398,20 +390,18 @@ pub struct MqttPeerHandle {
 }
 
 impl MqttPeerHandle {
-    /// Publish a property update to the MQTT broker.
+    /// Publish a property update to the MQTT broker using the Hive
+    /// binary wire format.
     pub async fn publish(&self, property: &Property) -> Result<()> {
         let name = property.get_name();
         if name.is_empty() {
             return Ok(());
         }
         let topic = format!("{}/{}", self.config.topic_prefix, name);
-        let payload = match property.get_value() {
-            Some(val) => val.to_string(),
-            None => String::new(),
-        };
+        let payload = property_value_to_bytes(property);
 
         self.client
-            .publish(&topic, self.config.qos, false, payload.as_bytes())
+            .publish(&topic, self.config.qos, false, payload.to_vec())
             .await
             .map_err(|e| {
                 let msg = format!("MQTT publish error: {:?}", e);

@@ -512,7 +512,69 @@ pub(crate) fn properties_to_bytes(properties: &HashMap<u64, Property>) -> Bytes 
 
 use num_traits::ToPrimitive;
 
-pub(crate) fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
+/// Encode just the type-tagged value portion of the Hive wire format.
+///
+/// Writes `[type_tag][value_bytes]` without the leading `u64` property ID
+/// or the `PROPERTY` header byte.  Used by the MQTT peer where the property
+/// identity is carried by the MQTT topic.
+pub fn property_value_to_bytes(property: &Property) -> Bytes {
+    let mut bytes = BytesMut::new();
+    let val = property.stream.sender.borrow();
+    match &*val {
+        None => {
+            bytes.put_i8(IS_NONE);
+        }
+        Some(p) => {
+            if p.val.is_bool() {
+                bytes.put_i8(IS_BOOL);
+                bytes.put_u8(if p.val.as_bool().unwrap() { 1 } else { 0 });
+            } else if p.val.is_str() {
+                bytes.put_i8(IS_STR);
+                let str_val = p.val.as_str().unwrap();
+                let str_length: u8 = str_val.len() as u8;
+                bytes.put_u8(str_length);
+                bytes.put_slice(str_val.as_bytes())
+            } else if p.val.is_integer() {
+                let int = p.val.as_integer().unwrap();
+                match int.to_i8() {
+                    Some(i) => {
+                        bytes.put_i8(IS_SHORT);
+                        bytes.put_i8(i);
+                    }
+                    None => match int.to_i16() {
+                        Some(i) => {
+                            bytes.put_i8(IS_SMALL);
+                            bytes.put_i16(i);
+                        }
+                        None => match int.to_i32() {
+                            Some(i) => {
+                                bytes.put_i8(IS_LONG);
+                                bytes.put_i32(i);
+                            }
+                            None => match int.to_i64() {
+                                Some(i) => {
+                                    bytes.put_i8(IS_INT);
+                                    bytes.put_i64(i);
+                                }
+                                None => {
+                                    unimplemented!("You really shouldn't be here {:?}", p)
+                                }
+                            },
+                        },
+                    },
+                }
+            } else if p.val.is_float() {
+                bytes.put_i8(IS_FLOAT);
+                bytes.put_f64(p.val.as_float().unwrap());
+            } else {
+                unimplemented!("not implemented for {:?}", p);
+            }
+        }
+    }
+    bytes.freeze()
+}
+
+pub fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
     let mut bytes = BytesMut::new();
     if inc_head {
         bytes.put_u8(PROPERTY);
@@ -578,43 +640,55 @@ pub(crate) fn bytes_to_property(bytes: &mut Bytes) -> Option<Property> {
     let property_id = bytes.get_u64();
     debug!("id: {:?}", property_id);
 
+    let value = bytes_to_property_value(bytes);
+    match value {
+        Some(pv) => Some(Property::from_value(&property_id, pv.val)),
+        None => Some(Property::from_id(&property_id, None)),
+    }
+}
+
+/// Decode just the type-tagged value portion of the Hive wire format.
+///
+/// This reads `[type_tag][value_bytes]` without the leading `u64` property
+/// ID.  Used by the MQTT peer where the property identity is carried by the
+/// MQTT topic rather than an in-band hash.
+pub fn bytes_to_property_value(bytes: &mut Bytes) -> Option<PropertyValue> {
     let value_type = bytes.get_i8();
     match value_type {
         IS_STR => {
             let str_length = bytes.get_u8() as usize;
             let value = String::from_utf8(bytes.slice(..str_length).to_vec());
             bytes.advance(str_length);
-            debug!("<<<<<<<<<<<<<<<<<<<<<<<<< string {:?} = {:?}", str_length, value);
             let v = value.ok().unwrap();
-            Some(Property::from_value(&property_id, v.into()))
+            Some(PropertyValue::from(v.as_str()))
         }
         IS_BOOL => {
-            let bool = bytes.get_u8() > 0;
-            Some(Property::from_value(&property_id, bool.into()))
+            let b = bytes.get_u8() > 0;
+            Some(PropertyValue::from(b))
         }
         IS_SHORT => {
             let short = bytes.get_i8();
-            Some(Property::from_value(&property_id, short.into()))
+            Some(PropertyValue::from(short as i32))
         }
         IS_SMALL => {
             let small = bytes.get_i16();
-            Some(Property::from_value(&property_id, (small as i32).into()))
+            Some(PropertyValue::from(small as i32))
         }
         IS_LONG => {
             let long = bytes.get_i32();
-            Some(Property::from_value(&property_id, long.into()))
+            Some(PropertyValue::from(long))
         }
         IS_INT => {
             let int = bytes.get_i64();
-            Some(Property::from_value(&property_id, int.into()))
+            Some(PropertyValue::from(int))
         }
         IS_FLOAT => {
             let float = bytes.get_f64();
-            Some(Property::from_value(&property_id, float.into()))
+            Some(PropertyValue::from(float))
         }
-        IS_NONE => Some(Property::from_id(&property_id, None)),
+        IS_NONE => None,
         _ => {
-            unimplemented!(".... doh, finish me {:?}", value_type)
+            unimplemented!("bytes_to_property_value: unhandled type tag {:?}", value_type)
         }
     }
 }
