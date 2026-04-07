@@ -575,64 +575,15 @@ pub fn property_value_to_bytes(property: &Property) -> Bytes {
 }
 
 pub fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
-    let mut bytes = BytesMut::new();
+    let value_bytes = property_value_to_bytes(property);
+    let mut bytes = BytesMut::with_capacity(
+        (if inc_head { 1 } else { 0 }) + 8 + value_bytes.len(),
+    );
     if inc_head {
         bytes.put_u8(PROPERTY);
     }
     bytes.put_u64(property.id);
-
-    let val = property.stream.sender.borrow();
-    match &*val {
-        None => {
-            bytes.put_i8(IS_NONE);
-        }
-        Some(p) => {
-            if p.val.is_bool() {
-                bytes.put_i8(IS_BOOL);
-                bytes.put_u8(if p.val.as_bool().unwrap() { 1 } else { 0 });
-            } else if p.val.is_str() {
-                bytes.put_i8(IS_STR);
-                let str_val = p.val.as_str().unwrap();
-                let str_length: u8 = str_val.len() as u8;
-                bytes.put_u8(str_length);
-                bytes.put_slice(str_val.as_bytes())
-            } else if p.val.is_integer() {
-                let int = p.val.as_integer().unwrap();
-                match int.to_i8() {
-                    Some(i) => {
-                        bytes.put_i8(IS_SHORT);
-                        bytes.put_i8(i);
-                    }
-                    None => match int.to_i16() {
-                        Some(i) => {
-                            bytes.put_i8(IS_SMALL);
-                            bytes.put_i16(i);
-                        }
-                        None => match int.to_i32() {
-                            Some(i) => {
-                                bytes.put_i8(IS_LONG);
-                                bytes.put_i32(i);
-                            }
-                            None => match int.to_i64() {
-                                Some(i) => {
-                                    bytes.put_i8(IS_INT);
-                                    bytes.put_i64(i);
-                                }
-                                None => {
-                                    unimplemented!("You really shouldn't be here {:?}", p)
-                                }
-                            },
-                        },
-                    },
-                }
-            } else if p.val.is_float() {
-                bytes.put_i8(IS_FLOAT);
-                bytes.put_f64(p.val.as_float().unwrap());
-            } else {
-                unimplemented!("not implemented for {:?}", p);
-            }
-        }
-    }
+    bytes.put_slice(&value_bytes);
     bytes.freeze()
 }
 
