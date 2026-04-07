@@ -2,7 +2,7 @@
 
 A cross-platform Rust library for real-time property synchronization between devices and services.
 
-Hive lets you define observable properties on one device and automatically keep them in sync across every connected peer — whether they're linked over TCP sockets, Bluetooth, MQTT, or WebSockets. When a property changes on any node, the update propagates to all others.
+Hive lets you define observable properties on one device and automatically keep them in sync across every connected peer, whether they're linked over TCP sockets, Bluetooth, MQTT, or WebSockets. When a property changes on any node, the update propagates to all others.
 
 ## Core Concepts
 
@@ -49,7 +49,7 @@ let server = Hive::new_from_str_unknown(r#"
     lightValue = 0
 "#);
 
-// Client — connects and receives all server properties
+// Client,  connects and receives all server properties
 let client = Hive::new_from_str_unknown(r#"
     name = "Client"
     connect = "127.0.0.1:3000"
@@ -62,7 +62,7 @@ let client = Hive::new_from_str_unknown(r#"
 let cancellation_token = CancellationToken::new();
 let mut handler = hive.go(true, cancellation_token).await;
 
-// Set a property — propagates to all peers
+// Set a property, propagates to all peers
 handler.set_property("lightValue", Some(&42.into())).await;
 
 // Send a direct message to a specific peer
@@ -124,7 +124,7 @@ let hive = Hive::new("config.toml");
 # Identity
 name = "MyHive"
 
-# TCP — pick one: listen (server) or connect (client)
+# TCP, pick one: listen (server) or connect (client)
 listen = "3000"                    # or "192.168.1.10:3000"
 connect = "192.168.1.10:3000"      # server address
 
@@ -153,7 +153,7 @@ with_args = { val = 0, rest_set = "http://localhost:8000/save/{val}" }
 
 ## Property Features
 
-**Debouncing** — for high-frequency updates like motor control, properties support a backoff window. The first change fires immediately, subsequent changes within the window are absorbed, and the latest value is delivered when the timer expires:
+**Debouncing**  For high-frequency updates like motor control, properties support a backoff window. The first change fires immediately, subsequent changes within the window are absorbed, and the latest value is delivered when the timer expires:
 
 ```rust
 let prop = hive.get_mut_property_by_name("motor_speed").unwrap();
@@ -164,9 +164,9 @@ prop.on_next(|v| {
 });
 ```
 
-**Typed values** — properties support bool, string, integers (i8 through i64, auto-sized to the smallest fit), and f64 floats. The binary wire format encodes values with type tags for compact transmission.
+**Typed values** Properties support bool, string, integers (i8 through i64, auto-sized to the smallest fit), and f64 floats. The binary wire format encodes values with type tags for compact transmission.
 
-**Reactive streams** — every property exposes a `tokio::sync::watch`-backed stream. Multiple consumers can independently observe changes:
+**Reactive streams** Every property exposes a `tokio::sync::watch`-backed stream. Multiple consumers can independently observe changes:
 
 ```rust
 let mut stream = prop.stream.clone();
@@ -180,7 +180,7 @@ tokio::spawn(async move {
 ## Building
 
 ```bash
-# Default — TCP only
+# Default, TCP only
 cargo build
 
 # With MQTT support
@@ -225,7 +225,7 @@ cargo run --example mqtt_example --features mqtt
 
 ## Cross-Platform
 
-Hive builds as a static library, cdylib, and standard Rust lib — designed to embed into iOS, Android, and Linux applications:
+Hive builds as a static library, cdylib, and standard Rust lib, designed to embed into iOS, Android, and Linux applications:
 
 ```toml
 [lib]
@@ -254,8 +254,8 @@ Android JNI bindings and a C FFI entry point (`newHive`) are included for native
                         └──────────────┘
 ```
 
-Hive instances can simultaneously use multiple transports. A node can listen for TCP clients, connect to an MQTT broker, and advertise over Bluetooth — all properties stay synchronized across every transport.
+Hive instances can simultaneously use multiple transports. A node can listen for TCP clients, connect to an MQTT broker, and advertise over Bluetooth, all properties stay synchronized across every transport.
 
 ## License
 
-MIT — see [LICENSE.txt](LICENSE.txt)
+MIT: see [LICENSE.txt](LICENSE.txt)
