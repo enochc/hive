@@ -3,3 +3,5 @@ pub mod scanner;
 pub mod quarantine;
 pub mod manifest;
 pub mod provisioner;
+pub mod signature_sync;
+pub mod node;

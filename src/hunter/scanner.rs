@@ -4,6 +4,13 @@
 /// local filesystem paths for matches.  Discovered threats are reported
 /// back to Hive through the handler so other nodes can learn about them.
 ///
+/// # Thread safety
+///
+/// The signature store is internally protected by a `std::sync::RwLock`,
+/// allowing signature mutations (from sync `on_next` callbacks) and
+/// concurrent async scans without external locking.  Callers never need
+/// to wrap Scanner in a Mutex.
+///
 /// # Signature format
 ///
 /// Signatures are distributed as Hive properties under a configurable
@@ -25,6 +32,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
@@ -82,10 +90,12 @@ pub enum ScanEvent {
 
 /// The scanner engine.
 ///
-/// Holds the current set of loaded signatures and provides methods to
-/// scan individual files or directory trees.
+/// Signature storage is internally synchronized with an RwLock so that
+/// `load_signature` / `remove_signature` (called from sync on_next
+/// callbacks) and `scan_file` / `scan_directory` (called from async
+/// tasks) can operate concurrently without external locking.
 pub struct Scanner {
-    signatures: HashMap<String, ThreatSignature>,
+    signatures: RwLock<HashMap<String, ThreatSignature>>,
     /// Channel for reporting scan events back to the caller.
     event_tx: mpsc::Sender<ScanEvent>,
     /// Maximum file size to scan (skip anything larger). Default 50 MB.
@@ -95,7 +105,7 @@ pub struct Scanner {
 impl Scanner {
     pub fn new(event_tx: mpsc::Sender<ScanEvent>) -> Self {
         Self {
-            signatures: HashMap::new(),
+            signatures: RwLock::new(HashMap::new()),
             event_tx,
             max_file_size: 50 * 1024 * 1024,
         }
@@ -107,20 +117,27 @@ impl Scanner {
     }
 
     /// Load a signature into the scanner.  Replaces any existing
-    /// signature with the same ID.
-    pub fn load_signature(&mut self, sig: ThreatSignature) {
+    /// signature with the same ID.  Safe to call from sync contexts
+    /// (e.g. on_next callbacks).
+    pub fn load_signature(&self, sig: ThreatSignature) {
         debug!("loaded signature: {} - {}", sig.id, sig.description);
-        self.signatures.insert(sig.id.clone(), sig);
+        self.signatures.write().unwrap().insert(sig.id.clone(), sig);
     }
 
-    /// Remove a signature by ID.
-    pub fn remove_signature(&mut self, id: &str) -> bool {
-        self.signatures.remove(id).is_some()
+    /// Remove a signature by ID.  Safe to call from sync contexts.
+    pub fn remove_signature(&self, id: &str) -> bool {
+        self.signatures.write().unwrap().remove(id).is_some()
     }
 
     /// Number of currently loaded signatures.
     pub fn signature_count(&self) -> usize {
-        self.signatures.len()
+        self.signatures.read().unwrap().len()
+    }
+
+    /// Take a snapshot of the current signatures for scanning.
+    /// This briefly acquires a read lock, clones the map, and releases.
+    fn snapshot_signatures(&self) -> HashMap<String, ThreatSignature> {
+        self.signatures.read().unwrap().clone()
     }
 
     /// Scan a single file against all loaded signatures.
@@ -161,9 +178,12 @@ impl Scanner {
         hasher.update(&data);
         let file_hash = format!("{:x}", hasher.finalize());
 
+        // Snapshot signatures so we don't hold the lock during matching
+        let sigs = self.snapshot_signatures();
+
         // Check each signature
         let mut matches = Vec::new();
-        for (id, sig) in &self.signatures {
+        for (id, sig) in &sigs {
             if let Some(pattern) = sig.pattern_bytes() {
                 if contains_pattern(&data, &pattern) {
                     info!("threat match: {} in {:?}", id, path);
@@ -287,7 +307,7 @@ mod tests {
         std::fs::write(&evil_path, b"clean stuff EVIL_BYTES more clean stuff").unwrap();
 
         let (tx, mut rx) = mpsc::channel(16);
-        let mut scanner = Scanner::new(tx);
+        let scanner = Scanner::new(tx);
         scanner.load_signature(ThreatSignature {
             id: "TEST-EVIL".into(),
             pattern_hex: hex::encode(b"EVIL_BYTES"),
