@@ -4,6 +4,7 @@ use futures::channel::mpsc::{SendError, UnboundedSender};
 use crate::futures::SinkExt;
 #[allow(unused_imports)]
 use log::{debug, error, info};
+use crate::file_transfer::{self, DEFAULT_CHUNK_SIZE};
 use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
 use crate::peer::SocketEvent;
 use crate::property::{Property, property_to_bytes, PropertyValue, PropertyType};
@@ -73,6 +74,44 @@ impl Handler {
     pub async fn hangup(&mut self) {
         self.sender.send(SocketEvent::Hangup{from:String::from("")}).await
             .expect("failed to hangup");
+    }
+
+    /// Send a file to a specific peer.
+    ///
+    /// The file is chunked and sent as a sequence of FILE_HEADER,
+    /// FILE_CHUNK, and FILE_COMPLETE messages.  The peer name is
+    /// encoded as the first segment of a PEER_MESSAGE so the Hive
+    /// event loop routes each chunk to the correct peer.
+    pub async fn send_file(&mut self, peer_name: &str, filename: &str, data: &[u8]) {
+        let chunk_size = DEFAULT_CHUNK_SIZE;
+        let (header_msg, transfer) = file_transfer::encode_file_header(filename, data, chunk_size);
+
+        debug!(
+            "sending file '{}' ({} bytes, {} chunks) to peer '{}'",
+            filename, data.len(), transfer.total_chunks, peer_name
+        );
+
+        // Send header
+        self.send_raw(header_msg).await;
+
+        // Send chunks
+        let chunks = file_transfer::encode_all_chunks(transfer.transfer_id, data, chunk_size);
+        for chunk in chunks {
+            self.send_raw(chunk).await;
+        }
+
+        // Send complete
+        let complete = file_transfer::encode_file_complete(transfer.transfer_id);
+        self.send_raw(complete).await;
+    }
+
+    /// Send a raw pre-encoded message through the Hive event loop.
+    async fn send_raw(&mut self, msg: bytes::Bytes) {
+        let socket_event = SocketEvent::Message {
+            from: String::from(""),
+            msg,
+        };
+        self.sender.send(socket_event).await.expect("Failed to send raw message");
     }
 
 }

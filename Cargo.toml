@@ -15,7 +15,7 @@ websock = ["websocket-codec", "base64", "sha-1"]
 rest = ["reqwest"]
 mqtt = ["rumqttc"]
 gui = ["slint", "crossbeam-channel"]
-hunter = ["sha2", "serde", "serde_json", "hex"]
+hunter = ["serde", "serde_json", "hex"]
 
 [dependencies]
 ahash = "0.8.12"
@@ -48,8 +48,10 @@ rumqttc = { version = "0.25", optional = true }
 reqwest = {version= "0.13.2", optional = true, features=["json"]}
 ctrlc = "3.5.0"
 
-# hunter dependencies
-sha2 = { version = "0.10", optional = true }
+# core dependency (used by file_transfer)
+sha2 = "0.10"
+
+# hunter dependencies (optional)
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 hex = { version = "0.4", optional = true }

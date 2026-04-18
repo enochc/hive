@@ -5,3 +5,4 @@ pub mod manifest;
 pub mod provisioner;
 pub mod signature_sync;
 pub mod node;
+pub mod idle_monitor;

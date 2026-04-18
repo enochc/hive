@@ -19,6 +19,13 @@ async fn send_emit<T>(func: Arc<dyn Fn(T) + Send + Sync + 'static>, val: T)
 
 impl<T> Signal<T>
     where T: Send, {
+    pub fn new() -> Self {
+        Signal {
+            slots: Mutex::new(Vec::new()),
+            counter: AtomicUsize::new(0),
+        }
+    }
+
     pub async fn num_slots(self) -> usize {
         self.slots.lock().unwrap().len()
     }

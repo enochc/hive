@@ -24,7 +24,7 @@ async fn middle_man_test() {
         let ack_clone2 = ack.clone();
 
         let props_str = r#"
-    listen="3000"
+    listen="3100"
     name = "Server"
     [Properties]
     something_else_entirely=1
@@ -45,14 +45,14 @@ async fn middle_man_test() {
 
         let props_str = r#"
     name = "MiddleMan"
-    connect="3000"
-    listen="3001"
+    connect="3100"
+    listen="3101"
     "#;
         let middle_man = Hive::new_from_str_unknown(props_str);
         let mut middle_hand = middle_man.go(true, cancellation_token.clone()).await;
 
         let props_str = r#"
-    connect="3001"
+    connect="3101"
     name = "Client"
     something_else_entirely=1
     "#;

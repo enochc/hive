@@ -21,6 +21,7 @@ pub mod signal;
 pub mod hive;
 pub mod peer;
 pub mod handler;
+pub mod file_transfer;
 
 // mod backoff; // unused — property debounce is handled in Property::set_value
 

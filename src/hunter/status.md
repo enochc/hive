@@ -95,18 +95,26 @@
   - Eliminates need for external Mutex wrapping
   - Signature mutations from sync on_next callbacks work cleanly
   - Async scans never hold any lock across await points
+- [x] **idle_monitor.rs** - System idle detection for opportunistic scanning
+  - `IdleConfig` with threshold, sample interval, consecutive count, max wait
+  - Linux: reads /proc/stat for CPU idle/total counters
+  - macOS: uses host_processor_info() via FFI for CPU ticks
+  - `wait_for_idle()` samples CPU usage, signals when sustainably idle
+  - Falls back to fixed interval on unsupported platforms
+  - Max-wait deadline prevents indefinite deferral on busy systems
+  - Unit tests: usage calculation, fully idle, fully busy, disabled fallback, cancellation
+- [x] **Scan directive dispatch** wired via `mpsc` channel
+  - Sync on_next callback parses directive JSON and sends `ScanCommand`
+  - Async scan loop receives commands and runs on-demand scans
+  - No busy wait, no blocking in the sync callback (uses try_send)
+- [x] **Update manifest dispatch** wired via `mpsc` channel
+  - Sync on_next callback parses manifest and sends to async processor
+  - Async processor calls `SelfUpdater::process_manifest()` directly
+  - Full download-verify-replace-reexec flow is now connected end to end
 
 ### Todo
 
-- [ ] **PropertyStream subscription** for `hunter_update_manifest`
-  - On change, deserialize manifest and call `SelfUpdater::process_manifest()`
-  - Currently the on_next callback logs the manifest but does not trigger
-    the async update flow; wiring through PropertyStream (which is async-native)
-    would let us call process_manifest directly
-- [ ] **Scan scheduling** - on-demand scan from directives
-  - The scan_directive on_next callback currently logs; wire it to actually
-    trigger a scan on the requested path via a channel to the scan loop
-  - Use `tokio::sync::mpsc` to send scan requests from on_next to the scan loop
+(Phase 2 complete)
 
 ---
 

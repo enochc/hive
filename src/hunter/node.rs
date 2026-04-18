@@ -7,7 +7,7 @@
 /// - Registers signature watchers so incoming signatures flow into the scanner
 /// - Subscribes to update manifests for self-replacement
 /// - Subscribes to scan directives for remote-triggered scans
-/// - Runs periodic scans on a configurable interval
+/// - Waits for system idle before running periodic scans
 /// - Publishes scan results and quarantine records back to Hive
 /// - Reports node status (version, health, last scan time)
 ///
@@ -27,9 +27,11 @@ use tracing::{debug, info, warn, error};
 use crate::handler::Handler;
 use crate::hive::Hive;
 use crate::property::PropertyValue;
+use crate::hunter::idle_monitor::{self, IdleConfig};
 use crate::hunter::manifest::{UpdateManifest, Version};
 use crate::hunter::quarantine::Quarantine;
 use crate::hunter::scanner::{ScanEvent, Scanner};
+use crate::hunter::self_update::{SelfUpdater, UpdateConfig};
 use crate::hunter::signature_sync;
 
 /// Configuration for a hunter node, typically parsed from the [Hunter]
@@ -48,6 +50,8 @@ pub struct HunterConfig {
     pub current_version: Version,
     /// Prefix for signature property names.
     pub signature_prefix: String,
+    /// Idle detection configuration for opportunistic scanning.
+    pub idle_config: IdleConfig,
 }
 
 impl Default for HunterConfig {
@@ -59,6 +63,7 @@ impl Default for HunterConfig {
             vault_dir: PathBuf::from("/var/lib/hunter/quarantine"),
             current_version: Version::new(0, 1, 0),
             signature_prefix: signature_sync::DEFAULT_SIG_PREFIX.into(),
+            idle_config: IdleConfig::default(),
         }
     }
 }
@@ -76,6 +81,13 @@ pub struct NodeStatus {
     pub signatures_loaded: usize,
     pub quarantine_count: usize,
     pub status: String,
+}
+
+/// Commands that can be sent to the scan loop from sync callbacks.
+#[derive(Debug)]
+enum ScanCommand {
+    /// Scan a specific path immediately (from scan_directive property).
+    ScanPath(PathBuf),
 }
 
 /// The hunter node.
@@ -132,12 +144,13 @@ impl HunterNode {
     /// This:
     /// 1. Creates the Scanner, Quarantine, and SelfUpdater
     /// 2. Registers signature watchers on the Hive instance
-    /// 3. Registers the update manifest watcher
-    /// 4. Registers the scan directive watcher
+    /// 3. Registers the update manifest watcher (dispatches via channel)
+    /// 4. Registers the scan directive watcher (dispatches via channel)
     /// 5. Launches the Hive instance
     /// 6. Starts the scan event processor
-    /// 7. Starts the periodic scan timer
-    /// 8. Publishes initial node status
+    /// 7. Starts the idle-aware periodic scan loop
+    /// 8. Starts the update manifest processor
+    /// 9. Publishes initial node status
     ///
     /// Returns a HunterHandle for external interaction.
     pub async fn start(
@@ -150,6 +163,12 @@ impl HunterNode {
 
         // Create the scan event channel
         let (scan_tx, scan_rx) = mpsc::channel::<ScanEvent>(256);
+
+        // Channel for scan directives (sync on_next -> async scan loop)
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ScanCommand>(32);
+
+        // Channel for update manifests (sync on_next -> async updater)
+        let (manifest_tx, manifest_rx) = mpsc::channel::<UpdateManifest>(8);
 
         // Build the scanner
         let mut scanner = Scanner::new(scan_tx);
@@ -172,38 +191,11 @@ impl HunterNode {
             &config.signature_prefix,
         );
 
-        // Register update manifest watcher
-        Self::register_update_watcher(&mut hive, &config, &node_name);
+        // Register update manifest watcher -- dispatches via channel
+        Self::register_update_watcher(&mut hive, &config, &node_name, manifest_tx);
 
-        // Register scan directive watcher
-        let directive_prop = hive.get_mut_property_by_name("scan_directive");
-        if let Some(prop) = directive_prop {
-            prop.on_next(move |value| {
-                if let Some(json_str) = value.val.as_str() {
-                    if json_str.is_empty() {
-                        return;
-                    }
-                    match serde_json::from_str::<serde_json::Value>(json_str) {
-                        Ok(directive) => {
-                            if directive.get("action").and_then(|a| a.as_str()) == Some("scan") {
-                                let path = directive.get("path")
-                                    .and_then(|p| p.as_str())
-                                    .unwrap_or("");
-                                info!("received scan directive for path: {}", path);
-                                // The actual scan is triggered asynchronously
-                                // by the scan event processor.  We set a flag
-                                // here and the scan loop picks it up.
-                                // For now, log it.  Full async scan dispatch
-                                // is wired through the scan loop below.
-                            }
-                        }
-                        Err(e) => {
-                            warn!("invalid scan directive JSON: {}", e);
-                        }
-                    }
-                }
-            });
-        }
+        // Register scan directive watcher -- dispatches via channel
+        Self::register_directive_watcher(&mut hive, cmd_tx);
 
         // Get the handler before consuming hive with go()
         let handler = hive.get_handler();
@@ -214,7 +206,7 @@ impl HunterNode {
         // Capture values before node takes ownership
         let sig_count = scanner.signature_count();
 
-        let mut node = HunterNode {
+        let node = HunterNode {
             config: config.clone(),
             handler: hive_handler,
             scanner,
@@ -240,26 +232,48 @@ impl HunterNode {
             ).await;
         });
 
-        // Start periodic scanning
+        // Start idle-aware periodic scan loop
         if config.scan_interval_secs > 0 && !config.scan_paths.is_empty() {
             let scan_scanner = node.scanner.clone();
             let scan_interval = Duration::from_secs(config.scan_interval_secs);
             let scan_paths = config.scan_paths.clone();
             let scan_token = cancellation_token.clone();
-            let scan_handler = node.handler.clone();
             let scan_node_name = node_name.clone();
+            let idle_config = config.idle_config.clone();
 
             tokio::spawn(async move {
-                Self::periodic_scan_loop(
+                Self::idle_scan_loop(
                     scan_scanner,
                     scan_paths,
                     scan_interval,
+                    idle_config,
+                    cmd_rx,
                     scan_token,
-                    scan_handler,
                     &scan_node_name,
                 ).await;
             });
         }
+
+        // Start the update manifest processor
+        let update_config = UpdateConfig {
+            current_version: config.current_version.clone(),
+            staging_dir: config.vault_dir.parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join(".hunter_updates"),
+            ..UpdateConfig::default()
+        };
+        let update_handler = node.handler.clone();
+        let update_token = cancellation_token.clone();
+        let update_node_name = node_name.clone();
+        tokio::spawn(async move {
+            Self::process_update_manifests(
+                manifest_rx,
+                update_config,
+                update_handler,
+                update_token,
+                &update_node_name,
+            ).await;
+        });
 
         // Publish initial node status
         let mut status_handler = node.handler.clone();
@@ -295,10 +309,12 @@ impl HunterNode {
     }
 
     /// Register the on_next callback for the update manifest property.
+    /// Dispatches parsed manifests through a channel to the async updater.
     fn register_update_watcher(
         hive: &mut Hive,
         config: &HunterConfig,
         node_name: &str,
+        tx: mpsc::Sender<UpdateManifest>,
     ) {
         let version = config.current_version.clone();
         let name = node_name.to_string();
@@ -317,17 +333,11 @@ impl HunterNode {
                                     "[{}] update available: v{} -> v{}",
                                     name, version, manifest.version
                                 );
-                                // The actual update is handled by the SelfUpdater,
-                                // which needs async context.  We spawn a task here
-                                // since on_next is a sync callback.
-                                //
-                                // In a full implementation, we would hold an
-                                // Arc<SelfUpdater> and call process_manifest().
-                                // For now, we log the availability.  The async
-                                // wiring is completed when the SelfUpdater is
-                                // integrated with the PropertyStream (which
-                                // yields values in an async context natively).
-                                info!("update manifest received, async processing pending");
+                                // Send to the async processor via channel.
+                                // try_send avoids blocking in the sync callback.
+                                if let Err(e) = tx.try_send(manifest) {
+                                    warn!("failed to dispatch update manifest: {}", e);
+                                }
                             } else {
                                 debug!(
                                     "[{}] ignoring manifest v{} (current: v{})",
@@ -342,6 +352,44 @@ impl HunterNode {
                 }
             });
             debug!("registered update manifest watcher");
+        }
+    }
+
+    /// Register the on_next callback for the scan_directive property.
+    /// Dispatches scan commands through a channel to the scan loop.
+    fn register_directive_watcher(
+        hive: &mut Hive,
+        tx: mpsc::Sender<ScanCommand>,
+    ) {
+        let prop = hive.get_mut_property_by_name("scan_directive");
+        if let Some(p) = prop {
+            p.on_next(move |value| {
+                if let Some(json_str) = value.val.as_str() {
+                    if json_str.is_empty() {
+                        return;
+                    }
+                    match serde_json::from_str::<serde_json::Value>(json_str) {
+                        Ok(directive) => {
+                            if directive.get("action").and_then(|a| a.as_str()) == Some("scan") {
+                                let path = directive.get("path")
+                                    .and_then(|p| p.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                if !path.is_empty() {
+                                    info!("received scan directive for path: {}", path);
+                                    if let Err(e) = tx.try_send(ScanCommand::ScanPath(PathBuf::from(path))) {
+                                        warn!("failed to dispatch scan directive: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("invalid scan directive JSON: {}", e);
+                        }
+                    }
+                }
+            });
+            debug!("registered scan directive watcher");
         }
     }
 
@@ -416,11 +464,9 @@ impl HunterNode {
                                 node_name, files_scanned, threats_found,
                             );
 
-                            // Update node status
-                            let sig_count = 0; // Updated in the full status push
                             let status = NodeStatus {
                                 node_name: node_name.to_string(),
-                                version: "".into(), // Filled by caller
+                                version: "".into(),
                                 platform: format!(
                                     "{}-{}",
                                     std::env::consts::ARCH,
@@ -429,7 +475,7 @@ impl HunterNode {
                                 last_scan_time: Some(Utc::now().to_rfc3339()),
                                 files_scanned,
                                 threats_found,
-                                signatures_loaded: sig_count,
+                                signatures_loaded: 0,
                                 quarantine_count: 0,
                                 status: "running".into(),
                             };
@@ -457,36 +503,57 @@ impl HunterNode {
         }
     }
 
-    /// Periodic scan loop.  Runs a full directory scan at the configured
-    /// interval.  Uses `tokio::time::interval()` rather than a busy loop.
-    async fn periodic_scan_loop(
+    /// Idle-aware scan loop.
+    ///
+    /// Waits for the system to become idle (or falls back to a fixed
+    /// interval), then runs a full scan of all configured paths.
+    /// Also receives on-demand scan commands from the directive channel.
+    async fn idle_scan_loop(
         scanner: Arc<Scanner>,
         scan_paths: Vec<PathBuf>,
         interval: Duration,
+        idle_config: IdleConfig,
+        mut cmd_rx: mpsc::Receiver<ScanCommand>,
         token: CancellationToken,
-        _handler: Handler,
         node_name: &str,
     ) {
-        let mut timer = tokio::time::interval(interval);
-        // The first tick fires immediately; skip it so we don't scan
-        // right at startup (the initial property sync may not be done yet).
-        timer.tick().await;
-
         loop {
             tokio::select! {
                 _ = token.cancelled() => {
-                    info!("[{}] periodic scan loop shutting down", node_name);
+                    info!("[{}] scan loop shutting down", node_name);
                     break;
                 }
-                _ = timer.tick() => {
-                    info!("[{}] starting periodic scan", node_name);
-
+                // On-demand scan from a directive property change
+                cmd = cmd_rx.recv() => {
+                    match cmd {
+                        Some(ScanCommand::ScanPath(path)) => {
+                            info!("[{}] on-demand scan: {:?}", node_name, path);
+                            if path.exists() {
+                                let (files, threats) = scanner.scan_directory(&path).await;
+                                info!(
+                                    "[{}] on-demand scan complete: {} files, {} threats",
+                                    node_name, files, threats,
+                                );
+                            } else {
+                                warn!("[{}] on-demand scan path does not exist: {:?}", node_name, path);
+                            }
+                        }
+                        None => {
+                            debug!("scan command channel closed");
+                            break;
+                        }
+                    }
+                }
+                // Idle-aware periodic scan
+                ready = idle_monitor::wait_for_idle(&idle_config, interval, &token) => {
+                    if !ready {
+                        // Cancelled
+                        break;
+                    }
+                    info!("[{}] system idle detected, starting periodic scan", node_name);
                     for path in &scan_paths {
                         if !path.exists() {
-                            warn!(
-                                "[{}] scan path does not exist: {:?}",
-                                node_name, path,
-                            );
+                            warn!("[{}] scan path does not exist: {:?}", node_name, path);
                             continue;
                         }
                         info!("[{}] scanning {:?}", node_name, path);
@@ -495,6 +562,55 @@ impl HunterNode {
                             "[{}] scanned {:?}: {} files, {} threats",
                             node_name, path, files, threats,
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Process update manifests received from the on_next channel.
+    ///
+    /// This runs in an async context so it can call the SelfUpdater's
+    /// async methods directly.
+    async fn process_update_manifests(
+        mut rx: mpsc::Receiver<UpdateManifest>,
+        update_config: UpdateConfig,
+        handler: Handler,
+        token: CancellationToken,
+        node_name: &str,
+    ) {
+        let updater = SelfUpdater::new(update_config, handler);
+
+        loop {
+            tokio::select! {
+                _ = token.cancelled() => {
+                    info!("[{}] update processor shutting down", node_name);
+                    break;
+                }
+                manifest = rx.recv() => {
+                    match manifest {
+                        Some(m) => {
+                            info!(
+                                "[{}] processing update manifest v{}",
+                                node_name, m.version
+                            );
+                            match updater.process_manifest(&m).await {
+                                Ok(true) => {
+                                    // Process will re-exec; we won't reach here on Unix
+                                    info!("[{}] update applied successfully", node_name);
+                                }
+                                Ok(false) => {
+                                    debug!("[{}] update skipped", node_name);
+                                }
+                                Err(e) => {
+                                    error!("[{}] update failed: {}", node_name, e);
+                                }
+                            }
+                        }
+                        None => {
+                            debug!("update manifest channel closed");
+                            break;
+                        }
                     }
                 }
             }
@@ -534,5 +650,6 @@ mod tests {
         assert_eq!(config.scan_interval_secs, 3600);
         assert_eq!(config.max_file_size, 50 * 1024 * 1024);
         assert!(config.scan_paths.is_empty());
+        assert!(config.idle_config.enabled);
     }
 }

@@ -15,6 +15,8 @@ use toml;
 
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::central::Central;
+use crate::file_transfer::{FileTransferManager, ReceivedFile,
+    FILE_HEADER, FILE_CHUNK, FILE_COMPLETE, FILE_CANCEL};
 use crate::handler::Handler;
 #[cfg(feature = "mqtt")]
 use crate::mqtt::mqtt_peer::{MqttConfig, MqttPeerHandle, spawn_mqtt_peer};
@@ -43,6 +45,8 @@ pub struct Hive {
     pub name: String,
     peers: Vec<Peer>,
     pub message_received: Signal<String>,
+    pub file_received: Signal<ReceivedFile>,
+    file_transfers: FileTransferManager,
     pub connected: Arc<AtomicBool>,
     advertising: Arc<AtomicBool>,
     ready: Option<Arc<tokio::sync::Notify>>,
@@ -199,6 +203,8 @@ impl Hive {
             name,
             peers: Vec::new(),
             message_received: Default::default(),
+            file_received: Signal::new(),
+            file_transfers: FileTransferManager::new(),
             connected: Arc::new(AtomicBool::new(false)),
             advertising: Arc::new(AtomicBool::new(false)),
             ready: None,
@@ -904,7 +910,47 @@ impl Hive {
                         }
                     }
                 }
-                _ => unimplemented!("Unknown message {:#02x}", msg_type), //error!("Unknown message {:?}", msg_type)
+                FILE_HEADER | FILE_CHUNK | FILE_COMPLETE | FILE_CANCEL => {
+                    if from.is_empty() {
+                        // Message originated locally (from Handler::send_file).
+                        // Forward the raw message to all peers.
+                        let mut forward = BytesMut::with_capacity(1 + msg.len());
+                        forward.put_u8(msg_type);
+                        forward.put_slice(&msg);
+                        let frozen = forward.freeze();
+                        for p in &self.peers {
+                            if let Err(e) = p.send(frozen.clone()).await {
+                                warn!("failed to forward file message to peer: {}", e);
+                            }
+                        }
+                    } else {
+                        // Message came from a remote peer.  Process it locally.
+                        match msg_type {
+                            FILE_HEADER => {
+                                self.file_transfers.handle_file_header(from, &mut msg);
+                            }
+                            FILE_CHUNK => {
+                                self.file_transfers.handle_file_chunk(from, &mut msg);
+                            }
+                            FILE_COMPLETE => {
+                                if let Some(received) = self.file_transfers.handle_file_complete(from, &mut msg) {
+                                    info!(
+                                        "file received: '{}' ({} bytes) from {}",
+                                        received.filename, received.data.len(), received.from_peer
+                                    );
+                                    self.file_received.emit(received).await;
+                                }
+                            }
+                            FILE_CANCEL => {
+                                self.file_transfers.handle_file_cancel(from, &mut msg);
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+                _ => {
+                    warn!("unrecognized message type {:#04x} from {}", msg_type, from);
+                }
             }
             // do ACK for peer
             match self.peers.iter_mut().find(|p| p.address() == from) {
