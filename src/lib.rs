@@ -33,6 +33,9 @@ pub mod bluetooth;
 #[cfg(feature = "mqtt")]
 pub mod mqtt;
 
+#[cfg(feature = "hunter")]
+pub mod hunter;
+
 
 #[cfg(feature="bluetooth")]
 #[macro_use]
