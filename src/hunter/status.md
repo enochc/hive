@@ -1,6 +1,6 @@
 # Hive Hunter - Project Status
 
-**Last updated:** 2026-04-17
+**Last updated:** 2026-04-18
 
 ---
 
@@ -27,7 +27,8 @@
   - Unit tests: skip older version, skip wrong platform, hash mismatch
 - [x] **scanner.rs** - `Scanner` engine
   - `ThreatSignature` type with hex pattern decoding
-  - Byte-pattern matching (windowed search)
+  - Internal `std::sync::RwLock` for thread-safe signature storage
+  - Byte-pattern matching via signature snapshot (no lock held during scan)
   - SHA-256 hashing of scanned files
   - Configurable max file size
   - `scan_file()` single file scanning
@@ -56,16 +57,12 @@
   - `provision_host()` orchestrating the full deploy flow (SSH stubs for Phase 3)
   - `parse_subnet()` helper for CIDR notation
   - Unit tests: subnet parsing, config generation, systemd/launchd generation
+- [x] Add `hunter` feature gate to `Cargo.toml`
+- [x] Add dependencies: `sha2`, `serde`, `serde_json`, `hex`, `tempfile`
+- [x] Wire `pub mod hunter` into `src/lib.rs` behind `#[cfg(feature = "hunter")]`
+- [x] Compile and tests pass with `cargo test --features hunter`
 - [x] **instructions.md** - architecture and implementation guide
 - [x] **status.md** - this file
-
-### Todo
-
-- [ ] Add `hunter` feature gate to `Cargo.toml`
-- [ ] Add new dependencies: `sha2`, `serde`, `serde_json`, `hex`, `tempfile`
-- [ ] Wire `pub mod hunter` into `src/lib.rs` behind `#[cfg(feature = "hunter")]`
-- [ ] Verify all modules compile with `cargo check --features hunter`
-- [ ] Run unit tests with `cargo test --features hunter`
 
 ---
 
@@ -73,25 +70,43 @@
 
 ### Done
 
-(nothing yet)
+- [x] **signature_sync.rs** - Property watcher for signature distribution
+  - `register_signature_watchers()` walks existing properties and sets up on_next
+  - `register_single_watcher()` for dynamic registration of new signatures
+  - `load_signature_from_value()` deserializes JSON and loads/removes from Scanner
+  - Uses `Arc<Scanner>` directly (no external Mutex needed thanks to internal RwLock)
+  - Unit tests: load valid sig, remove on empty value, invalid JSON resilience
+- [x] **node.rs** - HunterNode orchestrator
+  - `HunterConfig` with scan paths, interval, max file size, vault dir, version
+  - `NodeStatus` struct (serializable to JSON) for health reporting
+  - `HunterNode::start()` wires Scanner, Quarantine, SelfUpdater, SignatureSync
+  - Registers signature watchers before Hive launch
+  - Registers update manifest watcher via on_next
+  - Registers scan directive watcher via on_next
+  - `process_scan_events()` loop: quarantines threats and publishes records to Hive
+  - `periodic_scan_loop()` using `tokio::time::interval()` (no busy wait)
+  - Publishes initial `node_status_<name>` property on startup
+  - `HunterHandle` for external interaction (trigger_scan, shutdown)
+  - Graceful shutdown via CancellationToken in all spawned tasks
+  - Unit tests: NodeStatus serialization, default config
+- [x] **Scanner refactored** to use internal `std::sync::RwLock`
+  - `load_signature()` and `remove_signature()` take `&self` (write lock internally)
+  - `scan_file()` and `scan_directory()` snapshot signatures (read lock, then release)
+  - Eliminates need for external Mutex wrapping
+  - Signature mutations from sync on_next callbacks work cleanly
+  - Async scans never hold any lock across await points
 
 ### Todo
 
-- [ ] **signature_sync.rs** - Property watcher for signature distribution
-  - Watch `threat_sig_*` properties via PropertyStream
-  - Deserialize incoming signatures and load into Scanner
-  - Handle signature removal (property set to None)
-- [ ] **node.rs** - HunterNode orchestrator
-  - Wire Scanner, Quarantine, and SelfUpdater together
-  - Start Hive instance with hunter-specific properties
-  - Subscribe to `scan_directive` property for remote commands
-  - Publish `node_status_<n>` property with health info
-  - Publish quarantine records as `quarantine_<hash>` properties
 - [ ] **PropertyStream subscription** for `hunter_update_manifest`
   - On change, deserialize manifest and call `SelfUpdater::process_manifest()`
-- [ ] **Scan scheduling** - periodic scan based on config interval
-  - Use `tokio::time::interval()`, not a busy loop
-  - Respect `scan_directive` overrides from orchestrator
+  - Currently the on_next callback logs the manifest but does not trigger
+    the async update flow; wiring through PropertyStream (which is async-native)
+    would let us call process_manifest directly
+- [ ] **Scan scheduling** - on-demand scan from directives
+  - The scan_directive on_next callback currently logs; wire it to actually
+    trigger a scan on the requested path via a channel to the scan loop
+  - Use `tokio::sync::mpsc` to send scan requests from on_next to the scan loop
 
 ---
 
@@ -193,6 +208,21 @@
 
 ---
 
+## Architectural Decisions
+
+- **Scanner uses internal RwLock** instead of external Mutex wrapping.
+  This was driven by the need to call `load_signature()` from sync `on_next`
+  callbacks while also calling `scan_directory()` from async tasks.  The
+  internal RwLock lets signature mutations take a brief write lock while
+  scans snapshot the signatures via a read lock, avoiding any lock held
+  across await points.
+
+- **All synchronization** uses channels, `Notify`, and `CancellationToken`.
+  No busy-wait loops.  No broadcasts except where structurally required
+  by the Hive peer notification system.
+
+---
+
 ## Notes
 
 - The self-update module currently supports `file://` URLs only; HTTP
@@ -205,5 +235,7 @@
   out pending an SSH library dependency (Phase 3).  Config generation,
   service file generation, subnet scanning, and the overall orchestration
   flow are all functional.
-- All synchronization uses channels and `Notify` primitives, consistent
-  with the project's preference against busy-wait loops and broadcasts.
+- The update manifest on_next callback currently logs but does not trigger
+  the async SelfUpdater flow.  This requires either a PropertyStream-based
+  watcher (async-native) or a channel bridge from the sync callback.
+  Tracked in Phase 2 remaining tasks.

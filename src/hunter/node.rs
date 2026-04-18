@@ -26,11 +26,10 @@ use tracing::{debug, info, warn, error};
 
 use crate::handler::Handler;
 use crate::hive::Hive;
-use crate::property::{Property, PropertyValue};
+use crate::property::PropertyValue;
 use crate::hunter::manifest::{UpdateManifest, Version};
-use crate::hunter::quarantine::{Quarantine, QuarantineRecord};
+use crate::hunter::quarantine::Quarantine;
 use crate::hunter::scanner::{ScanEvent, Scanner};
-use crate::hunter::self_update::{SelfUpdater, UpdateConfig};
 use crate::hunter::signature_sync;
 
 /// Configuration for a hunter node, typically parsed from the [Hunter]
@@ -177,8 +176,6 @@ impl HunterNode {
         Self::register_update_watcher(&mut hive, &config, &node_name);
 
         // Register scan directive watcher
-        let scan_paths = config.scan_paths.clone();
-        let scanner_for_directive = scanner.clone();
         let directive_prop = hive.get_mut_property_by_name("scan_directive");
         if let Some(prop) = directive_prop {
             prop.on_next(move |value| {
@@ -213,6 +210,9 @@ impl HunterNode {
 
         // Launch the Hive instance
         let hive_handler = hive.go(true, cancellation_token.clone()).await;
+
+        // Capture values before node takes ownership
+        let sig_count = scanner.signature_count();
 
         let mut node = HunterNode {
             config: config.clone(),
@@ -265,7 +265,6 @@ impl HunterNode {
         let mut status_handler = node.handler.clone();
         let status_node_name = node_name.clone();
         let status_version = config.current_version.to_string();
-        let sig_count = scanner.signature_count();
         tokio::spawn(async move {
             let status = NodeStatus {
                 node_name: status_node_name.clone(),
@@ -465,7 +464,7 @@ impl HunterNode {
         scan_paths: Vec<PathBuf>,
         interval: Duration,
         token: CancellationToken,
-        mut handler: Handler,
+        _handler: Handler,
         node_name: &str,
     ) {
         let mut timer = tokio::time::interval(interval);

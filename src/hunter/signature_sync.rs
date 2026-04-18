@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn remove_signature_on_empty_value() {
         let (tx, _rx) = mpsc::channel(16);
-        let scanner = Arc::new(Mutex::new(Scanner::new(tx)));
+        let scanner = Arc::new(Scanner::new(tx));
 
         // Load one first
         let json = serde_json::json!({
@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn invalid_json_does_not_crash() {
         let (tx, _rx) = mpsc::channel(16);
-        let scanner = Arc::new(Mutex::new(Scanner::new(tx)));
+        let scanner = Arc::new(Scanner::new(tx));
 
         let pv = PropertyValue { val: toml::Value::String("not valid json".into()) };
         load_signature_from_value(&scanner, "threat_sig_bad", &pv);
