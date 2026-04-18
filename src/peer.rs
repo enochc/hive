@@ -68,6 +68,42 @@ pub enum PeerType {
     BluetoothPeripheral = 4,
 }
 
+/// Controls which properties are sent to a specific peer.
+///
+/// Specified during connection setup (via TOML config or header exchange)
+/// to reduce traffic for peers that only care about a subset of properties.
+#[derive(Debug, Clone)]
+pub enum PropertyFilter {
+    /// Receive all properties (default, backward compatible).
+    All,
+    /// Only receive properties whose names start with one of these prefixes.
+    Include(Vec<String>),
+    /// Receive all properties except those whose names start with these prefixes.
+    Exclude(Vec<String>),
+}
+
+impl Default for PropertyFilter {
+    fn default() -> Self {
+        PropertyFilter::All
+    }
+}
+
+impl PropertyFilter {
+    /// Check whether a property with the given name should be sent to
+    /// a peer using this filter.
+    pub fn should_send(&self, property_name: &str) -> bool {
+        match self {
+            PropertyFilter::All => true,
+            PropertyFilter::Include(prefixes) => {
+                prefixes.iter().any(|prefix| property_name.starts_with(prefix))
+            }
+            PropertyFilter::Exclude(prefixes) => {
+                !prefixes.iter().any(|prefix| property_name.starts_with(prefix))
+            }
+        }
+    }
+}
+
 pub struct Peer {
     name: Arc<RwLock<String>>,
     write_stream: Option<Arc<TokioMutex<OwnedWriteHalf>>>,
@@ -81,6 +117,9 @@ pub struct Peer {
     event_sender: UnboundedSender<SocketEvent>,
     hive_name: String,
     peer_type: PeerType,
+    /// Property filter for this peer.  Controls which properties
+    /// are sent during initial sync and ongoing broadcasts.
+    pub property_filter: PropertyFilter,
 }
 
 impl Debug for Peer {
@@ -147,6 +186,7 @@ impl Peer {
                 web_sock: None,
                 hive_name,
                 peer_type,
+                property_filter: PropertyFilter::default(),
             };
 
             let send_clone = sender.clone();
@@ -184,6 +224,7 @@ impl Peer {
                 web_sock: None,
                 hive_name,
                 peer_type,
+                property_filter: PropertyFilter::default(),
             })
         }
     }

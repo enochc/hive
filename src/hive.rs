@@ -75,6 +75,7 @@ pub(crate) const PING: u8 = 0x63;
 // pub(crate) const NEW_PEER:u8 = 0x64;
 pub(crate) const PEER_REQUESTS: u8 = 0x65;
 pub(crate) const PEER_RESPONSE: u8 = 0x66;
+pub(crate) const ADDRESS_UPDATE: u8 = 0x67;
 pub(crate) const HEADER_NAME: u8 = 0x78;
 pub(crate) const HIVE_PROTOCOL: &str = "HVEP";
 
@@ -137,6 +138,24 @@ impl Hive {
 
     pub fn is_connected(&self) -> bool {
         return self.connected.load(Ordering::Relaxed);
+    }
+
+    /// Check whether an IP address string falls within a private/internal
+    /// range (RFC 1918).  Returns true for 10.x.x.x, 172.16-31.x.x,
+    /// 192.168.x.x, and 127.x.x.x (loopback).
+    fn is_private_ip(ip: &str) -> bool {
+        if ip.starts_with("10.") || ip.starts_with("192.168.") || ip.starts_with("127.") {
+            return true;
+        }
+        // 172.16.0.0 - 172.31.255.255
+        if let Some(rest) = ip.strip_prefix("172.") {
+            if let Some(second_octet_str) = rest.split('.').next() {
+                if let Ok(second) = second_octet_str.parse::<u8>() {
+                    return (16..=31).contains(&second);
+                }
+            }
+        }
+        false
     }
 
     pub async fn go(mut self, wait: bool, cancellation_token: CancellationToken) -> Handler {
@@ -506,7 +525,17 @@ impl Hive {
         }
 
         if self.connected.load(Ordering::Relaxed) {
-            //This is where we sit for a long time and just receive events
+            // Spawn IP address monitor to detect network changes.
+            // When the local IP changes, notify all connected peers
+            // so they can update their records.
+            let ip_sender = self.sender.clone();
+            let ip_token = cancellation_token.clone();
+            let ip_name = self.name.clone();
+            tokio::spawn(async move {
+                Self::ip_monitor_loop(ip_sender, ip_token, &ip_name).await;
+            });
+
+            // This is where we sit for a long time and just receive events
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     warn!("Hive Canceled! *******");
@@ -700,9 +729,93 @@ impl Hive {
 
     // TODO send properties with handshake
     async fn send_properties(&self, peer: &Peer) -> Result<()> {
-        let bts = properties_to_bytes(&self.properties);
-        peer.send(bts).await?;
+        // Respect the peer's property filter during initial sync.
+        // Only send properties whose names pass the filter.
+        let mut bytes = BytesMut::new();
+        bytes.put_u8(PROPERTIES);
+        for (_id, prop) in &self.properties {
+            if !prop.is_none() {
+                let name = prop.get_name();
+                if peer.property_filter.should_send(name) {
+                    bytes.put_slice(&property_to_bytes(prop, false));
+                }
+            }
+        }
+        peer.send(bytes.freeze()).await?;
         Ok(())
+    }
+
+    /// Periodically check whether the local IP address has changed.
+    /// When a change is detected, send an ADDRESS_UPDATE message to
+    /// all connected peers so they can update their records.
+    ///
+    /// Skips monitoring if the current IP is in a private range
+    /// (192.168.x.x, 10.x.x.x, 172.16-31.x.x) since those addresses
+    /// are stable within a LAN.
+    ///
+    /// Uses `tokio::time::interval` (not a busy-wait loop).
+    async fn ip_monitor_loop(
+        mut sender: Sender<SocketEvent>,
+        token: CancellationToken,
+        hive_name: &str,
+    ) {
+        let mut last_ip = local_ipaddress::get().unwrap_or_default();
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        // Skip the first immediate tick
+        interval.tick().await;
+
+        loop {
+            tokio::select! {
+                _ = token.cancelled() => {
+                    debug!("[{}] IP monitor shutting down", hive_name);
+                    break;
+                }
+                _ = interval.tick() => {
+                    match local_ipaddress::get() {
+                        Some(current_ip) => {
+                            if current_ip != last_ip {
+                                // Only notify peers about non-private addresses.
+                                // Private IPs (192.168, 10.x, 172.16-31) are stable
+                                // within a LAN and changes are typically noise
+                                // (e.g. interface reordering).
+                                if Self::is_private_ip(&current_ip) {
+                                    debug!(
+                                        "[{}] IP changed to private {}, skipping notification",
+                                        hive_name, current_ip
+                                    );
+                                } else {
+                                    info!(
+                                        "[{}] IP address changed: {} -> {}",
+                                        hive_name, last_ip, current_ip
+                                    );
+
+                                    let addr_bytes = current_ip.as_bytes();
+                                    let mut buf = BytesMut::with_capacity(
+                                        1 + 2 + addr_bytes.len(),
+                                    );
+                                    buf.put_u8(ADDRESS_UPDATE);
+                                    buf.put_u16(addr_bytes.len() as u16);
+                                    buf.put_slice(addr_bytes);
+
+                                    let event = SocketEvent::Message {
+                                        from: String::new(),
+                                        msg: buf.freeze(),
+                                    };
+                                    if let Err(e) = sender.send(event).await {
+                                        warn!("failed to send ADDRESS_UPDATE: {}", e);
+                                        break;
+                                    }
+                                }
+                                last_ip = current_ip;
+                            }
+                        }
+                        None => {
+                            debug!("[{}] could not determine local IP", hive_name);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn get_weak_property(&mut self, prop_name: &str) -> Weak<Mutex<Property>> {
@@ -748,22 +861,29 @@ impl Hive {
     }
 
     async fn broadcast(&self, msg_type: u8, property: &Property, except: &str) -> Result<()> {
-        /*
-        Dont broadcast to the same Peer that the original change came from
-        to prevent an infinite re-broadcast loop
-         */
+        // Don't broadcast to the same peer that the original change came from
+        // to prevent an infinite re-broadcast loop.
 
-        // bluetooth clients dont receive independent updates,
-        // bluetooth really is a broadcast and only needs to go out once
+        // Check property name for peer filtering.
+        let prop_name = property.get_name();
+
+        // Bluetooth clients don't receive independent updates;
+        // bluetooth really is a broadcast and only needs to go out once.
         let mut sent_bt_broadcast = false;
         let msg = property_to_bytes(property, false);
         for p in &self.peers {
             debug!("{} broadcasting: {:?}, {:?}", self.name, p.get_name(), p.is_bt_client(),);
             if p.address() != except {
-                debug!("... TEST 1");
+                // Apply property filter for this peer
+                if !p.property_filter.should_send(prop_name) {
+                    debug!(
+                        "skipping broadcast of '{}' to peer {} (filtered)",
+                        prop_name, p.get_name()
+                    );
+                    continue;
+                }
                 if p.is_bt_client() {
                     if sent_bt_broadcast {
-                        // I'm a bluetooth client and the broadcast has already been sent next
                         continue;
                     }
                     sent_bt_broadcast = true;
@@ -945,6 +1065,59 @@ impl Hive {
                                 self.file_transfers.handle_file_cancel(from, &mut msg);
                             }
                             _ => unreachable!(),
+                        }
+                    }
+                }
+                ADDRESS_UPDATE => {
+                    if from.is_empty() {
+                        // Local IP change detected by ip_monitor_loop.
+                        // Forward to all peers so they update our address.
+                        let mut forward = BytesMut::with_capacity(1 + msg.len());
+                        forward.put_u8(ADDRESS_UPDATE);
+                        forward.put_slice(&msg);
+                        let frozen = forward.freeze();
+                        for p in &self.peers {
+                            if let Err(e) = p.send(frozen.clone()).await {
+                                warn!("failed to send ADDRESS_UPDATE to peer: {}", e);
+                            }
+                        }
+                    } else {
+                        // A remote peer is telling us their IP changed.
+                        if msg.remaining() >= 2 {
+                            let addr_len = msg.get_u16() as usize;
+                            if msg.remaining() >= addr_len {
+                                let new_addr = String::from_utf8(
+                                    msg.slice(..addr_len).to_vec()
+                                ).unwrap_or_default();
+                                msg.advance(addr_len);
+                                info!(
+                                    "peer {} reports new address: {}",
+                                    from, new_addr
+                                );
+                                // Update the peer's stored address
+                                for p in self.peers.as_mut_slice() {
+                                    if p.address() == from {
+                                        // The peer's TCP address includes the port,
+                                        // but the reported address is just the IP.
+                                        // Preserve the existing port.
+                                        let old = p.address();
+                                        let port = old.rsplit_once(':')
+                                            .map(|(_, port)| port)
+                                            .unwrap_or("");
+                                        let updated = if port.is_empty() {
+                                            new_addr.clone()
+                                        } else {
+                                            format!("{}:{}", new_addr, port)
+                                        };
+                                        info!(
+                                            "updating peer address: {} -> {}",
+                                            old, updated
+                                        );
+                                        p.address = updated;
+                                        break;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
