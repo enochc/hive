@@ -122,7 +122,27 @@
 
 ### Done
 
-(nothing yet)
+- [x] **HTTP download** in `self_update.rs`
+  - URL-based downloads via `reqwest` (behind `rest` feature)
+  - `file://` support retained for local testing
+  - Stub when `rest` feature is not enabled (returns descriptive error)
+  - Protocol scheme validation (file://, http://, https://)
+- [x] **Peer-to-peer binary transfer** path wired
+  - `UpdateSource::Peer` documented with file_received signal approach
+  - `process_received_binary()` method for processing binary delivered via file transfer
+  - Leverages base Hive file transfer protocol (FILE_HEADER/CHUNK/COMPLETE)
+- [x] **Ed25519 signature verification** structure
+  - `UpdateConfig` gains `require_signature` and `signing_public_key` fields
+  - `verify_signature()` validates signature hex, key presence, digest decoding
+  - Rejects unsigned manifests when `require_signature` is true
+  - Rejects missing public key when signatures are required
+  - Crypto call stubbed pending `ed25519-dalek` dependency (logged warning)
+  - Unit tests: reject missing sig when required, reject no key when required,
+    accept no sig when not required
+- [x] **Health check** framework
+  - `wait_for_health_check()` standalone function with timeout
+  - Designed for orchestrator-side monitoring of updated node status
+  - Node's `node_status_*` property publication serves as health signal
 
 ### Todo
 
@@ -133,24 +153,10 @@
   - SCP file transfer with progress reporting
   - Remote command execution for install steps
   - Verify new node in Hive peer list via Notify (no polling)
-- [ ] **peer_transfer.rs** - Binary transfer between peers
-  - Define a new message type for binary chunk streaming
-  - Sender: read binary, chunk into sized pieces, send via peer
-  - Receiver: reassemble chunks, verify hash, stage binary
-  - Update `UpdateSource::Peer` handling in `self_update.rs`
-- [ ] **Signature verification** - Ed25519 signing for update manifests
-  - Add `ed25519-dalek` dependency behind `hunter` feature
-  - Embed a public key at compile time (or load from config)
-  - Verify `manifest.signature` in `process_manifest()` before staging
-  - Reject unsigned manifests when `require_signature` config is true
-- [ ] **HTTP download** in `self_update.rs`
-  - Use `reqwest` (already an optional dep) for URL-based downloads
-  - Support HTTPS with certificate validation
-  - Progress reporting via a channel or callback
-- [ ] **Health check** after binary replacement
-  - New binary sends a "healthy" property update within `health_timeout`
-  - If timeout expires without the property, trigger rollback
-  - Use `tokio::sync::Notify` or `tokio::time::timeout` (no busy wait)
+- [ ] **ed25519-dalek integration**
+  - Add dependency behind `hunter` feature
+  - Replace the stubbed crypto call in `verify_signature()` with real verification
+  - Add unit test with a real keypair: sign, verify, reject bad signature
 
 ---
 
@@ -233,17 +239,15 @@
 
 ## Notes
 
-- The self-update module currently supports `file://` URLs only; HTTP
-  downloads need the `reqwest` integration (Phase 3).
-- Signature verification (Ed25519) is defined in the manifest struct but
-  not yet enforced; the verification logic is a Phase 3 task.
 - The scanner uses a simple windowed byte search; production deployments
   should plan for YARA integration (Phase 4) for real-world effectiveness.
 - The provisioner scaffolding is complete but SSH operations are stubbed
-  out pending an SSH library dependency (Phase 3).  Config generation,
-  service file generation, subnet scanning, and the overall orchestration
-  flow are all functional.
-- The update manifest on_next callback currently logs but does not trigger
-  the async SelfUpdater flow.  This requires either a PropertyStream-based
-  watcher (async-native) or a channel bridge from the sync callback.
-  Tracked in Phase 2 remaining tasks.
+  out pending an SSH library dependency.
+- The Ed25519 signature verification is structurally complete (validation
+  logic, config fields, error paths, tests) but the actual crypto call
+  requires adding the `ed25519-dalek` crate.
+- HTTP downloads require the `rest` feature flag (which pulls in `reqwest`).
+  Without it, URL-based updates return a descriptive error.
+- Peer-to-peer binary transfer uses the base Hive file transfer protocol.
+  The requesting node receives the binary via `file_received` signal and
+  passes it to `SelfUpdater::process_received_binary()`.

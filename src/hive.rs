@@ -20,7 +20,7 @@ use crate::file_transfer::{FileTransferManager, ReceivedFile,
 use crate::handler::Handler;
 #[cfg(feature = "mqtt")]
 use crate::mqtt::mqtt_peer::{MqttConfig, MqttPeerHandle, spawn_mqtt_peer};
-use crate::peer::{Peer, PeerType, SocketEvent};
+use crate::peer::{Peer, PeerType, PropertyFilter, SocketEvent};
 use crate::property::{bytes_to_property, properties_to_bytes, property_to_bytes, Property};
 use crate::signal::Signal;
 use ctrlc::Error;
@@ -49,6 +49,9 @@ pub struct Hive {
     file_transfers: FileTransferManager,
     pub connected: Arc<AtomicBool>,
     advertising: Arc<AtomicBool>,
+    /// This node's property filter, sent to peers during handshake so
+    /// they know which properties to forward.
+    property_filter: PropertyFilter,
     ready: Option<Arc<tokio::sync::Notify>>,
     #[cfg(feature = "mqtt")]
     mqtt_config: Option<MqttConfig>,
@@ -77,6 +80,8 @@ pub(crate) const PEER_REQUESTS: u8 = 0x65;
 pub(crate) const PEER_RESPONSE: u8 = 0x66;
 pub(crate) const ADDRESS_UPDATE: u8 = 0x67;
 pub(crate) const HEADER_NAME: u8 = 0x78;
+pub(crate) const HEADER_PROP_INCLUDE: u8 = 0x79;
+pub(crate) const HEADER_PROP_EXCLUDE: u8 = 0x7A;
 pub(crate) const HIVE_PROTOCOL: &str = "HVEP";
 
 #[cfg(feature = "bluetooth")]
@@ -208,6 +213,44 @@ impl Hive {
         #[cfg(feature = "mqtt")]
         let mqtt_config = config.get("MQTT").and_then(MqttConfig::from_toml);
 
+        // Parse property filter from [Filters] section
+        let property_filter = match config.get("Filters") {
+            Some(filters) => {
+                if let Some(include) = filters.get("include") {
+                    if let Some(arr) = include.as_array() {
+                        let prefixes: Vec<String> = arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect();
+                        if !prefixes.is_empty() {
+                            info!("property filter: include {:?}", prefixes);
+                            PropertyFilter::Include(prefixes)
+                        } else {
+                            PropertyFilter::All
+                        }
+                    } else {
+                        PropertyFilter::All
+                    }
+                } else if let Some(exclude) = filters.get("exclude") {
+                    if let Some(arr) = exclude.as_array() {
+                        let prefixes: Vec<String> = arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect();
+                        if !prefixes.is_empty() {
+                            info!("property filter: exclude {:?}", prefixes);
+                            PropertyFilter::Exclude(prefixes)
+                        } else {
+                            PropertyFilter::All
+                        }
+                    } else {
+                        PropertyFilter::All
+                    }
+                } else {
+                    PropertyFilter::All
+                }
+            }
+            None => PropertyFilter::All,
+        };
+
         let props: HashMap<u64, Property> = HashMap::new();
 
         let (send_chan, receive_chan) = mpsc::unbounded();
@@ -226,6 +269,7 @@ impl Hive {
             file_transfers: FileTransferManager::new(),
             connected: Arc::new(AtomicBool::new(false)),
             advertising: Arc::new(AtomicBool::new(false)),
+            property_filter,
             ready: None,
             #[cfg(feature = "mqtt")]
             mqtt_config,
@@ -845,6 +889,24 @@ impl Hive {
                         PEER_REQUESTS => {
                             p.update_peers = true;
                         }
+                        HEADER_PROP_INCLUDE => {
+                            if let Some(filter) = Self::parse_filter_prefixes(&mut head) {
+                                info!(
+                                    "peer {} requests include filter: {:?}",
+                                    from, filter
+                                );
+                                p.property_filter = PropertyFilter::Include(filter);
+                            }
+                        }
+                        HEADER_PROP_EXCLUDE => {
+                            if let Some(filter) = Self::parse_filter_prefixes(&mut head) {
+                                info!(
+                                    "peer {} requests exclude filter: {:?}",
+                                    from, filter
+                                );
+                                p.property_filter = PropertyFilter::Exclude(filter);
+                            }
+                        }
                         _ => {
                             debug!("unrecognized header: {:?}", head);
                         }
@@ -854,10 +916,59 @@ impl Hive {
         }
 
         if self.is_server() {
-            // Web sockets send a separate header update with its name
-            // other Hive sockets send the name in the initial connection heder.
             self.notify_peers_change().await;
         }
+    }
+
+    /// Parse a list of prefix strings from a filter header payload.
+    /// Format: [count: u16] then for each: [len: u16][prefix bytes]
+    fn parse_filter_prefixes(head: &mut Bytes) -> Option<Vec<String>> {
+        if head.remaining() < 2 {
+            return None;
+        }
+        let count = head.get_u16() as usize;
+        let mut prefixes = Vec::with_capacity(count);
+        for _ in 0..count {
+            if head.remaining() < 2 {
+                return None;
+            }
+            let len = head.get_u16() as usize;
+            if head.remaining() < len {
+                return None;
+            }
+            let prefix = String::from_utf8(head.slice(..len).to_vec())
+                .unwrap_or_default();
+            head.advance(len);
+            prefixes.push(prefix);
+        }
+        Some(prefixes)
+    }
+
+    /// Encode a property filter as header bytes to send to a peer.
+    fn encode_filter_header(filter: &PropertyFilter) -> Option<Bytes> {
+        match filter {
+            PropertyFilter::All => None,
+            PropertyFilter::Include(prefixes) => {
+                Some(Self::encode_filter_bytes(HEADER_PROP_INCLUDE, prefixes))
+            }
+            PropertyFilter::Exclude(prefixes) => {
+                Some(Self::encode_filter_bytes(HEADER_PROP_EXCLUDE, prefixes))
+            }
+        }
+    }
+
+    /// Encode the wire bytes for a filter header.
+    fn encode_filter_bytes(header_type: u8, prefixes: &[String]) -> Bytes {
+        let mut buf = BytesMut::new();
+        buf.put_u8(HEADER);
+        buf.put_u8(header_type);
+        buf.put_u16(prefixes.len() as u16);
+        for prefix in prefixes {
+            let pb = prefix.as_bytes();
+            buf.put_u16(pb.len() as u16);
+            buf.put_slice(pb);
+        }
+        buf.freeze()
     }
 
     async fn broadcast(&self, msg_type: u8, property: &Property, except: &str) -> Result<()> {
