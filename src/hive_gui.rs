@@ -1,23 +1,14 @@
-use std::collections::HashMap;
 use slint;
-use slint::{CloseRequestResponse, Model, ModelRc, SharedString, VecModel};
+use slint::{CloseRequestResponse, ModelRc, SharedString, VecModel};
 use std::env;
-use std::ops::Index;
 
 use crate::hive::Hive;
 use crate::property::{Property};
-use std::sync::{Arc, mpsc, RwLock, RwLockReadGuard};
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use std::rc::Rc;
-use std::time::Duration;
-use log::kv::{Source, Value};
-use futures::channel::mpsc::{channel, Sender as ASender};
+use futures::channel::mpsc::channel;
 
-use toml::macros::IntoDeserializer;
-use crossbeam_channel::{bounded, RecvError, select, Sender};
-use async_std::task::block_on;
 use log::debug;
-use crate::handler::Handler;
 
 pub trait Gui {
     fn launch(hive: Option<Hive>);

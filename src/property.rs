@@ -17,7 +17,7 @@ use toml::Value;
 
 use toml::value::Table;
 use std::fmt::{Debug, Formatter, Display, write, Pointer};
-use std::hash::{BuildHasherDefault, Hash, Hasher};
+use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 use ahash;
@@ -271,8 +271,19 @@ impl Property {
     }
 
     pub fn hash_id(val: &str) -> u64 {
-        let now: SystemTime = SystemTime::now();
-        let mut hasher = AHasher::default(); // todo replace with 32 bit hash:: https://github.com/Cyan4973/xxHash
+        // Property IDs travel over the wire and must match across separate
+        // processes (server and client), so this needs a fixed seed.
+        // AHasher::default() randomizes its seed once per process (to guard
+        // against HashDoS), which silently breaks cross-process property
+        // matching, same-process tests don't catch it since both sides end
+        // up sharing that process's random seed.
+        let mut hasher = ahash::RandomState::with_seeds(
+            0xF0E1_D2C3_B4A5_9687,
+            0x1234_5678_9ABC_DEF0,
+            0x0FED_CBA9_8765_4321,
+            0xDEAD_BEEF_CAFE_F00D,
+        )
+        .build_hasher();
         hasher.write(val.as_bytes());
 
         hasher.finish()
