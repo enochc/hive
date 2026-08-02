@@ -17,7 +17,6 @@ mqtt = ["rumqttc"]
 gui = ["slint", "crossbeam-channel"]
 
 [dependencies]
-ahash = "0.8.12"
 slint = { version="1.13", optional=true }
 futures = "0.3"
 #https://docs.rs/config/0.10.1/config/

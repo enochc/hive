@@ -17,12 +17,8 @@ use toml::Value;
 
 use toml::value::Table;
 use std::fmt::{Debug, Formatter, Display, write, Pointer};
-use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
-use ahash;
-use ahash::AHasher;
 
 pub type PropertyType = toml::Value;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -273,29 +269,36 @@ impl Property {
 
     pub fn hash_id(val: &str) -> u64 {
         // Property IDs travel over the wire and must match across separate
-        // processes (server and client), so this needs a fixed seed.
-        // AHasher::default() randomizes its seed once per process (to guard
-        // against HashDoS), which silently breaks cross-process property
-        // matching, same-process tests don't catch it since both sides end
-        // up sharing that process's random seed.
+        // processes (server and client), possibly on different CPU
+        // architectures (a Mac-built GUI talking to an ARM-built client,
+        // for instance), so this needs to be identical everywhere.
         //
-        // The seeded RandomState itself is cheap to build but this runs on
-        // every property lookup, a hot path, so it's built once and cached
-        // rather than reconstructed per call. Each call still gets its own
-        // Hasher, that part is genuinely per-call state.
-        static HASH_STATE: OnceLock<ahash::RandomState> = OnceLock::new();
-        let state = HASH_STATE.get_or_init(|| {
-            ahash::RandomState::with_seeds(
-                0xF0E1_D2C3_B4A5_9687,
-                0x1234_5678_9ABC_DEF0,
-                0x0FED_CBA9_8765_4321,
-                0xDEAD_BEEF_CAFE_F00D,
-            )
-        });
+        // Used to use ahash::RandomState::with_seeds for this. Fixed seeds
+        // do solve ahash's *per-process* random seeding (AHasher::default()
+        // reseeds randomly each run, which silently breaks cross-process
+        // matching in a way same-process tests never catch, both sides
+        // just happen to share that process's random seed). But ahash can
+        // also take a different internal code path per target depending on
+        // whether hardware AES instructions are available, which changes
+        // its output even with identical seeds and identical input. That's
+        // exactly what happened here: confirmed 2026-08-02 on real
+        // hardware, a Mac-built GUI and an ARM-built motor_client computed
+        // completely different ids for the same property names, silently
+        // breaking on_next for every property, because the receiving side
+        // never recognized an incoming update as one it already had a
+        // callback registered for. Fixed seeds alone don't protect against
+        // that, a genuinely portable algorithm does. FNV-1a has no hardware-
+        // dependent code paths at all, pure integer arithmetic, so it's
+        // guaranteed to produce the same output on any target.
+        const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-        let mut hasher = state.build_hasher();
-        hasher.write(val.as_bytes());
-        hasher.finish()
+        let mut hash = FNV_OFFSET_BASIS;
+        for byte in val.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        hash
     }
 
     /// Returns a clone of the current toml Value, if set.
