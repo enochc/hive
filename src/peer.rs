@@ -127,6 +127,7 @@ impl Peer {
         address: String,
         hive_name: String,
         peer_type: PeerType,
+        max_message_size: u32,
     ) -> Result<Peer> {
         if let Some(tcp_stream) = stream {
             let addr = tcp_stream.peer_addr()?.to_string();
@@ -161,7 +162,7 @@ impl Peer {
                 debug!("start tcp socket read loop for({})", name_id);
 
                 tokio::spawn(async move {
-                    read_loop(send_clone, name_id, from, reader)
+                    read_loop(send_clone, name_id, from, reader, max_message_size)
                         .await
                         .expect("Read Loop Failed");
                 });
@@ -445,11 +446,23 @@ async fn write_framed(stream: &Arc<TokioMutex<OwnedWriteHalf>>, message: &Bytes)
     Ok(())
 }
 
+// Messages on the wire here are property syncs and small control frames, a
+// float, a short string, at most a modest peer list, never anything close
+// to this. The 4-byte length prefix comes straight off the wire with no
+// other validation, so a corrupted stream or a bug on the sending side
+// could otherwise claim a message is up to ~4GB and we'd try to allocate
+// that in one shot. Reject anything absurd before allocating rather than
+// trusting the prefix. Generous on purpose, this is a safety ceiling, not a
+// tuned limit. Overridable per-Hive via the `max_message_size_bytes` config
+// key (see Hive::new_from_str), this is only the fallback when that's unset.
+pub(crate) const DEFAULT_MAX_MESSAGE_SIZE: u32 = 1024 * 1024;
+
 async fn read_loop(
     sender: UnboundedSender<SocketEvent>,
     peer_id_string: String,
     from: String,
     mut reader: BufReader<OwnedReadHalf>,
+    max_message_size: u32,
 ) -> Result<()> {
     let mut is_running = true;
     while is_running {
@@ -469,11 +482,47 @@ async fn read_loop(
                     is_running = false;
                 } else {
                     let message_size = as_u32_be(&size_buff);
-                    let mut size_buff = vec![0u8; message_size as usize];
-                    let red = reader.read_exact(&mut size_buff).await;
-                    match red {
-                        Ok(_t) => {
-                            let msg = Bytes::from(size_buff);
+                    if message_size > max_message_size {
+                        error!(
+                            "{:?} claimed message size {} exceeds {} byte cap, dropping connection",
+                            peer_id_string, message_size, max_message_size
+                        );
+                        sender
+                            .send(SocketEvent::Hangup { from })
+                            .await
+                            .expect("Failed to send Hangup");
+                        is_running = false;
+                        continue;
+                    }
+
+                    // BytesMut::with_capacity reserves the exact size but
+                    // leaves it uninitialized rather than zero-filling it
+                    // like vec![0u8; n] would, read_buf writes directly
+                    // into that spare capacity. We're about to overwrite
+                    // every byte with the real read anyway, so there's no
+                    // reason to pay for zeroing memory first.
+                    let mut buf = BytesMut::with_capacity(message_size as usize);
+                    let mut read_err = None;
+                    while buf.len() < message_size as usize {
+                        match reader.read_buf(&mut buf).await {
+                            Ok(0) => {
+                                read_err = Some(io::Error::new(
+                                    io::ErrorKind::UnexpectedEof,
+                                    "connection closed mid-message",
+                                ));
+                                break;
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                read_err = Some(e);
+                                break;
+                            }
+                        }
+                    }
+
+                    match read_err {
+                        None => {
+                            let msg = buf.freeze();
                             debug!("<<<<<<<<<<<<<<<<< {:?} Read message: {:?}", peer_id_string, &msg);
                             let debug_msg = msg.clone();
                             let se = SocketEvent::Message { from, msg };
@@ -482,7 +531,7 @@ async fn read_loop(
                                 debug!("{:?} send message {:?}", peer_id_string, debug_msg);
                             }
                         }
-                        Err(e) => {
+                        Some(e) => {
                             error!("Error reading from socket: {:?}", e);
                             sender
                                 .send(SocketEvent::Hangup { from })

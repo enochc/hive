@@ -128,6 +128,10 @@ name = "MyHive"
 listen = "3000"                    # or "192.168.1.10:3000"
 connect = "192.168.1.10:3000"      # server address
 
+# Optional reliability settings, see "Connection Reliability" below
+wave_timeout_ms = 800              # actively ping if a peer goes idle this long
+max_message_size_bytes = 1048576   # cap on a single message's claimed size, this is the default
+
 # Bluetooth (requires "bluetooth" feature)
 bt_listen = "Hive_Peripheral"      # advertise as BLE peripheral
 bt_connect = "Hive_Central"        # connect as BLE central
@@ -175,6 +179,24 @@ tokio::spawn(async move {
         // Each clone gets independent cursor
     }
 });
+```
+
+## Connection Reliability
+
+**Liveness detection (`wave_timeout_ms`)** By default a Hive instance only notices a peer is gone when the OS reports the TCP connection closed. A link that dies silently, Wi-Fi drops, a process hangs instead of exiting, never triggers that. Setting `wave_timeout_ms` makes that Hive instance actively watch its peers instead: once a peer's gone that many milliseconds without sending anything at all, it gets pinged and given the same interval again to reply. No reply, a PONG or literally any other message both count, means it's declared dead and removed, same as a real disconnect.
+
+```toml
+name = "flight_computer"
+connect = "192.168.1.10:3000"
+wave_timeout_ms = 800   # ping after 800ms idle, dead if no reply within another 800ms
+```
+
+Only the side that needs to detect a disconnect has to set this, replying to a PING is unconditional on the receiving end regardless of its own config. Watch for it in application code via `handler.is_connected()`. Applies to TCP and Bluetooth-peripheral peers; WebSocket and Bluetooth-central peers already emit a disconnect from their own read loops and don't need this.
+
+**Message size limit (`max_message_size_bytes`)** Every TCP message is length-prefixed, and that length is trusted before the payload is read into memory. Without a cap, a corrupted stream or a bug on the sending side claiming an absurd size would attempt one huge allocation. Defaults to 1 MiB, comfortably more than typical property payloads need, override it only if you have a legitimate reason to send larger messages.
+
+```toml
+max_message_size_bytes = 4194304   # 4 MiB
 ```
 
 ## Building

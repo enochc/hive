@@ -18,7 +18,7 @@ use crate::bluetooth::central::Central;
 use crate::handler::Handler;
 #[cfg(feature = "mqtt")]
 use crate::mqtt::mqtt_peer::{MqttConfig, MqttPeerHandle, spawn_mqtt_peer};
-use crate::peer::{Peer, PeerType, SocketEvent};
+use crate::peer::{Peer, PeerType, SocketEvent, DEFAULT_MAX_MESSAGE_SIZE};
 use crate::property::{bytes_to_property, properties_to_bytes, property_to_bytes, Property};
 use crate::signal::Signal;
 use ctrlc::Error;
@@ -45,6 +45,11 @@ pub struct Hive {
     /// key. None (the default) means peers are never actively pinged, a
     /// dead link is only noticed via a real TCP-level disconnect.
     wave_timeout: Option<Duration>,
+    /// Ceiling on a single incoming message's claimed size, from the
+    /// `max_message_size_bytes` config key. Defaults to
+    /// `DEFAULT_MAX_MESSAGE_SIZE`, see `Peer::read_loop` for why this
+    /// exists at all.
+    max_message_size: u32,
     peers: Vec<Peer>,
     pub message_received: Signal<String>,
     pub connected: Arc<AtomicBool>,
@@ -192,6 +197,12 @@ impl Hive {
             .and_then(|v| v.as_integer())
             .map(|ms| Duration::from_millis(ms as u64));
 
+        let max_message_size = config
+            .get("max_message_size_bytes")
+            .and_then(|v| v.as_integer())
+            .map(|bytes| bytes as u32)
+            .unwrap_or(DEFAULT_MAX_MESSAGE_SIZE);
+
         #[cfg(feature = "mqtt")]
         let mqtt_config = config.get("MQTT").and_then(MqttConfig::from_toml);
 
@@ -208,6 +219,7 @@ impl Hive {
             listen_port,
             name,
             wave_timeout,
+            max_message_size,
             peers: Vec::new(),
             message_received: Default::default(),
             connected: Arc::new(AtomicBool::new(false)),
@@ -558,6 +570,7 @@ impl Hive {
                             address,
                             self.name.clone(),
                             ptype_clne,
+                            self.max_message_size,
                         )
                         .await;
                         if p.is_ok() {
