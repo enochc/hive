@@ -7,14 +7,25 @@ use log::{debug, error, info};
 use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
 use crate::peer::SocketEvent;
 use crate::property::{Property, property_to_bytes, PropertyValue, PropertyType};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Handler {
     pub (crate) sender: UnboundedSender<SocketEvent>,
     pub from_name: String,
+    pub (crate) connected: Arc<AtomicBool>,
 }
 
 impl Handler {
+
+    /// True once we've connected to (or been connected to by) at least one
+    /// peer and that peer hasn't since disconnected. A `wave_timeout_ms` in
+    /// the Hive config is what makes this notice a silently dead link, not
+    /// just a clean TCP close, see `Peer::wave`.
+    pub fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
 
     pub async fn send_property_value(&mut self, prop_name: &str, prop_value: Option<&PropertyType>) {
         let p = Property::from_toml(prop_name, prop_value);

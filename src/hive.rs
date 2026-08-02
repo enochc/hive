@@ -41,6 +41,10 @@ pub struct Hive {
     bt_listen: Option<String>,
     listen_port: Option<String>,
     pub name: String,
+    /// Per-peer liveness check timeout, from the `wave_timeout_ms` config
+    /// key. None (the default) means peers are never actively pinged, a
+    /// dead link is only noticed via a real TCP-level disconnect.
+    wave_timeout: Option<Duration>,
     peers: Vec<Peer>,
     pub message_received: Signal<String>,
     pub connected: Arc<AtomicBool>,
@@ -181,6 +185,12 @@ impl Hive {
         let listen_port = prop("listen");
         let bt_listen = prop("bt_listen");
         let bt_connect_to = prop("bt_connect");
+        // Presence of this key both enables the liveness check and sets its
+        // timeout, e.g. `wave_timeout_ms = 800`. Absent means off.
+        let wave_timeout = config
+            .get("wave_timeout_ms")
+            .and_then(|v| v.as_integer())
+            .map(|ms| Duration::from_millis(ms as u64));
 
         #[cfg(feature = "mqtt")]
         let mqtt_config = config.get("MQTT").and_then(MqttConfig::from_toml);
@@ -197,6 +207,7 @@ impl Hive {
             bt_listen,
             listen_port,
             name,
+            wave_timeout,
             peers: Vec::new(),
             message_received: Default::default(),
             connected: Arc::new(AtomicBool::new(false)),
@@ -259,6 +270,7 @@ impl Hive {
         return Handler {
             sender: self.sender.clone(),
             from_name: self.name.clone(),
+            connected: self.connected.clone(),
         };
     }
 
@@ -560,7 +572,12 @@ impl Hive {
                             debug!("<<<< NEW PEER for {:?}: {:?}", self.name, peer.get_name());
                             let is_web_sock_peer = peer.is_web_socket();
 
+                            if let Some(timeout) = self.wave_timeout {
+                                peer.wave(timeout).await;
+                            }
+
                             self.peers.push(peer);
+                            self.connected.store(true, Ordering::Relaxed);
 
                             if !is_tcp_client {
                                 // I'm a server and another tcp hive client connected
@@ -586,9 +603,12 @@ impl Hive {
                 Some(SocketEvent::Hangup { from }) => {
                     debug!("received hangup from {:?}", from);
                     for x in 0..self.peers.len() {
-                        if self.peers[x].address() == from {
+                        if self.peers[x].address == from {
                             debug!("removing peer at index {}", x);
                             self.peers.remove(x);
+                            if self.peers.is_empty() {
+                                self.connected.store(false, Ordering::Relaxed);
+                            }
                             self.notify_peers_change().await;
                             break;
                         }
@@ -715,13 +735,13 @@ impl Hive {
             from, head, self.name
         );
         for p in self.peers.as_mut_slice() {
-            if p.address() == from {
+            if p.address == from {
                 while head.remaining() > 0 {
                     match head.get_u8() {
                         HEADER_NAME => {
                             let name = String::from_utf8(head.to_vec()).unwrap();
                             head.advance(name.len());
-                            p.set_name(&name).await;
+                            p.set_name(&name);
                         }
                         PEER_REQUESTS => {
                             p.update_peers = true;
@@ -781,29 +801,36 @@ impl Hive {
             //let (msg_type, message) = msg.split_at(3);
             let msg_type = msg.get_u8();
 
+            // Most branches below act on the peer that sent this message,
+            // and the trailing ack does too, so look it up once by index
+            // instead of re-scanning self.peers (and re-cloning its
+            // address for the comparison) per branch. HANGUP removes this
+            // peer, so the ack at the bottom skips it explicitly rather
+            // than trusting a now-possibly-stale index.
+            let peer_idx = self.peers.iter().position(|p| p.address == from);
+
             match msg_type {
                 PING => {
+                    // Someone is asking if we're alive, answer with a PONG.
                     debug!("<<< <<< PING from {:?}", from);
-                    match self.peers.iter_mut().find(|p| p.address() == from) {
-                        None => {}
-                        Some(p) => {
-                            p.receive_pong();
-                        }
+                    if let Some(idx) = peer_idx {
+                        self.peers[idx].send_pong().await?;
                     }
                 }
                 PONG => {
+                    // Reply to a PING we sent, clear the outstanding ack_check.
                     debug!("<<< PONG FROM {:?}", from);
-                    match self.peers.iter_mut().find(|p| p.address() == from) {
-                        None => {}
-                        Some(p) => {
-                            p.send_pong().await?;
-                        }
+                    if let Some(idx) = peer_idx {
+                        self.peers[idx].receive_pong();
                     }
                 }
                 HANGUP => {
                     debug!("<<<< hangup from {:?}", from);
-                    let pos = self.peers.iter().position(|p| p.address() == from).unwrap();
-                    self.peers.remove(pos);
+                    let idx = peer_idx.expect("hangup from unknown peer");
+                    self.peers.remove(idx);
+                    if self.peers.is_empty() {
+                        self.connected.store(false, Ordering::Relaxed);
+                    }
                     self.notify_peers_change().await;
                 }
                 PROPERTIES => {
@@ -896,21 +923,19 @@ impl Hive {
                     peer_bytes.put_u8(PEER_RESPONSE);
                     peer_bytes.put_slice(str.as_bytes());
 
-                    for p in self.peers.as_mut_slice() {
-                        if p.address() == from {
-                            p.send(peer_bytes.freeze()).await?;
-                            p.update_peers = true;
-                            break;
-                        }
+                    if let Some(idx) = peer_idx {
+                        self.peers[idx].send(peer_bytes.freeze()).await?;
+                        self.peers[idx].update_peers = true;
                     }
                 }
                 _ => unimplemented!("Unknown message {:#02x}", msg_type), //error!("Unknown message {:?}", msg_type)
             }
-            // do ACK for peer
-            match self.peers.iter_mut().find(|p| p.address() == from) {
-                None => {}
-                Some(p) => {
-                    p.ack().await;
+            // do ACK for peer. Skip on HANGUP, that peer is already gone
+            // and peer_idx would refer to whatever peer (if any) shifted
+            // into its old slot after the removal.
+            if msg_type != HANGUP {
+                if let Some(idx) = peer_idx {
+                    self.peers[idx].ack();
                 }
             }
         }

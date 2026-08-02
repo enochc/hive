@@ -19,6 +19,7 @@ use toml::value::Table;
 use std::fmt::{Debug, Formatter, Display, write, Pointer};
 use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 use ahash;
 use ahash::AHasher;
@@ -277,15 +278,23 @@ impl Property {
         // against HashDoS), which silently breaks cross-process property
         // matching, same-process tests don't catch it since both sides end
         // up sharing that process's random seed.
-        let mut hasher = ahash::RandomState::with_seeds(
-            0xF0E1_D2C3_B4A5_9687,
-            0x1234_5678_9ABC_DEF0,
-            0x0FED_CBA9_8765_4321,
-            0xDEAD_BEEF_CAFE_F00D,
-        )
-        .build_hasher();
-        hasher.write(val.as_bytes());
+        //
+        // The seeded RandomState itself is cheap to build but this runs on
+        // every property lookup, a hot path, so it's built once and cached
+        // rather than reconstructed per call. Each call still gets its own
+        // Hasher, that part is genuinely per-call state.
+        static HASH_STATE: OnceLock<ahash::RandomState> = OnceLock::new();
+        let state = HASH_STATE.get_or_init(|| {
+            ahash::RandomState::with_seeds(
+                0xF0E1_D2C3_B4A5_9687,
+                0x1234_5678_9ABC_DEF0,
+                0x0FED_CBA9_8765_4321,
+                0xDEAD_BEEF_CAFE_F00D,
+            )
+        });
 
+        let mut hasher = state.build_hasher();
+        hasher.write(val.as_bytes());
         hasher.finish()
     }
 

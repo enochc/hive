@@ -1,5 +1,5 @@
-use std::sync::Arc;
-use tokio::sync::{RwLock, Mutex as TokioMutex};
+use std::sync::{Arc, RwLock};
+use tokio::sync::Mutex as TokioMutex;
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::io::BufReader;
@@ -22,8 +22,6 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 #[allow(unused_imports)]
 use log::{debug, info, trace, warn};
 use tracing::error;
-
-const ACK_DURATION: u64 = 30;
 
 #[cfg(not(feature = "bluetooth"))]
 #[derive(Debug)]
@@ -110,9 +108,9 @@ impl Peer {
         self.web_sock.is_some()
     }
 
-    pub async fn set_name(&self, name: &str) {
+    pub fn set_name(&self, name: &str) {
         debug!("{:?} set name = {:?}", self.get_id_name(), name);
-        *self.name.write().await = String::from(name);
+        *self.name.write().unwrap() = String::from(name);
         debug!("set: {:?}", self.get_id_name());
     }
     
@@ -244,7 +242,7 @@ impl Peer {
                                 debug!("got name: {:?}", bm);
                                 bm.truncate(bm.len() - 1);
                                 let name = String::from_utf8(bm.to_vec()).expect("Can't parse name");
-                                self.set_name(&name).await;
+                                self.set_name(&name);
                                 break;
                             }
                             _ => {
@@ -281,14 +279,7 @@ impl Peer {
     }
 
     pub fn get_name(&self) -> String {
-        match self.name.try_read() {
-            Ok(guard) => String::from(&*guard),
-            Err(_) => {
-                let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
-                let name = self.name.clone();
-                rt.block_on(async { String::from(&*name.read().await) })
-            }
-        }
+        self.name.read().unwrap().clone()
     }
     
     pub fn get_id_name(&self) -> String {
@@ -300,9 +291,9 @@ impl Peer {
         self.ack_check.store(false, Relaxed);
     }
     
-    pub async fn ack(&self) {
+    pub fn ack(&self) {
         debug!("ACK {:?}", self.to_string());
-        *self.last_received.write().await = SystemTime::now();
+        *self.last_received.write().unwrap() = SystemTime::now();
     }
     
     pub async fn send_pong(&self) -> Result<()> {
@@ -311,48 +302,80 @@ impl Peer {
         self.send(byte).await
     }
 
-    #[allow(dead_code)]
-    pub async fn _wave(&self) {
+    /// Start a background liveness check for this peer. If nothing at all
+    /// has been heard from it (any message, not just a pong, counts, see
+    /// `ack()`) for `timeout`, send it a PING. If neither a PONG nor any
+    /// other traffic shows up within a further `timeout`, declare it dead
+    /// and emit a Hangup, same as a real TCP disconnect would.
+    ///
+    /// Only clones the two handles actually needed to send a byte on the
+    /// wire (a TCP write half or a bluetooth peripheral sender, both just
+    /// cheap Arc/channel clones), not the whole `Peer`. That keeps `Peer`
+    /// itself from having to be `Clone` (which would also force `WebSock`
+    /// and `Central` to be, dragging in things like the websocket header
+    /// map for no reason). Websocket and bluetooth-central peers don't get
+    /// a liveness check from this yet, both have their own read loops that
+    /// already emit Hangup on a real disconnect, this only adds detection
+    /// of a silently dead link for the transports we actually exercise.
+    pub async fn wave(&self, timeout: Duration) {
+        let write_stream = self.write_stream.clone();
+        let peripheral = self.peripheral.clone();
         let name_clone = self.name.clone();
         let addr_clone = self.address.clone();
-        let mut perf_clone = self.peripheral.as_ref().unwrap().clone();
         let ack_check_clone = self.ack_check.clone();
         let mut sender_clone = self.event_sender.clone();
-        let adr_clone = self.address.clone();
         let last_received_clone = self.last_received.clone();
+        let tick = (timeout / 2).max(Duration::from_millis(20));
+
+        if write_stream.is_none() && peripheral.is_none() {
+            debug!("wave: {:?} is not TCP or bluetooth-peripheral, skipping", addr_clone);
+            return;
+        }
+
         tokio::spawn(async move {
             'wave_loop: loop {
-                debug!("send Hi {:?}, {}", name_clone.read().await, addr_clone);
-                tokio::time::sleep(Duration::from_secs(ACK_DURATION)).await;
-                let since_last_comm = SystemTime::now().duration_since(*last_received_clone.read().await);
-                if since_last_comm.unwrap() > Duration::from_secs(ACK_DURATION) {
-                    let nc = &*name_clone.read().await;
+                tokio::time::sleep(tick).await;
+                let since_last_comm = SystemTime::now()
+                    .duration_since(*last_received_clone.read().unwrap())
+                    .unwrap_or_default();
+                if since_last_comm >= timeout {
+                    let nc = name_clone.read().unwrap().clone();
+                    debug!("wave: no traffic from {:?} for {:?}, pinging", nc, since_last_comm);
                     let mut bytes = BytesMut::with_capacity(nc.len() + 1);
                     bytes.put_u8(PING);
                     bytes.put_slice(nc.as_bytes());
+                    let bytes = bytes.freeze();
 
-                    match perf_clone.send(bytes.into()).await {
-                        Ok(_) => {}
-                        Err(e) => {
-                            eprintln!("Error sending:: {:?}", e);
-                            break 'wave_loop;
-                        }
-                    }
                     ack_check_clone.store(true, Relaxed);
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    if ack_check_clone.load(Relaxed) {
-                        debug!("KILL THIS PEER IS DEAD:: {:?}", name_clone.read().await);
-                        sender_clone
-                            .send(SocketEvent::Hangup {
-                                from: adr_clone.clone(),
-                            })
+                    let sent = if let Some(stream) = &write_stream {
+                        write_framed(stream, &bytes).await
+                    } else {
+                        peripheral
+                            .as_ref()
+                            .unwrap()
+                            .clone()
+                            .send(bytes)
                             .await
-                            .expect("failed to send hangup");
+                            .map_err(Into::into)
+                    };
+                    if let Err(e) = sent {
+                        debug!("wave: failed to ping {:?}: {:?}", addr_clone, e);
+                        break 'wave_loop;
+                    }
+
+                    tokio::time::sleep(timeout).await;
+                    if ack_check_clone.load(Relaxed) {
+                        debug!("wave: {:?} unresponsive, declaring dead", addr_clone);
+                        let _ = sender_clone
+                            .send(SocketEvent::Hangup {
+                                from: addr_clone.clone(),
+                            })
+                            .await;
                         break 'wave_loop;
                     }
                 }
             }
-            trace!("Done Waving <<< {:?}", name_clone.read().await);
+            trace!("wave stopped for {:?}", addr_clone);
         });
     }
 
@@ -368,7 +391,7 @@ impl Peer {
                 debug!(
                     "{:?} ⭐️ Send to peer {}: {:?}",
                     self.get_id_name(),
-                    self.name.read().await,
+                    self.name.read().unwrap(),
                     msg
                 );
                 self.send_on_stream(msg).await?;
@@ -402,16 +425,24 @@ impl Peer {
     }
 
     async fn send_on_stream(&self, message: Bytes) -> Result<bool> {
-        let mut bytes = Vec::new();
-        let msg_length: u32 = message.len() as u32;
-        bytes.extend_from_slice(&msg_length.to_be_bytes());
-        bytes.extend_from_slice(&message);
-        
-        let mut stream = self.write_stream.as_ref().unwrap().lock().await;
-        stream.write_all(&bytes).await.expect("Failed to write to stream");
-        stream.flush().await.expect("flush failed");
+        write_framed(self.write_stream.as_ref().unwrap(), &message).await?;
         Ok(true)
     }
+}
+
+/// Length-prefix and write a message directly to a TCP write half. Shared by
+/// `Peer::send_on_stream` and `Peer::wave`, the latter only holds a cloned
+/// `Arc<TokioMutex<OwnedWriteHalf>>` rather than a whole `Peer`, since that's
+/// the only piece it actually needs and it's a cheap refcount clone.
+async fn write_framed(stream: &Arc<TokioMutex<OwnedWriteHalf>>, message: &Bytes) -> Result<()> {
+    let mut bytes = Vec::with_capacity(4 + message.len());
+    bytes.extend_from_slice(&(message.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(message);
+
+    let mut stream = stream.lock().await;
+    stream.write_all(&bytes).await?;
+    stream.flush().await?;
+    Ok(())
 }
 
 async fn read_loop(
