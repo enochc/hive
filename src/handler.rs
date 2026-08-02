@@ -7,14 +7,28 @@ use log::{debug, error, info};
 use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
 use crate::peer::SocketEvent;
 use crate::property::{Property, property_to_bytes, PropertyValue, PropertyType};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// Per-property-name debounce state for `Handler::set_property_debounced`.
+/// Mirrors `Property`'s own `backoff_active`/`backoff_pending` fields
+/// (property.rs), same leading+trailing pattern, applied to the network
+/// send instead of a local `on_next` callback.
+pub(crate) struct DebounceEntry {
+    active: AtomicBool,
+    pending: Mutex<Option<PropertyValue>>,
+}
+
+pub(crate) type DebounceMap = Arc<Mutex<HashMap<String, Arc<DebounceEntry>>>>;
 
 #[derive(Clone)]
 pub struct Handler {
     pub (crate) sender: UnboundedSender<SocketEvent>,
     pub from_name: String,
     pub (crate) connected: Arc<AtomicBool>,
+    pub (crate) debounce: DebounceMap,
 }
 
 impl Handler {
@@ -41,6 +55,52 @@ impl Handler {
     pub async fn set_property(&mut self, prop_name:&str, prop_value:Option<&PropertyValue>){
         let p = Property::from_toml(prop_name, Some(&prop_value.unwrap().toml()));
         self.send_property(p).await;
+    }
+
+    /// Like `set_property`, but rate-limited per property name: the first
+    /// call in a burst sends immediately, further calls within
+    /// `debounce_ms` are coalesced and only the latest value goes out once
+    /// the window closes. `set_property` itself never consults
+    /// `Property::backoff`, it just serializes a throwaway `Property` for
+    /// the wire, so that field only throttles a receiver's local `on_next`
+    /// callback, never the sender's outgoing traffic. This is the
+    /// equivalent for the send side: for something like a UI slider firing
+    /// many updates a second, only the value it settles on (plus immediate
+    /// feedback on the first tick) is usually worth putting on the wire.
+    pub async fn set_property_debounced(&mut self, prop_name: &str, prop_value: PropertyValue, debounce_ms: u64) {
+        if debounce_ms == 0 {
+            self.set_property(prop_name, Some(&prop_value)).await;
+            return;
+        }
+
+        let entry = {
+            let mut map = self.debounce.lock().unwrap();
+            map.entry(prop_name.to_string())
+                .or_insert_with(|| {
+                    Arc::new(DebounceEntry {
+                        active: AtomicBool::new(false),
+                        pending: Mutex::new(None),
+                    })
+                })
+                .clone()
+        };
+
+        if !entry.active.swap(true, Ordering::SeqCst) {
+            self.set_property(prop_name, Some(&prop_value)).await;
+
+            let mut handler = self.clone();
+            let name = prop_name.to_string();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(debounce_ms)).await;
+                entry.active.store(false, Ordering::SeqCst);
+                let pending = entry.pending.lock().unwrap().take();
+                if let Some(v) = pending {
+                    handler.set_property(&name, Some(&v)).await;
+                }
+            });
+        } else {
+            *entry.pending.lock().unwrap() = Some(prop_value);
+        }
     }
 
     pub async fn send_property(&mut self, property:Property){

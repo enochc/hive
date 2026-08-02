@@ -157,7 +157,7 @@ with_args = { val = 0, rest_set = "http://localhost:8000/save/{val}" }
 
 ## Property Features
 
-**Debouncing**  For high-frequency updates like motor control, properties support a backoff window. The first change fires immediately, subsequent changes within the window are absorbed, and the latest value is delivered when the timer expires:
+**Debouncing (receive side)**  For high-frequency updates like motor control, properties support a backoff window on their local `on_next` callback. The first change fires immediately, subsequent changes within the window are absorbed, and the latest value is delivered when the timer expires:
 
 ```rust
 let prop = hive.get_mut_property_by_name("motor_speed").unwrap();
@@ -166,6 +166,16 @@ prop.on_next(|v| {
     // Fires at most once per 50ms
     send_to_motor(v);
 });
+```
+
+This only rate-limits the local callback. It does not reduce outgoing network traffic, `Handler::set_property` builds its own throwaway `Property` for the wire and never looks at `backoff`.
+
+**Debouncing (send side)**  To rate-limit how often you actually send updates, e.g. a UI slider firing on every pixel of drag, use `Handler::set_property_debounced` instead. Same leading+trailing behavior as `backoff`, applied to the network send itself, keyed per property name:
+
+```rust
+// First call in a burst sends immediately, further calls within 50ms
+// coalesce down to the latest value, sent once the window closes.
+handler.set_property_debounced("motor_speed", 72.0.into(), 50).await;
 ```
 
 **Typed values** Properties support bool, string, integers (i8 through i64, auto-sized to the smallest fit), and f64 floats. The binary wire format encodes values with type tags for compact transmission.

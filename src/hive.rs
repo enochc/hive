@@ -50,6 +50,10 @@ pub struct Hive {
     /// `DEFAULT_MAX_MESSAGE_SIZE`, see `Peer::read_loop` for why this
     /// exists at all.
     max_message_size: u32,
+    /// Shared with every `Handler` cloned from this `Hive`, so debounce
+    /// state for a given property name is consistent no matter which
+    /// clone sends it. See `Handler::set_property_debounced`.
+    debounce: crate::handler::DebounceMap,
     peers: Vec<Peer>,
     pub message_received: Signal<String>,
     pub connected: Arc<AtomicBool>,
@@ -220,6 +224,7 @@ impl Hive {
             name,
             wave_timeout,
             max_message_size,
+            debounce: Arc::new(Mutex::new(HashMap::new())),
             peers: Vec::new(),
             message_received: Default::default(),
             connected: Arc::new(AtomicBool::new(false)),
@@ -283,6 +288,7 @@ impl Hive {
             sender: self.sender.clone(),
             from_name: self.name.clone(),
             connected: self.connected.clone(),
+            debounce: self.debounce.clone(),
         };
     }
 
