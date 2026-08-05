@@ -203,6 +203,12 @@ wave_timeout_ms = 800   # ping after 800ms idle, dead if no reply within another
 
 Only the side that needs to detect a disconnect has to set this, replying to a PING is unconditional on the receiving end regardless of its own config. Watch for it in application code via `handler.is_connected()`. Applies to TCP and Bluetooth-peripheral peers; WebSocket and Bluetooth-central peers already emit a disconnect from their own read loops and don't need this.
 
+**`is_connected()` vs `peer_count()`** `is_connected()` answers "is this Hive up", which for a server means "has it bound its listen port" and is true with nobody attached. `peer_count()` returns how many peers are actually attached, so that's the one to check for "is anyone on the other end", and the one to build a connection indicator from.
+
+**Reconnecting** A Hive doesn't reconnect on its own. `go()` consumes it, and once its run loop is up, a peer that goes away stays away. To reconnect, cancel the `CancellationToken` you passed to `go()` and build a fresh Hive. Cancelling is honored while it's dialing too, so an attempt that hasn't connected yet can be abandoned without leaving a task retrying in the background, which is what lets a caller drive its own retry schedule instead of the built-in 10s one.
+
+Note that a server sends its entire property set to a client as soon as that client connects. A reconnecting client therefore receives current values immediately, before anything has changed. That's usually what you want for state sync, but if a property drives something physical, treat the opening snapshot accordingly rather than as a fresh command.
+
 **Message size limit (`max_message_size_bytes`)** Every TCP message is length-prefixed, and that length is trusted before the payload is read into memory. Without a cap, a corrupted stream or a bug on the sending side claiming an absurd size would attempt one huge allocation. Defaults to 1 MiB, comfortably more than typical property payloads need, override it only if you have a legitimate reason to send larger messages.
 
 ```toml

@@ -21,6 +21,7 @@ use crate::futures::SinkExt;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 #[allow(unused_imports)]
 use log::{debug, info, trace, warn};
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 #[cfg(not(feature = "bluetooth"))]
@@ -79,6 +80,21 @@ pub struct Peer {
     event_sender: UnboundedSender<SocketEvent>,
     hive_name: String,
     peer_type: PeerType,
+    /// Cancelled when this `Peer` is dropped, which is what ends
+    /// `read_loop`. Dropping the peer drops the `OwnedWriteHalf`, and tokio
+    /// shuts the write side down for us, so on a healthy link the remote
+    /// sees EOF and replies in kind, ending the read loop on its own. On a
+    /// link that's already dead (the case `wave` exists to catch) that FIN
+    /// never lands, nothing comes back, and the read task would sit parked
+    /// on `read()` holding the socket forever. A `Hive` that tears down and
+    /// reconnects on a timer would strand one per dropped session.
+    shutdown: CancellationToken,
+}
+
+impl Drop for Peer {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+    }
 }
 
 impl Debug for Peer {
@@ -146,23 +162,25 @@ impl Peer {
                 web_sock: None,
                 hive_name,
                 peer_type,
+                shutdown: CancellationToken::new(),
             };
 
             let send_clone = sender.clone();
-            
+
             // Perform handshake, then split the stream
             let (reader, write_half) = peer.handshake(tcp_stream, &sender).await?;
             peer.write_stream = Some(Arc::new(TokioMutex::new(write_half)));
-            
+
             let is_websocket = peer.is_web_socket();
 
             // WebSock runs its own read loop
             if !is_websocket {
                 let name_id = peer.get_id_name();
+                let shutdown = peer.shutdown.clone();
                 debug!("start tcp socket read loop for({})", name_id);
 
                 tokio::spawn(async move {
-                    read_loop(send_clone, name_id, from, reader, max_message_size)
+                    read_loop(send_clone, name_id, from, reader, max_message_size, shutdown)
                         .await
                         .expect("Read Loop Failed");
                 });
@@ -183,6 +201,7 @@ impl Peer {
                 web_sock: None,
                 hive_name,
                 peer_type,
+                shutdown: CancellationToken::new(),
             })
         }
     }
@@ -463,13 +482,20 @@ async fn read_loop(
     from: String,
     mut reader: BufReader<OwnedReadHalf>,
     max_message_size: u32,
+    shutdown: CancellationToken,
 ) -> Result<()> {
     let mut is_running = true;
     while is_running {
         let mut sender = sender.clone();
         let mut size_buff = [0; 4];
         debug!("{:?} READING!!!!", peer_id_string);
-        let r = reader.read(&mut size_buff).await;
+        let r = tokio::select! {
+            _ = shutdown.cancelled() => {
+                debug!("{:?} read loop shutting down, peer dropped", peer_id_string);
+                break;
+            }
+            r = reader.read(&mut size_buff) => r,
+        };
         let from = String::from(&from);
         match r {
             Ok(read) => {

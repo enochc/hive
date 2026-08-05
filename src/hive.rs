@@ -1,6 +1,6 @@
 // Much code "borrowed" from> https://book.async.rs/tutorial/implementing_a_client.html
 // #![feature(async_closure)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use std::{collections::HashMap, fs};
 
@@ -57,6 +57,12 @@ pub struct Hive {
     peers: Vec<Peer>,
     pub message_received: Signal<String>,
     pub connected: Arc<AtomicBool>,
+    /// Number of peers currently attached, mirrored out to every `Handler`.
+    /// `connected` can't answer "is anyone actually on the other end": a
+    /// server sets it as soon as it binds its listen port, with no client
+    /// in sight. This counts real peers, so a listener can tell an idle
+    /// port from a live connection.
+    peer_count: Arc<AtomicUsize>,
     advertising: Arc<AtomicBool>,
     ready: Option<Arc<tokio::sync::Notify>>,
     #[cfg(feature = "mqtt")]
@@ -228,6 +234,7 @@ impl Hive {
             peers: Vec::new(),
             message_received: Default::default(),
             connected: Arc::new(AtomicBool::new(false)),
+            peer_count: Arc::new(AtomicUsize::new(0)),
             advertising: Arc::new(AtomicBool::new(false)),
             ready: None,
             #[cfg(feature = "mqtt")]
@@ -288,6 +295,7 @@ impl Hive {
             sender: self.sender.clone(),
             from_name: self.name.clone(),
             connected: self.connected.clone(),
+            peer_count: self.peer_count.clone(),
             debounce: self.debounce.clone(),
         };
     }
@@ -463,10 +471,29 @@ impl Hive {
                     };
                 });
 
-                connected = rx.next().await.unwrap();
+                // Both the wait for the attempt's result and the retry
+                // sleep have to be cancellable. Without this a caller that
+                // gives up on a `Hive` (say to rebuild it against a
+                // different address, or to drive its own retry schedule)
+                // can't actually stop this loop, it keeps dialing forever
+                // in a detached task and every abandoned Hive stacks
+                // another one on top.
+                connected = tokio::select! {
+                    _ = cancellation_token.cancelled() => {
+                        debug!("{} connect loop cancelled", self.name);
+                        return Ok(());
+                    }
+                    r = rx.next() => r.unwrap(),
+                };
                 if !connected {
                     warn!("failed to connect, retry in a moment");
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    tokio::select! {
+                        _ = cancellation_token.cancelled() => {
+                            debug!("{} connect loop cancelled while backing off", self.name);
+                            return Ok(());
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(10)) => {}
+                    }
                 }
             }
 
@@ -596,6 +623,7 @@ impl Hive {
                             }
 
                             self.peers.push(peer);
+                            self.peer_count.store(self.peers.len(), Ordering::Relaxed);
                             self.connected.store(true, Ordering::Relaxed);
 
                             if !is_tcp_client {
@@ -625,6 +653,7 @@ impl Hive {
                         if self.peers[x].address == from {
                             debug!("removing peer at index {}", x);
                             self.peers.remove(x);
+                            self.peer_count.store(self.peers.len(), Ordering::Relaxed);
                             if self.peers.is_empty() {
                                 self.connected.store(false, Ordering::Relaxed);
                             }
@@ -847,6 +876,7 @@ impl Hive {
                     debug!("<<<< hangup from {:?}", from);
                     let idx = peer_idx.expect("hangup from unknown peer");
                     self.peers.remove(idx);
+                    self.peer_count.store(self.peers.len(), Ordering::Relaxed);
                     if self.peers.is_empty() {
                         self.connected.store(false, Ordering::Relaxed);
                     }

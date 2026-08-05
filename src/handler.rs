@@ -8,7 +8,7 @@ use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
 use crate::peer::SocketEvent;
 use crate::property::{Property, property_to_bytes, PropertyValue, PropertyType};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,6 +28,7 @@ pub struct Handler {
     pub (crate) sender: UnboundedSender<SocketEvent>,
     pub from_name: String,
     pub (crate) connected: Arc<AtomicBool>,
+    pub (crate) peer_count: Arc<AtomicUsize>,
     pub (crate) debounce: DebounceMap,
 }
 
@@ -39,6 +40,15 @@ impl Handler {
     /// just a clean TCP close, see `Peer::wave`.
     pub fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
+    }
+
+    /// How many peers are attached right now. Unlike `is_connected`, a
+    /// server that has bound its listen port but has nobody connected
+    /// reports 0 here, so this is what to check for "is there actually
+    /// someone on the other end". Same `wave_timeout_ms` caveat applies for
+    /// noticing a silently dead link rather than a clean close.
+    pub fn peer_count(&self) -> usize {
+        self.peer_count.load(Ordering::Relaxed)
     }
 
     pub async fn send_property_value(&mut self, prop_name: &str, prop_value: Option<&PropertyType>) {
