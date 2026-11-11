@@ -38,7 +38,7 @@ use crate::logging::{debug, error, info, trace, warn};
 
 use crate::hive::Result;
 use crate::peer::SocketEvent;
-use crate::property::{Property, property_to_bytes, property_value_to_bytes, try_bytes_to_property_value};
+use crate::property::{Property, property_to_bytes, property_value_to_bytes, try_bytes_to_property_value, value_to_text};
 
 /// Configuration for the MQTT peer, typically parsed from the Hive TOML config.
 ///
@@ -51,6 +51,22 @@ use crate::property::{Property, property_to_bytes, property_value_to_bytes, try_
 /// qos = 1                        # 0, 1, or 2
 /// keep_alive = 30                 # seconds
 /// subscribe = ["lightValue", "thermostatName"]
+///
+/// # "binary" (default): Hive's compact typed encoding, only other Hive
+/// # nodes can read it. "text": plain values (72, 1.5, true, hello) that
+/// # any MQTT client, dashboard or home-automation tool can read and send.
+/// payload = "text"
+///
+/// # optional broker login
+/// username = "hive"
+/// password = "..."               # or password_env = "MQTT_PASSWORD"
+///
+/// # optional TLS (needs the `tls` feature); port then defaults to 8883
+/// [MQTT.TLS]
+/// ca = "certs/broker-ca.pem"
+/// cert = "certs/client.pem"      # both cert and key for client-cert auth
+/// key = "certs/client.key"
+/// prefer_chacha20 = false
 /// ```
 #[derive(Debug, Clone)]
 pub struct MqttConfig {
@@ -62,13 +78,97 @@ pub struct MqttConfig {
     pub keep_alive: Duration,
     /// Property names to subscribe to on the broker.
     pub subscriptions: Vec<String>,
+    /// How property values are encoded in MQTT payloads.
+    pub payload: PayloadFormat,
+    pub username: Option<String>,
+    password: Option<Redacted>,
+    #[cfg(feature = "tls")]
+    tls: Option<Arc<rumqttc::tokio_rustls::rustls::ClientConfig>>,
+}
+
+/// Encoding of MQTT payloads, the `payload` key under `[MQTT]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PayloadFormat {
+    /// `[type_tag][value]`, Hive's wire format. Compact and exactly typed,
+    /// but opaque to anything that isn't Hive.
+    #[default]
+    Binary,
+    /// UTF-8 text: `72`, `1.5`, `true`, `hello`. Readable and writable by
+    /// any MQTT client. Incoming text is parsed using the property's current
+    /// type, see `property::text_to_value`.
+    Text,
+}
+
+impl PayloadFormat {
+    fn encode(self, property: &Property) -> bytes::Bytes {
+        match self {
+            PayloadFormat::Binary => property_value_to_bytes(property),
+            PayloadFormat::Text => value_to_text(property.get_value().as_ref()),
+        }
+    }
+}
+
+/// Keeps a password out of `{:?}` output (MqttConfig is Debug).
+#[derive(Clone)]
+struct Redacted(String);
+
+impl std::fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("***")
+    }
 }
 
 impl MqttConfig {
     /// Build an `MqttConfig` from the `[MQTT]` table in a Hive TOML config.
+    /// `None` when there's no usable `host`.
+    ///
+    /// Panics on a bad TLS/credentials setup (unreadable cert, `[MQTT.TLS]`
+    /// without the `tls` feature) rather than connecting insecurely; use
+    /// `try_from_toml` to handle that as an error.
     pub fn from_toml(table: &toml::Value) -> Option<MqttConfig> {
-        let host = table.get("host")?.as_str()?.to_string();
-        let port = table.get("port").and_then(|v| v.as_integer()).unwrap_or(1883) as u16;
+        Self::try_from_toml(table).unwrap_or_else(|e| panic!("[MQTT]: {}", e))
+    }
+
+    /// Like `from_toml`, but security misconfiguration is an `Err`.
+    pub fn try_from_toml(table: &toml::Value) -> std::result::Result<Option<MqttConfig>, String> {
+        let host = match table.get("host").and_then(|v| v.as_str()) {
+            Some(h) => h.to_string(),
+            None => return Ok(None),
+        };
+        let tls_table = table.get("TLS");
+        #[cfg(not(feature = "tls"))]
+        if tls_table.is_some() {
+            return Err("[MQTT.TLS] set but Hive was built without the `tls` feature".into());
+        }
+        #[cfg(feature = "tls")]
+        let tls = match tls_table {
+            Some(t) => {
+                let s = |k: &str| t.get(k).and_then(|v| v.as_str());
+                let ca = s("ca").ok_or("[MQTT.TLS] needs `ca`")?;
+                let prefer = t.get("prefer_chacha20").and_then(|v| v.as_bool()).unwrap_or(false);
+                Some(Arc::new(crate::security::tls::client_config(ca, s("cert"), s("key"), prefer)?))
+            }
+            None => None,
+        };
+        let default_port = if tls_table.is_some() { 8883 } else { 1883 };
+        let port = table.get("port").and_then(|v| v.as_integer()).unwrap_or(default_port) as u16;
+
+        let payload = match table.get("payload").and_then(|v| v.as_str()) {
+            None | Some("binary") => PayloadFormat::Binary,
+            Some("text") => PayloadFormat::Text,
+            Some(other) => return Err(format!("payload = {:?}, expected \"binary\" or \"text\"", other)),
+        };
+        let username = table.get("username").and_then(|v| v.as_str()).map(String::from);
+        let password = if let Some(p) = table.get("password").and_then(|v| v.as_str()) {
+            Some(p.to_string())
+        } else if let Some(var) = table.get("password_env").and_then(|v| v.as_str()) {
+            Some(std::env::var(var).map_err(|_| format!("password_env: {} is not set", var))?)
+        } else {
+            None
+        };
+        if password.is_some() && username.is_none() {
+            return Err("`password` needs a `username`".into());
+        }
         let client_id = table
             .get("client_id")
             .and_then(|v| v.as_str())
@@ -100,7 +200,7 @@ impl MqttConfig {
             })
             .unwrap_or_default();
 
-        Some(MqttConfig {
+        Ok(Some(MqttConfig {
             host,
             port,
             client_id,
@@ -108,7 +208,12 @@ impl MqttConfig {
             qos,
             keep_alive: Duration::from_secs(keep_alive),
             subscriptions,
-        })
+            payload,
+            username,
+            password: password.map(Redacted),
+            #[cfg(feature = "tls")]
+            tls,
+        }))
     }
 }
 
@@ -141,6 +246,14 @@ impl MqttPeer {
         // Clean session so the broker doesn't replay stale retained messages
         // from a previous connection with the same client_id.
         opts.set_clean_session(true);
+        if let Some(user) = &config.username {
+            let pass = config.password.as_ref().map(|p| p.0.clone()).unwrap_or_default();
+            opts.set_credentials(user.clone(), pass);
+        }
+        #[cfg(feature = "tls")]
+        if let Some(tls) = &config.tls {
+            opts.set_transport(rumqttc::Transport::tls_with_config(rumqttc::TlsConfiguration::Rustls(tls.clone())));
+        }
 
         let (client, event_loop) = AsyncClient::new(opts, 64);
 
@@ -194,7 +307,7 @@ impl MqttPeer {
         }
         let topic = format!("{}/{}", self.config.topic_prefix, name);
 
-        let payload = property_value_to_bytes(property);
+        let payload = self.config.payload.encode(property);
 
         debug!("MQTT publish {} ({} bytes)", topic, payload.len());
         self.client
@@ -241,23 +354,28 @@ impl MqttPeer {
             // identity comes from the MQTT topic, not an in-band hash,
             // so we use bytes_to_property_value (type_tag + value only)
             // and rebuild a named Property for the Hive event channel.
-            let mut payload = incoming.payload;
-            let prop_value = match try_bytes_to_property_value(&mut payload) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("MQTT dropping malformed payload for {}: {}", incoming.property_name, e);
-                    continue;
+            let se = if self.config.payload == PayloadFormat::Text {
+                // Text needs the property's current type to parse
+                // properly, which only the hive's event loop knows.
+                SocketEvent::MqttText {
+                    id: Property::hash_id(&incoming.property_name),
+                    text: incoming.payload,
                 }
-            };
-
-            let prop = Property::from_name(&incoming.property_name, prop_value);
-            let msg = property_to_bytes(&prop, true);
-
-            debug!("MQTT -> Hive SocketEvent::Message for {}", incoming.property_name);
-
-            let se = SocketEvent::Message {
-                from: String::from("mqtt"),
-                msg,
+            } else {
+                let mut payload = incoming.payload;
+                let prop_value = match try_bytes_to_property_value(&mut payload) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!("MQTT dropping malformed payload for {}: {}", incoming.property_name, e);
+                        continue;
+                    }
+                };
+                let prop = Property::from_name(&incoming.property_name, prop_value);
+                debug!("MQTT -> Hive SocketEvent::Message for {}", incoming.property_name);
+                SocketEvent::Message {
+                    from: String::from("mqtt"),
+                    msg: property_to_bytes(&prop, true),
+                }
             };
 
             let mut sender = event_sender.clone();
@@ -404,7 +522,7 @@ impl MqttPeerHandle {
             return Ok(());
         }
         let topic = format!("{}/{}", self.config.topic_prefix, name);
-        let payload = property_value_to_bytes(property);
+        let payload = self.config.payload.encode(property);
 
         self.client
             .publish(&topic, self.config.qos, false, payload.to_vec())

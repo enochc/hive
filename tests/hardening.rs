@@ -192,3 +192,55 @@ async fn long_strings_sync_between_hives() {
     assert!(wait_for(|| got.lock().unwrap().len() == 10_000, Duration::from_secs(2)).await);
     assert_eq!(*got.lock().unwrap(), long);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_stops_reading_is_dropped_and_others_keep_up() {
+    let mut s = Hive::new_from_str_unknown("listen = \"127.0.0.1:34706\"\nname = \"Serv\"\n[Properties]\nt = \"x\"");
+    let _ = s.get_mut_property_by_name("t");
+    let mut srv = s.go(true, CancellationToken::new()).await;
+
+    let mut c = Hive::new_from_str_unknown("connect = \"127.0.0.1:34706\"\nname = \"real\"");
+    let got = Arc::new(std::sync::Mutex::new(String::new()));
+    let g = got.clone();
+    c.get_mut_property_by_name("t").unwrap().on_next(move |v| {
+        *g.lock().unwrap() = v.val.as_str().unwrap().to_string();
+    });
+    let _c = c.go(false, CancellationToken::new()).await;
+
+    // Handshakes, then never reads another byte.
+    let _stalled = raw_client(34706).await;
+    assert!(wait_for(|| srv.peer_count() == 2, Duration::from_secs(2)).await);
+
+    // ~20 MB of updates: far more than the stalled peer's socket buffers
+    // plus its send queue can absorb.
+    let started = Instant::now();
+    for i in 0..2000 {
+        let v = format!("{:05}{}", i, "z".repeat(10_000));
+        srv.set_property("t", Some(&v.as_str().into())).await;
+    }
+    assert!(
+        wait_for(|| got.lock().unwrap().starts_with("01999"), Duration::from_secs(15)).await,
+        "the reading client never got the last update"
+    );
+    assert!(
+        wait_for(|| srv.peer_count() == 1, Duration::from_secs(5)).await,
+        "the stalled client should have been dropped"
+    );
+    println!("stalled-client run took {:?}", started.elapsed());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn max_peers_refuses_extra_clients() {
+    let s = Hive::new_from_str_unknown("listen = \"127.0.0.1:34707\"\nname = \"Serv\"\nmax_peers = 1\n[Properties]\nm = 0");
+    let mut srv = s.go(true, CancellationToken::new()).await;
+    let (_a, a_last) = hive_client(34707, "a").await;
+    assert!(wait_for(|| srv.peer_count() == 1, Duration::from_secs(2)).await);
+
+    let (b, _) = hive_client(34707, "b").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(srv.peer_count(), 1, "max_peers = 1 let a second client in");
+    assert_eq!(b.peer_count(), 0);
+
+    srv.set_property("m", Some(&5.into())).await;
+    assert!(wait_for(|| a_last.load(Ordering::SeqCst) == 5, Duration::from_secs(2)).await);
+}

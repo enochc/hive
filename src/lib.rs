@@ -16,6 +16,7 @@ use crate::hive::Hive;
 pub mod hive_gui;
 mod hive_macros;
 mod logging;
+mod security;
 pub mod property;
 pub mod signal;
 pub mod hive;

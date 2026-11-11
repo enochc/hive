@@ -113,15 +113,16 @@ task if the outcome differed from the plan.
   hasher for `HashMap<u64, Property>` (hand-written `Hasher`, no new crate).
   > Done 2026-11-11: `property::PropertyMap` (identity hasher). `Hive::properties` changed type from `HashMap<u64, Property>`: same methods, but code that names the type needs updating.
 
-- [ ] **2.5 Make `gui` a non-default feature**
+- [x] **2.5 Make `gui` a non-default feature**
   `Cargo.toml` has `default = ["gui"]`, so headless builds link Slint.
   Check `build.rs`, `src/main.rs` and the examples still build with and
   without the feature. Confirm with the owner first: this changes what
   downstream crates get by default.
+  > Done 2026-11-11 at the owner's request. `slint-build` is now optional too, and `hive_window` requires `gui`. Same change added the `tracing`/`log` logging features (src/logging.rs).
 
 ## Phase 3 — Hot-path restructuring (do in order)
 
-- [ ] **3.1 Per-peer writer task**
+- [x] **3.1 Per-peer writer task**
   Replace `Arc<TokioMutex<OwnedWriteHalf>>` in `Peer` with a channel to a
   spawned writer task that owns the write half. `Peer::send` becomes a
   non-blocking channel send. The writer drains everything queued and writes
@@ -132,31 +133,31 @@ task if the outcome differed from the plan.
   it (task 4.2).
   Done when: existing tests pass, and a test with one stalled client (never
   reads) shows a second client still getting updates promptly.
+  > Done 2026-11-11: `peer::write_loop`, queue of 1024 frames. Deviation: a full queue makes `Peer::send` wait up to 2 s (`SLOW_PEER_TIMEOUT`) before the peer is dropped, so a local burst applies backpressure instead of disconnecting a healthy peer. Test: `a_client_that_stops_reading_is_dropped_and_others_keep_up`.
 
-- [ ] **3.2 Decode without building a `Property`**
-  > Partly done: `property::decode_property` exists and the `PROPERTIES`
-  > branch uses it via `Hive::apply_value`. Still to do: the `PROPERTY`
-  > branch (builds a `Property` for `broadcast`, finish with 3.3) and the
-  > double copy in `Handler`.
+- [x] **3.2 Decode without building a `Property`**
   `bytes_to_property` (`src/property.rs` ~613) builds a full `Property`
   (watch channel, boxed stream, several `Arc`s) for every received message.
   Add a decode that returns `(u64, Option<PropertyValue>)` and use it in the
   `PROPERTY` and `PROPERTIES` branches of `got_message`; apply the value to
   the existing property with `set_value`. Avoid the double copy in `IS_STR`
   decoding (`to_vec` then `PropertyValue::from(&str)`).
+  > Done 2026-11-11: PROPERTY/PROPERTIES go through `decode_property` + `Hive::apply_value`.
 
-- [ ] **3.3 Forward received bytes; frame once**
+- [x] **3.3 Forward received bytes; frame once**
   In the `PROPERTY` branch the incoming `msg` is already wire format.
   `broadcast` re-encodes it, then allocates and copies per peer, and
   `write_framed` allocates and copies again. Build one `Bytes` containing
   `[u32 length][type][payload]` and hand a refcount clone to each peer's
   writer (needs 3.1).
+  > Done 2026-11-11: received PROPERTY/DELETE bytes are forwarded as one `Bytes` (refcount clone per peer); each writer copies into its reused batch buffer while framing, no per-message allocation.
 
-- [ ] **3.4 Encode directly in `Handler`**
+- [x] **3.4 Encode directly in `Handler`**
   `Handler::set_property` / `send_property_value` (`src/handler.rs`) clone
   the value twice and build a throwaway `Property`. Add an encoder that
   takes `(id, &Value)` and writes straight into one `BytesMut`. Use
   `unbounded_send` instead of `SinkExt::send(..).await`.
+  > Done 2026-11-11: `property::encode_property`; `Handler` uses `unbounded_send` and no longer panics if the hive has stopped. `set_property(name, None)` now deletes instead of panicking. Removed the `num-traits` dependency.
 
 - [ ] **3.5 Numeric peer ids**
   `SocketEvent::Message { from: String }` allocates per message, peers are
@@ -165,21 +166,24 @@ task if the outcome differed from the plan.
   `SocketEvent`, and index peers by it. Keep the address string for logs
   and `peer_string`. Reserve ids for the local handler and for MQTT
   (currently `""` and `"mqtt"`).
+  > Deferred 2026-11-11: small gain next to the 3.1 results (see PERF_NOTES.md), and it changes `SocketEvent`, which the bluetooth modules build; do it on a Linux machine that can compile them.
 
-- [ ] **3.6 Benchmark**
+- [x] **3.6 Benchmark**
   Add a `benches/` or ignored test that measures property updates per
   second and round-trip latency, server + 1 client and server + 8 clients,
   on loopback. Record before/after numbers for Phase 2 and 3 in
   `PERF_NOTES.md`. Ideally do this before 3.1 to get a baseline.
+  > Done 2026-11-11: `tests/bench.rs`; numbers in `PERF_NOTES.md`. Throughput up ~40-95x, latency at 8 receivers +25 us p50.
 
 ## Phase 4 — Optional security
 
-- [ ] **4.1 Connection limits (no runtime cost)**
+- [x] **4.1 Connection limits (no runtime cost)**
   Config keys: `max_peers` (reject beyond it), and document that `listen`
   with only a port binds the LAN address from `local_ipaddress`, so use
   `127.0.0.1:port` for local-only. Depends on 1.4 and 1.5 being done.
+  > Done 2026-11-11: `max_peers` (checked at accept and again when the peer is added) and `max_pending_handshakes` (default 64), both refuse before any handshake/TLS work.
 
-- [ ] **4.2 TLS behind a `tls` cargo feature**
+- [x] **4.2 TLS behind a `tls` cargo feature**
   Add `tokio-rustls` (plus `rustls-pemfile` or the current equivalent;
   check current crate docs for the recommended versions and crypto
   provider) as optional dependencies. Config:
@@ -199,29 +203,34 @@ task if the outcome differed from the plan.
   Done when: a test with generated certs syncs a property over TLS, a
   client with the wrong CA is rejected, and a plaintext client to a TLS
   server is rejected without affecting other peers.
+  > Done 2026-11-11: `src/security.rs`; tokio-rustls on ring only (no aws-lc-rs anywhere, rumqttc switched to `use-rustls-no-provider`). Transport is boxed `AsyncRead`/`AsyncWrite`; plain TCP keeps lock-free halves. `prefer_chacha20` option. Bad config panics at construction (fails closed). Tests: `tests/security.rs`. Benchmarked: throughput same as plain, +5-10 us p50.
 
-- [ ] **4.3 Mutual TLS**
+- [x] **4.3 Mutual TLS**
   Config `require_client_cert = true` under `[TLS]`: server verifies the
   client certificate against `ca`; client presents `cert`/`key`.
   Done when: a client without a certificate, or with one from another CA,
   is rejected.
+  > Done 2026-11-11: `require_client_cert = true` with `ca`.
 
-- [ ] **4.4 Shared-secret auth (lighter alternative)**
+- [x] **4.4 Shared-secret auth (lighter alternative)**
   Config `auth_secret = "..."`. Challenge–response at connect: server sends
   a random nonce, client replies with HMAC-SHA256(secret, nonce), server
   compares in constant time. One hash per connection, nothing per message.
   Document clearly: without TLS this only keeps out unauthorized clients,
   it does not encrypt and does not stop an on-path attacker. This extends
   the handshake, so both sides must be configured the same way.
+  > Done 2026-11-11: `auth` feature (ring HMAC-SHA256), mutual: both sides send nonces and prove the secret. `auth_secret` or `auth_secret_env`. The dialing side sends `HVEP+auth` so a mismatch fails immediately with a clear error.
 
-- [ ] **4.5 MQTT TLS and credentials**
+- [x] **4.5 MQTT TLS and credentials**
   `MqttConfig` in `src/mqtt/mqtt_peer.rs`: add `username`, `password`,
   and TLS options, using `rumqttc`'s rustls transport (check its docs for
   the feature flag and API in the version pinned in `Cargo.toml`).
+  > Done 2026-11-11: `username`, `password`/`password_env`, `[MQTT.TLS]`; password is redacted in Debug output. New `MqttConfig::try_from_toml`.
 
-- [ ] **4.6 Document the security options**
+- [x] **4.6 Document the security options**
   README section: threat model for each option, example configs, how to
   generate a CA and node certificates, and the runtime cost of each.
+  > Done 2026-11-11: README "Security" section; openssl commands verified against rustls with a real mTLS connection.
 
 ## Not planned / notes
 

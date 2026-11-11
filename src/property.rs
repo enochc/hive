@@ -584,7 +584,6 @@ pub(crate) fn properties_to_bytes(properties: &PropertyMap) -> Bytes {
     bytes.freeze()
 }
 
-use num_traits::ToPrimitive;
 
 /// Encode just the type-tagged value portion of the Hive wire format.
 ///
@@ -592,80 +591,81 @@ use num_traits::ToPrimitive;
 /// or the `PROPERTY` header byte.  Used by the MQTT peer where the property
 /// identity is carried by the MQTT topic.
 pub fn property_value_to_bytes(property: &Property) -> Bytes {
-    let mut bytes = BytesMut::new();
     let val = property.stream.sender.borrow();
-    match &*val {
-        None => {
-            bytes.put_i8(IS_NONE);
-        }
-        Some(p) => {
-            if p.val.is_bool() {
-                bytes.put_i8(IS_BOOL);
-                bytes.put_u8(if p.val.as_bool().unwrap() { 1 } else { 0 });
-            } else if p.val.is_str() {
-                let str_val = p.val.as_str().unwrap();
-                match u8::try_from(str_val.len()) {
-                    Ok(len) => {
-                        bytes.put_i8(IS_STR);
-                        bytes.put_u8(len);
-                    }
-                    Err(_) => {
-                        bytes.put_i8(IS_LONG_STR);
-                        bytes.put_u32(str_val.len() as u32);
-                    }
-                }
-                bytes.put_slice(str_val.as_bytes())
-            } else if p.val.is_integer() {
-                let int = p.val.as_integer().unwrap();
-                match int.to_i8() {
-                    Some(i) => {
-                        bytes.put_i8(IS_SHORT);
-                        bytes.put_i8(i);
-                    }
-                    None => match int.to_i16() {
-                        Some(i) => {
-                            bytes.put_i8(IS_SMALL);
-                            bytes.put_i16(i);
-                        }
-                        None => match int.to_i32() {
-                            Some(i) => {
-                                bytes.put_i8(IS_LONG);
-                                bytes.put_i32(i);
-                            }
-                            None => match int.to_i64() {
-                                Some(i) => {
-                                    bytes.put_i8(IS_INT);
-                                    bytes.put_i64(i);
-                                }
-                                None => {
-                                    unimplemented!("You really shouldn't be here {:?}", p)
-                                }
-                            },
-                        },
-                    },
-                }
-            } else if p.val.is_float() {
-                bytes.put_i8(IS_FLOAT);
-                bytes.put_f64(p.val.as_float().unwrap());
-            } else {
-                unimplemented!("not implemented for {:?}", p);
-            }
-        }
-    }
+    let v = val.as_ref().map(|pv| &pv.val);
+    let mut bytes = BytesMut::with_capacity(value_len_hint(v));
+    put_value(&mut bytes, v);
     bytes.freeze()
 }
 
 pub fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
-    let value_bytes = property_value_to_bytes(property);
-    let mut bytes = BytesMut::with_capacity(
-        (if inc_head { 1 } else { 0 }) + 8 + value_bytes.len(),
-    );
+    let val = property.stream.sender.borrow();
+    encode_property(property.id, val.as_ref().map(|pv| &pv.val), inc_head)
+}
+
+/// Encode `[PROPERTY]?[u64 id][type_tag][value]` into one buffer sized up
+/// front, without needing a `Property`. `None` encodes `IS_NONE`, which
+/// receivers treat as a delete.
+pub(crate) fn encode_property(id: u64, value: Option<&Value>, inc_head: bool) -> Bytes {
+    let mut bytes = BytesMut::with_capacity(inc_head as usize + 8 + value_len_hint(value));
     if inc_head {
         bytes.put_u8(PROPERTY);
     }
-    bytes.put_u64(property.id);
-    bytes.put_slice(&value_bytes);
+    bytes.put_u64(id);
+    put_value(&mut bytes, value);
     bytes.freeze()
+}
+
+fn value_len_hint(value: Option<&Value>) -> usize {
+    match value {
+        Some(Value::String(s)) => 5 + s.len(),
+        _ => 9,
+    }
+}
+
+/// Write `[type_tag][value]`, the smallest integer encoding that fits.
+fn put_value(bytes: &mut BytesMut, value: Option<&Value>) {
+    match value {
+        None => bytes.put_i8(IS_NONE),
+        Some(Value::Boolean(b)) => {
+            bytes.put_i8(IS_BOOL);
+            bytes.put_u8(*b as u8);
+        }
+        Some(Value::String(s)) => {
+            match u8::try_from(s.len()) {
+                Ok(len) => {
+                    bytes.put_i8(IS_STR);
+                    bytes.put_u8(len);
+                }
+                Err(_) => {
+                    bytes.put_i8(IS_LONG_STR);
+                    bytes.put_u32(s.len() as u32);
+                }
+            }
+            bytes.put_slice(s.as_bytes());
+        }
+        Some(Value::Integer(int)) => {
+            let int = *int;
+            if let Ok(i) = i8::try_from(int) {
+                bytes.put_i8(IS_SHORT);
+                bytes.put_i8(i);
+            } else if let Ok(i) = i16::try_from(int) {
+                bytes.put_i8(IS_SMALL);
+                bytes.put_i16(i);
+            } else if let Ok(i) = i32::try_from(int) {
+                bytes.put_i8(IS_LONG);
+                bytes.put_i32(i);
+            } else {
+                bytes.put_i8(IS_INT);
+                bytes.put_i64(int);
+            }
+        }
+        Some(Value::Float(f)) => {
+            bytes.put_i8(IS_FLOAT);
+            bytes.put_f64(*f);
+        }
+        Some(other) => unimplemented!("no wire encoding for {:?}", other),
+    }
 }
 
 /// Decode `[u64 id][type_tag][value]` without building a `Property`.
@@ -741,9 +741,112 @@ pub fn try_bytes_to_property_value(
     Ok(Some(v))
 }
 
+/// Plain-text form of a value, for MQTT `payload = "text"`: `72`, `1.5`,
+/// `true`, or the string itself. Floats always keep a decimal point (`2.0`,
+/// not `2`) so a receiver inferring types reads them back as floats.
+/// `None` is an empty payload.
+pub fn value_to_text(value: Option<&Value>) -> Bytes {
+    match value {
+        None => Bytes::new(),
+        Some(Value::String(s)) => Bytes::copy_from_slice(s.as_bytes()),
+        Some(Value::Integer(i)) => Bytes::from(i.to_string()),
+        Some(Value::Float(f)) => Bytes::from(format!("{:?}", f)),
+        Some(Value::Boolean(b)) => Bytes::from_static(if *b { b"true" } else { b"false" }),
+        Some(other) => Bytes::from(other.to_string()),
+    }
+}
+
+/// Parse a plain-text payload into a value. `hint` is the property's
+/// current value, if any: the text is read as that type when it can be
+/// (so a string property holding "72" stays a string, and a float property
+/// reads "72" as 72.0), otherwise the type is inferred as bool, integer,
+/// float, then string. Booleans also accept on/off, yes/no and 1/0 when
+/// the property is already a bool (Home Assistant style). Surrounding
+/// whitespace is ignored for everything but strings. Non-UTF-8 is an error.
+pub fn text_to_value(text: &[u8], hint: Option<&Value>) -> std::result::Result<Value, DecodeError> {
+    let raw = std::str::from_utf8(text).map_err(|e| DecodeError(format!("text payload not UTF-8: {}", e)))?;
+    let t = raw.trim();
+    let as_bool = |loose: bool| -> Option<bool> {
+        match t.to_ascii_lowercase().as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            "on" | "yes" | "1" if loose => Some(true),
+            "off" | "no" | "0" if loose => Some(false),
+            _ => None,
+        }
+    };
+    // f64 parsing accepts "inf"/"nan"; only treat text with a digit as a
+    // number so labels like "info" or "nan" stay strings.
+    let as_float = || t.bytes().any(|b| b.is_ascii_digit()).then(|| t.parse::<f64>().ok()).flatten();
+
+    match hint {
+        Some(Value::String(_)) => return Ok(Value::String(raw.to_string())),
+        Some(Value::Float(_)) => {
+            if let Some(f) = as_float() {
+                return Ok(Value::Float(f));
+            }
+        }
+        Some(Value::Integer(_)) => {
+            if let Ok(i) = t.parse::<i64>() {
+                return Ok(Value::Integer(i));
+            }
+        }
+        Some(Value::Boolean(_)) => {
+            if let Some(b) = as_bool(true) {
+                return Ok(Value::Boolean(b));
+            }
+        }
+        _ => {}
+    }
+    if let Some(b) = as_bool(false) {
+        return Ok(Value::Boolean(b));
+    }
+    if let Ok(i) = t.parse::<i64>() {
+        return Ok(Value::Integer(i));
+    }
+    if let Some(f) = as_float() {
+        return Ok(Value::Float(f));
+    }
+    Ok(Value::String(raw.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_values_round_trip_by_inference() {
+        for v in [Value::Integer(72), Value::Integer(-5), Value::Float(2.0), Value::Float(1.5),
+                  Value::Boolean(true), Value::String("hello world".into())] {
+            let text = value_to_text(Some(&v));
+            assert_eq!(text_to_value(&text, None).unwrap(), v, "{:?} via {:?}", v, text);
+        }
+        assert_eq!(&value_to_text(Some(&Value::Float(2.0)))[..], b"2.0");
+    }
+
+    #[test]
+    fn text_parsing_follows_the_existing_type() {
+        let s = Value::String("x".into());
+        assert_eq!(text_to_value(b"72", Some(&s)).unwrap(), Value::String("72".into()));
+        assert_eq!(text_to_value(b" padded ", Some(&s)).unwrap(), Value::String(" padded ".into()));
+        assert_eq!(text_to_value(b"72", Some(&Value::Float(0.0))).unwrap(), Value::Float(72.0));
+        assert_eq!(text_to_value(b"ON", Some(&Value::Boolean(false))).unwrap(), Value::Boolean(true));
+        assert_eq!(text_to_value(b"0", Some(&Value::Boolean(true))).unwrap(), Value::Boolean(false));
+        // Doesn't fit the hint: fall back to inference rather than drop it.
+        assert_eq!(text_to_value(b"1.5", Some(&Value::Integer(0))).unwrap(), Value::Float(1.5));
+        assert_eq!(text_to_value(b"72\n", None).unwrap(), Value::Integer(72));
+    }
+
+    #[test]
+    fn text_inference_edge_cases() {
+        assert_eq!(text_to_value(b"nan", None).unwrap(), Value::String("nan".into()));
+        assert_eq!(text_to_value(b"info", None).unwrap(), Value::String("info".into()));
+        assert_eq!(text_to_value(b"1e3", None).unwrap(), Value::Float(1000.0));
+        assert_eq!(text_to_value(b"", None).unwrap(), Value::String("".into()));
+        // on/off only count as bools for a property that is already a bool.
+        assert_eq!(text_to_value(b"on", None).unwrap(), Value::String("on".into()));
+        assert!(text_to_value(&[0xff, 0xfe], None).is_err());
+    }
 
     fn round_trip(v: PropertyValue) -> Option<PropertyValue> {
         let p = Property::from_name("x", Some(v));

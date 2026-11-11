@@ -19,7 +19,7 @@ use crate::handler::Handler;
 #[cfg(feature = "mqtt")]
 use crate::mqtt::mqtt_peer::{MqttConfig, MqttPeerHandle, spawn_mqtt_peer};
 use crate::peer::{handshake, Peer, PeerType, SocketEvent, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_MAX_MESSAGE_SIZE};
-use crate::property::{decode_property, properties_to_bytes, property_to_bytes, DecodeError, Property, PropertyMap};
+use crate::property::{decode_property, properties_to_bytes, DecodeError, Property, PropertyMap};
 use crate::signal::Signal;
 use ctrlc::Error;
 use std::fmt::{Debug, Formatter};
@@ -54,6 +54,15 @@ pub struct Hive {
     /// the `handshake_timeout_ms` config key. The handshake runs off the
     /// event loop, so this only bounds how long a silent socket is held.
     handshake_timeout: Duration,
+    /// Most peers a server accepts at once (`max_peers`), None = no limit.
+    max_peers: Option<usize>,
+    /// Most connections allowed to be mid-handshake at once
+    /// (`max_pending_handshakes`). Each one holds a task and a socket for
+    /// up to `handshake_timeout`, so this bounds what a connection flood
+    /// can tie up.
+    max_pending_handshakes: usize,
+    /// TLS / shared-secret settings applied to every TCP connection.
+    security: Arc<crate::security::Security>,
     /// Shared with every `Handler` cloned from this `Hive`, so debounce
     /// state for a given property name is consistent no matter which
     /// clone sends it. See `Handler::set_property_debounced`.
@@ -149,6 +158,15 @@ async fn spawn_bluetooth_central(ble_name: String, sender: Sender<SocketEvent>) 
 
 pub(crate) const REQUEST_PEERS: &str = "<p|";
 
+const DEFAULT_MAX_PENDING_HANDSHAKES: usize = 64;
+
+struct AcceptLimits {
+    max_peers: Option<usize>,
+    max_pending_handshakes: usize,
+    peer_count: Arc<AtomicUsize>,
+    security: Arc<crate::security::Security>,
+}
+
 impl Hive {
     pub fn is_server(&self) -> bool {
         self.listen_port.is_some() || self.bt_listen.is_some()
@@ -223,8 +241,29 @@ impl Hive {
             .map(|ms| Duration::from_millis(ms as u64))
             .unwrap_or(DEFAULT_HANDSHAKE_TIMEOUT);
 
+        let max_peers = config
+            .get("max_peers")
+            .and_then(|v| v.as_integer())
+            .map(|n| n.max(0) as usize);
+        let max_pending_handshakes = config
+            .get("max_pending_handshakes")
+            .and_then(|v| v.as_integer())
+            .map(|n| n.max(1) as usize)
+            .unwrap_or(DEFAULT_MAX_PENDING_HANDSHAKES);
+
+        // Bad security config is fatal: carrying on would mean silently
+        // running in plaintext or unauthenticated.
+        let security = crate::security::Security::from_config(
+            &config,
+            listen_port.is_some(),
+            connect_to.is_some(),
+        )
+        .unwrap_or_else(|e| panic!("Hive {:?}: {}", name, e));
+
         #[cfg(feature = "mqtt")]
-        let mqtt_config = config.get("MQTT").and_then(MqttConfig::from_toml);
+        let mqtt_config = config.get("MQTT").and_then(|t| {
+            MqttConfig::try_from_toml(t).unwrap_or_else(|e| panic!("Hive {:?} [MQTT]: {}", name, e))
+        });
 
         let props = PropertyMap::default();
 
@@ -241,6 +280,9 @@ impl Hive {
             wave_timeout,
             max_message_size,
             handshake_timeout,
+            max_peers,
+            max_pending_handshakes,
+            security: Arc::new(security),
             debounce: Arc::new(Mutex::new(HashMap::new())),
             peers: Vec::new(),
             message_received: Default::default(),
@@ -397,7 +439,9 @@ impl Hive {
         listener: TcpListener,
         hive_name: String,
         handshake_timeout: Duration,
+        limits: AcceptLimits,
     ) {
+        let pending = Arc::new(tokio::sync::Semaphore::new(limits.max_pending_handshakes));
         loop {
             let (stream, peer_addr) = match listener.accept().await {
                 Ok(s) => s,
@@ -410,13 +454,30 @@ impl Hive {
                     continue;
                 }
             };
+            // Both checks happen before any handshake (or TLS) work, so a
+            // refused connection costs one accept and one close.
+            if let Some(max) = limits.max_peers {
+                if limits.peer_count.load(Ordering::Relaxed) >= max {
+                    warn!("{:?} refusing {}: already at max_peers ({})", hive_name, peer_addr, max);
+                    continue;
+                }
+            }
+            let permit = match pending.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    warn!("{:?} refusing {}: too many handshakes in progress", hive_name, peer_addr);
+                    continue;
+                }
+            };
             debug!("{:?} ------------  Accepting from: {}", hive_name, peer_addr);
             let sender = sender.clone();
             let name = hive_name.clone();
+            let security = limits.security.clone();
             // Each handshake runs in its own task so one slow or silent
             // client can't hold up the next accept or the event loop.
             tokio::spawn(async move {
-                match handshake(stream, &PeerType::TcpClient, &name, handshake_timeout).await {
+                let _permit = permit;
+                match handshake(stream, &PeerType::TcpClient, &name, handshake_timeout, &security, "").await {
                     Ok(conn) => {
                         let _ = sender.unbounded_send(SocketEvent::NewPeer {
                             name: "unnamed client".to_string(),
@@ -476,10 +537,11 @@ impl Hive {
                 let mut tx_clone = tx.clone();
                 let my_name = self.name.clone();
                 let timeout = self.handshake_timeout;
+                let security = self.security.clone();
                 tokio::spawn(async move {
                     let attempt = async {
                         let s = TcpStream::connect(&addr).await?;
-                        handshake(s, &PeerType::TcpServer, &my_name, timeout).await
+                        handshake(s, &PeerType::TcpServer, &my_name, timeout, &security, &addr).await
                     };
                     match attempt.await {
                         Ok(conn) => {
@@ -546,7 +608,13 @@ impl Hive {
                 let listener = TcpListener::bind(&port).await?;
                 let send_chan = self.sender.clone();
                 let name_clone = self.name.clone();
-                tokio::spawn(Hive::accept_loop(send_chan, listener, name_clone, self.handshake_timeout));
+                let limits = AcceptLimits {
+                    max_peers: self.max_peers,
+                    max_pending_handshakes: self.max_pending_handshakes,
+                    peer_count: self.peer_count.clone(),
+                    security: self.security.clone(),
+                };
+                tokio::spawn(Hive::accept_loop(send_chan, listener, name_clone, self.handshake_timeout, limits));
                 // Port is bound and accepting — safe to signal ready
                 self.broadcast_ready();
             }
@@ -567,11 +635,25 @@ impl Hive {
         #[cfg(feature = "mqtt")]
         if let Some(mqtt_cfg) = self.mqtt_config.take() {
             debug!("{} connecting MQTT to {}:{}", self.name, mqtt_cfg.host, mqtt_cfg.port);
-            match spawn_mqtt_peer(mqtt_cfg, self.sender.clone()).await {
+            // spawn_mqtt_peer waits for the broker's ConnAck, which never
+            // comes while the broker is down, so the wait has to honour
+            // cancellation like the TCP connect loop does.
+            let spawned = tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    debug!("{} cancelled while waiting for the MQTT broker", self.name);
+                    return Ok(());
+                }
+                r = spawn_mqtt_peer(mqtt_cfg, self.sender.clone()) => r,
+            };
+            match spawned {
                 Ok(handle) => {
                     self.mqtt_handle = Some(handle);
                     info!("MQTT peer connected and running");
                     self.connected.store(true, Ordering::Relaxed);
+                    // An MQTT-only hive has no TCP listener or peer to
+                    // signal readiness, without this go(true, ..) never
+                    // returned for it.
+                    self.broadcast_ready();
                 }
                 Err(e) => {
                     error!("Failed to spawn MQTT peer: {:?}", e);
@@ -614,7 +696,13 @@ impl Hive {
                     let is_tcp_server = self.listen_port.is_some();
                     let is_tcp_client = self.connect_to.is_some();
 
-                    if has_peer.is_none() {
+                    let at_limit = ptype == PeerType::TcpClient
+                        && self.max_peers.is_some_and(|max| self.peers.len() >= max);
+                    if at_limit {
+                        // Several handshakes can finish together after the
+                        // accept-time check passed; this is the exact one.
+                        warn!("{} dropping {}: at max_peers", self.name, address);
+                    } else if has_peer.is_none() {
                         debug!("----------------------- {:?} building peer: {:?}", self.name, name);
                         let ptype_clne = ptype.clone();
                         let p = Peer::new(
@@ -687,6 +775,21 @@ impl Hive {
                 Some(SocketEvent::Hangup { from }) => {
                     debug!("received hangup from {:?}", from);
                     self.remove_peer(&from).await;
+                }
+                Some(SocketEvent::MqttText { id, text }) => {
+                    let hint = self.properties.get(&id).and_then(|p| p.get_value());
+                    match crate::property::text_to_value(&text, hint.as_ref()) {
+                        Ok(v) => {
+                            // From here on it's an ordinary property update:
+                            // applied locally, broadcast to TCP peers, and
+                            // not echoed back to MQTT.
+                            let frame = crate::property::encode_property(id, Some(&v), true);
+                            if let Err(e) = self.got_message("mqtt", frame).await {
+                                warn!("{} MQTT text update failed: {:?}", self.name, e);
+                            }
+                        }
+                        Err(e) => warn!("{} dropping MQTT text payload: {}", self.name, e),
+                    }
                 }
                 #[allow(unused_variables)]
                 Some(SocketEvent::SendBtProps { sender }) => {
@@ -853,36 +956,28 @@ impl Hive {
         }
     }
 
-    async fn broadcast(&mut self, msg_type: u8, property: &Property, except: &str) {
-        /*
-        Dont broadcast to the same Peer that the original change came from
-        to prevent an infinite re-broadcast loop
-         */
-
+    /// Send an already encoded message to every peer except `except` (the
+    /// peer it came from, so it isn't echoed back in a loop). Each peer gets
+    /// a refcount clone of the same `Bytes`, nothing is re-encoded or copied
+    /// per peer; the peer's writer task does the framing.
+    async fn broadcast(&mut self, msg: Bytes, except: &str) {
         // bluetooth clients dont receive independent updates,
         // bluetooth really is a broadcast and only needs to go out once
         let mut sent_bt_broadcast = false;
         let mut failed: Vec<String> = Vec::new();
-        let msg = property_to_bytes(property, false);
         for p in &self.peers {
-            debug!("{} broadcasting: {:?}, {:?}", self.name, p.get_name(), p.is_bt_client(),);
-            if p.address() != except {
-                debug!("... TEST 1");
-                if p.is_bt_client() {
-                    if sent_bt_broadcast {
-                        // I'm a bluetooth client and the broadcast has already been sent next
-                        continue;
-                    }
-                    sent_bt_broadcast = true;
+            if p.address == except {
+                continue;
+            }
+            if p.is_bt_client() {
+                if sent_bt_broadcast {
+                    continue;
                 }
-                let mut msg_out = BytesMut::with_capacity(msg.len() + 1);
-                msg_out.put_u8(msg_type);
-                msg_out.put_slice(&msg.clone());
-                debug!("<<{} sending:{:?} {}", self.name, msg_out, msg_out.len());
-                if let Err(e) = p.send(msg_out.freeze()).await {
-                    warn!("{} write to {:?} failed, dropping peer: {:?}", self.name, p.address, e);
-                    failed.push(p.address.clone());
-                }
+                sent_bt_broadcast = true;
+            }
+            if let Err(e) = p.send(msg.clone()).await {
+                warn!("{} write to {:?} failed, dropping peer: {:?}", self.name, p.address, e);
+                failed.push(p.address.clone());
             }
         }
         for address in failed {
@@ -896,6 +991,9 @@ impl Hive {
             debug!("<<< Empty message");
         } else {
             //let (msg_type, message) = msg.split_at(3);
+            // The whole message as received, type byte included, so
+            // PROPERTY/DELETE can be forwarded without re-encoding.
+            let raw = msg.clone();
             let msg_type = msg.get_u8();
 
             // Most branches below act on the peer that sent this message,
@@ -942,30 +1040,33 @@ impl Hive {
                 }
 
                 PROPERTY => {
-                    let (id, value) = decode_property(&mut msg)?;
-                    let p = Property::from_id(&id, value);
-                    {
-                        {
-                            if p.is_none() {
-                                debug!("DELETING {:?}", p.get_name());
-                                self.broadcast(DELETE, &p, from).await;
-                                self.properties.remove(&p.id);
-                            } else {
-                                self.broadcast(PROPERTY, &p, from).await;
-                                let prop_id = p.id;
-                                self.set_property(p);
-                                // Publish to MQTT if the change did NOT originate from MQTT.
-                                // We look up the property from self.properties by ID because
-                                // the property decoded from the wire format carries only the
-                                // numeric hash — not the name — and we need the name to
-                                // build the MQTT topic.
-                                #[cfg(feature = "mqtt")]
-                                if from != "mqtt" {
-                                    if let Some(ref handle) = self.mqtt_handle {
-                                        if let Some(named_prop) = self.properties.get(&prop_id) {
-                                            if let Err(e) = handle.publish(named_prop).await {
-                                                warn!("MQTT publish failed: {:?}", e);
-                                            }
+                    let (prop_id, value) = decode_property(&mut msg)?;
+                    // Exactly the bytes that made up this property, minus
+                    // anything trailing.
+                    let frame = raw.slice(..raw.len() - msg.remaining());
+                    match value {
+                        None => {
+                            debug!("DELETING {:?}", prop_id);
+                            // Same id and payload, retagged as DELETE.
+                            let mut del = BytesMut::with_capacity(frame.len());
+                            del.put_u8(DELETE);
+                            del.put_slice(&frame[1..]);
+                            self.broadcast(del.freeze(), from).await;
+                            self.properties.remove(&prop_id);
+                        }
+                        Some(v) => {
+                            self.broadcast(frame, from).await;
+                            self.apply_value(prop_id, Some(v));
+                            // Publish to MQTT if the change did NOT originate from MQTT.
+                            // We look up the property from self.properties by ID because
+                            // the wire format carries only the numeric hash, not the
+                            // name, and we need the name to build the MQTT topic.
+                            #[cfg(feature = "mqtt")]
+                            if from != "mqtt" {
+                                if let Some(ref handle) = self.mqtt_handle {
+                                    if let Some(named_prop) = self.properties.get(&prop_id) {
+                                        if let Err(e) = handle.publish(named_prop).await {
+                                            warn!("MQTT publish failed: {:?}", e);
                                         }
                                     }
                                 }
@@ -979,14 +1080,8 @@ impl Hive {
                     if msg.remaining() < 8 {
                         return Err(DecodeError("DELETE needs an 8 byte id".into()).into());
                     }
-                    let p = self.properties.remove(&msg.get_u64());
-                    match p {
-                        None => {}
-                        Some(p) => {
-                            self.broadcast(DELETE, &p, from).await;
-                            // this is unnecessary, but fun
-                            drop(p);
-                        }
+                    if self.properties.remove(&msg.get_u64()).is_some() {
+                        self.broadcast(raw.slice(..9), from).await;
                     }
                 }
                 HEADER => {

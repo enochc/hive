@@ -99,7 +99,24 @@ temperature = 0
 humidity = 0
 ```
 
-With this config, property changes publish to `hive/home/temperature`, `hive/home/humidity`, etc. Any other Hive instance (or MQTT client speaking the binary format) subscribed to the same topics will receive updates.
+With this config, property changes publish to `hive/home/temperature`, `hive/home/humidity`, etc. Any other Hive instance subscribed to the same topics will receive updates.
+
+**Payload format.** By default payloads use Hive's compact binary encoding, which only other Hive nodes can read: a standard client such as `mosquitto_sub` sees `72` arrive as the bytes `0x21 0x48`, and plain text published by `mosquitto_pub` is ignored. To work with ordinary MQTT clients, dashboards and home-automation tools, set `payload = "text"`:
+
+```toml
+[MQTT]
+host = "192.168.1.100"
+topic_prefix = "hive/home"
+payload = "text"        # default "binary"
+subscribe = ["temperature", "heater", "mode"]
+```
+
+```bash
+mosquitto_pub -t hive/home/temperature -m 21.5   # Hive receives 21.5
+mosquitto_sub -t 'hive/home/#' -v                # prints e.g. "hive/home/heater true"
+```
+
+Values are published as plain text: `72`, `21.5` (floats always keep a decimal point), `true`/`false`, or the string itself. Incoming text is read as the property's current type, so a string property stays a string when someone publishes `123`, a float property reads `21` as 21.0, and a boolean property also accepts `on`/`off`, `yes`/`no` and `1`/`0` (case-insensitive). Properties without a value yet are inferred: `true`/`false`, then integer, then float, then string. Every node sharing a topic prefix should use the same `payload` setting.
 
 ## Configuration
 
@@ -131,6 +148,16 @@ connect = "192.168.1.10:3000"      # server address
 # Optional reliability settings, see "Connection Reliability" below
 wave_timeout_ms = 800              # actively ping if a peer goes idle this long
 max_message_size_bytes = 1048576   # cap on a single message's claimed size, this is the default
+handshake_timeout_ms = 5000        # time a new connection gets to finish the handshake, default
+max_peers = 32                     # server: refuse clients beyond this, default unlimited
+max_pending_handshakes = 64        # server: connections allowed mid-handshake at once, default
+
+# Optional security, see "Security" below
+auth_secret = "change-me"          # requires "auth" feature; or auth_secret_env = "HIVE_SECRET"
+[TLS]                              # requires "tls" feature
+cert = "certs/node.pem"
+key = "certs/node.key"
+ca = "certs/ca.pem"
 
 # Bluetooth (requires "bluetooth" feature)
 bt_listen = "Hive_Peripheral"      # advertise as BLE peripheral
@@ -145,6 +172,11 @@ topic_prefix = "hive"
 qos = 1                            # 0 = AtMostOnce, 1 = AtLeastOnce, 2 = ExactlyOnce
 keep_alive = 30
 subscribe = ["prop1", "prop2"]
+payload = "binary"                 # or "text" for non-Hive MQTT clients
+username = "hive"                  # optional broker login
+password_env = "MQTT_PASSWORD"     # or password = "..."
+[MQTT.TLS]                         # optional, requires "tls"; port then defaults to 8883
+ca = "certs/broker-ca.pem"
 
 # Properties with optional arguments
 [Properties]
@@ -168,7 +200,7 @@ prop.on_next(|v| {
 });
 ```
 
-This only rate-limits the local callback. It does not reduce outgoing network traffic, `Handler::set_property` builds its own throwaway `Property` for the wire and never looks at `backoff`.
+This only rate-limits the local callback. It does not reduce outgoing network traffic, `Handler::set_property` encodes straight to the wire and never looks at `backoff`.
 
 **Debouncing (send side)**  To rate-limit how often you actually send updates, e.g. a UI slider firing on every pixel of drag, use `Handler::set_property_debounced` instead. Same leading+trailing behavior as `backoff`, applied to the network send itself, keyed per property name:
 
@@ -215,11 +247,97 @@ Note that a server sends its entire property set to a client as soon as that cli
 max_message_size_bytes = 4194304   # 4 MiB
 ```
 
+**Slow or stuck peers** Each TCP peer has its own writer task and send queue, so a peer that stops reading can't stall updates to everyone else. If its queue stays full for 2 seconds it's dropped. A malformed message also drops only the peer that sent it, and a new connection gets `handshake_timeout_ms` to complete the handshake without holding up anyone else.
+
+**Connection limits (`max_peers`, `max_pending_handshakes`)** A server can cap how many clients it keeps (`max_peers`, unlimited by default) and how many connections may be mid-handshake at once (`max_pending_handshakes`, default 64). Connections over either limit are closed straight after `accept`, before any handshake or TLS work. To keep a server off the LAN entirely, listen on loopback: `listen = "127.0.0.1:3000"`. A bare port such as `listen = "3000"` binds the machine's LAN address.
+
+## Security
+
+Out of the box Hive has no authentication or encryption: anything that can reach the port receives every property and can set any of them. Three options, each optional and configured per Hive, all applied once per connection during the handshake. Nothing runs per message except TLS's own encryption.
+
+| Option | Feature | Protects against | Doesn't protect against | Runtime cost |
+|---|---|---|---|---|
+| Limits and timeouts (above) | *(always)* | Connection floods, silent sockets, oversized or malformed messages | Anyone who can connect | None |
+| `auth_secret` | `auth` | Clients or servers that don't know the secret | Eavesdropping, tampering on the wire | One HMAC exchange per connection, ~1 round trip |
+| `[TLS]` | `tls` | Eavesdropping, tampering, impersonating the server | Unknown clients, unless `require_client_cert` | Handshake per connection; see below |
+| `[TLS]` + `require_client_cert` | `tls` | All of the above plus unknown clients | Theft of a client's key | Same as TLS |
+
+**Recommendation:** TLS with `require_client_cert = true` (mutual TLS) on anything beyond a trusted LAN. `auth_secret` alone is a cheap way to keep stray clients out of a network you already trust; it can also be combined with TLS.
+
+Misconfiguration fails closed. A `[TLS]` table or `auth_secret` in a Hive built without the matching feature, an unreadable certificate, or a client with no `ca` all panic at `Hive::new*`, never fall back to plaintext. Both ends must use the same settings: a TLS client can't talk to a plaintext server and vice versa, and a hive with `auth_secret` refuses one without it in either direction.
+
+### Shared secret
+
+```toml
+auth_secret_env = "HIVE_SECRET"   # read from the environment, or auth_secret = "..."
+```
+
+Both sides prove they hold the secret with HMAC-SHA256 over fresh random nonces from each side, compared in constant time, so a recorded handshake can't be replayed. Use a long random value (`openssl rand -base64 32`).
+
+### TLS
+
+```toml
+# Server
+listen = "0.0.0.0:3000"
+[TLS]
+cert = "certs/server.pem"
+key = "certs/server.key"
+ca = "certs/ca.pem"              # needed for require_client_cert
+require_client_cert = true       # mutual TLS
+
+# Client
+connect = "192.168.1.10:3000"
+[TLS]
+ca = "certs/ca.pem"              # trust only certificates signed by your CA
+cert = "certs/client.pem"        # present a client cert (mutual TLS)
+key = "certs/client.key"
+server_name = "hive.local"       # optional, defaults to the host in `connect`
+```
+
+A Hive that both listens and connects (a middle man) uses the same `[TLS]` table for both roles. TLS 1.3 and 1.2 via rustls on the ring backend, so cross-compiling to ARM needs no CMake or C++ toolchain. `prefer_chacha20 = true` puts ChaCha20-Poly1305 first, much faster than AES on boards without AES instructions (most Raspberry Pis); leave it off on x86 and Apple silicon.
+
+**Cost:** on loopback (Apple M2 Pro, `tests/bench.rs`) TLS throughput matched plain TCP at about 1.4-1.8M updates/s to one receiver, and median latency went up by 5-10 us. Updates are batched into large writes, so encryption cost grows with bytes sent rather than with message count. Expect a larger difference on small ARM boards.
+
+**Making certificates** with OpenSSL (any CA works, this is a minimal private one):
+
+```bash
+# Your CA, keep ca.key offline
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 \
+  -subj "/CN=Hive CA" -keyout ca.key -out ca.pem
+
+# A server certificate; list every name and IP clients will use in `connect`
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+  -subj "/CN=hive-server" -keyout server.key -out server.csr
+printf "subjectAltName=DNS:hive.local,IP:192.168.1.10\nextendedKeyUsage=serverAuth\n" > server.ext
+openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 825 \
+  -extfile server.ext -out server.pem
+
+# A client certificate, for require_client_cert
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+  -subj "/CN=hive-client" -keyout client.key -out client.csr
+printf "extendedKeyUsage=clientAuth\n" > client.ext
+openssl x509 -req -in client.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 825 \
+  -extfile client.ext -out client.pem
+```
+
+### MQTT
+
+Broker credentials and TLS go in the `[MQTT]` table (`username`, `password` or `password_env`, and an `[MQTT.TLS]` subtable with `ca`, and `cert`/`key` for client-certificate login). See the config reference above.
+
 ## Building
 
 ```bash
-# Default, TCP only
+# Default, TCP only, logging through `tracing`
 cargo build
+
+# Security: TLS / mutual TLS, shared-secret auth
+cargo build --features "tls,auth"
+
+# Log through the standard `log` crate instead of `tracing`
+cargo build --features log
+
+# Desktop GUI (Slint)
+cargo build --features gui
 
 # With MQTT support
 cargo build --features mqtt
@@ -246,6 +364,12 @@ cargo test --features mqtt
 
 # Skip MQTT tests in CI
 SKIP_MQTT_TESTS=1 cargo test --features mqtt
+
+# TLS, mutual TLS and shared-secret tests
+cargo test --features "tls,auth" --test security
+
+# Throughput / latency benchmark (numbers in PERF_NOTES.md)
+cargo test --release --features tls --test bench -- --ignored --nocapture --test-threads=1
 ```
 
 ## Examples

@@ -6,7 +6,7 @@ use crate::futures::SinkExt;
 use crate::logging::{debug, error, info};
 use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
 use crate::peer::SocketEvent;
-use crate::property::{Property, property_to_bytes, PropertyValue, PropertyType};
+use crate::property::{encode_property, Property, property_to_bytes, PropertyValue, PropertyType};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -62,9 +62,23 @@ impl Handler {
 
     // This is basically a set_property method, however, Hive itself does not deal directly with property values
     // It only propagates value change notifications, hence the name
+    ///
+    /// `None` clears the property (same as `delete_property`).
     pub async fn set_property(&mut self, prop_name:&str, prop_value:Option<&PropertyValue>){
-        let p = Property::from_toml(prop_name, Some(&prop_value.unwrap().toml()));
-        self.send_property(p).await;
+        // Encode straight from the borrowed value: no clone of it and no
+        // throwaway Property (watch channel, Arcs) per call.
+        let msg = encode_property(Property::hash_id(prop_name), prop_value.map(|v| &v.val), true);
+        self.send_message(msg);
+    }
+
+    /// Hand an encoded message to the hive's event loop. The channel is
+    /// unbounded, so this never waits; it only fails once the hive has
+    /// stopped, which isn't worth panicking a caller over.
+    fn send_message(&self, msg: bytes::Bytes) {
+        let ev = SocketEvent::Message { from: String::new(), msg };
+        if self.sender.unbounded_send(ev).is_err() {
+            debug!("hive {} is stopped, dropping update", self.from_name);
+        }
     }
 
     /// Like `set_property`, but rate-limited per property name: the first
@@ -115,25 +129,12 @@ impl Handler {
 
     pub async fn send_property(&mut self, property:Property){
 
-        let message = property_to_bytes(&property, true);
-        debug!("... send_property: {:?}, {:?}", message, self.sender.is_closed());
-        let socket_event = SocketEvent::Message {
-            from: String::from(""),
-            msg: message
-        };
-
-        self.sender.send(socket_event).await.expect("Failed to send property");
+        self.send_message(property_to_bytes(&property, true));
 
     }
 
     pub async fn delete_property(&mut self, name: &str){
-        let p = Property::from_name(name, None);
-        let message = property_to_bytes(&p, true);
-        let socket_event = SocketEvent::Message {
-            from: String::from(""),
-            msg: message
-        };
-        self.sender.send(socket_event).await.unwrap();
+        self.send_message(encode_property(Property::hash_id(name), None, true));
     }
 
     pub async fn send_to_peer(&mut self, peer_name:&str, msg:&str) -> Result<(), SendError>{

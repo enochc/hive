@@ -224,3 +224,52 @@ async fn mqtt_external_publish_received() {
         panic!("mqtt_external_publish_received timed out after 20 seconds");
     }
 }
+
+/// An MQTT-only hive (no `listen`/`connect`) has no TCP event to signal
+/// readiness, `go(true, ..)` used to wait forever for one.
+#[tokio::test(flavor = "multi_thread")]
+async fn mqtt_only_hive_becomes_ready() {
+    if should_skip() {
+        eprintln!("Skipping MQTT test (SKIP_MQTT_TESTS=1)");
+        return;
+    }
+    let h = Hive::new_from_str_unknown(
+        r#"
+        name = "MqttOnly"
+        [MQTT]
+        host = "127.0.0.1"
+        port = 1883
+        client_id = "hive-mqtt-only-ready"
+        topic_prefix = "hive/ready_test"
+        subscribe = ["x"]
+        "#,
+    );
+    let handler = tokio::time::timeout(Duration::from_secs(10), h.go(true, CancellationToken::new()))
+        .await
+        .expect("go(true) never returned for an MQTT-only hive");
+    assert!(handler.is_connected());
+}
+
+/// Cancelling must work while the broker is unreachable, not only after
+/// it has connected.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_while_broker_unreachable() {
+    let h = Hive::new_from_str_unknown(
+        r#"
+        name = "NoBroker"
+        [MQTT]
+        host = "127.0.0.1"
+        port = 1
+        client_id = "hive-no-broker"
+        "#,
+    );
+    let token = CancellationToken::new();
+    let handler = h.go(false, token.clone()).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!handler.is_connected());
+    token.cancel();
+    // The hive's run loop has exited once its event channel is closed;
+    // sending would then be a no-op. Give it a moment and make sure nothing
+    // panicked or hung the runtime.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+}
