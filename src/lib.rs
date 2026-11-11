@@ -2,9 +2,8 @@
 #![warn(rust_2018_idioms)]
 
 use std::ffi::CStr;
+#[cfg(any(feature = "tracing", feature = "log"))]
 use chrono::Local;
-use log::{Metadata, Record};
-pub use log::LevelFilter;
 pub use tokio_util::sync::CancellationToken;
 pub use futures;
 use std::os::raw::c_char;
@@ -16,6 +15,7 @@ use crate::hive::Hive;
 #[cfg(feature = "gui")]
 pub mod hive_gui;
 mod hive_macros;
+mod logging;
 pub mod property;
 pub mod signal;
 pub mod hive;
@@ -42,32 +42,125 @@ extern crate lazy_static;
 mod android;
 
 // INIT LOGGING
-pub struct SimpleLogger;
-impl log::Log for SimpleLogger {
-    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+
+/// Log level for `init_logging`. Same variant names as `log::LevelFilter`,
+/// so `init_logging(Some(LevelFilter::Debug))` reads the same whichever
+/// logging backend Hive was built with (see the `logging` module).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LevelFilter {
+    Off,
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+#[cfg(feature = "tracing")]
+impl From<LevelFilter> for tracing::level_filters::LevelFilter {
+    fn from(l: LevelFilter) -> Self {
+        use tracing::level_filters::LevelFilter as T;
+        match l {
+            LevelFilter::Off => T::OFF,
+            LevelFilter::Error => T::ERROR,
+            LevelFilter::Warn => T::WARN,
+            LevelFilter::Info => T::INFO,
+            LevelFilter::Debug => T::DEBUG,
+            LevelFilter::Trace => T::TRACE,
+        }
+    }
+}
+
+#[cfg(feature = "log")]
+impl From<LevelFilter> for log::LevelFilter {
+    fn from(l: LevelFilter) -> Self {
+        match l {
+            LevelFilter::Off => log::LevelFilter::Off,
+            LevelFilter::Error => log::LevelFilter::Error,
+            LevelFilter::Warn => log::LevelFilter::Warn,
+            LevelFilter::Info => log::LevelFilter::Info,
+            LevelFilter::Debug => log::LevelFilter::Debug,
+            LevelFilter::Trace => log::LevelFilter::Trace,
+        }
+    }
+}
+
+/// Minute, second and microsecond.
+#[cfg(any(feature = "tracing", feature = "log"))]
+fn short_time() -> impl std::fmt::Display {
+    Local::now().format("%M:%S.%6f")
+}
+
+#[cfg(all(feature = "tracing", not(feature = "log")))]
+struct ShortTime;
+
+#[cfg(all(feature = "tracing", not(feature = "log")))]
+impl tracing_subscriber::fmt::time::FormatTime for ShortTime {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        write!(w, "{}", short_time())
+    }
+}
+
+/// Minimal stdout `log` logger, used by `init_logging` in `log` builds.
+#[cfg(feature = "log")]
+struct StdoutLogger;
+
+#[cfg(feature = "log")]
+impl log::Log for StdoutLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
         metadata.level() <= log::max_level()
     }
 
-    fn log(&self, record: &Record<'_>) {
+    fn log(&self, record: &log::Record<'_>) {
         if self.enabled(record.metadata()) {
-            // I currently only care about the minute, second and millisecond
-            let n = Local::now().format("%M:%S.%6f");
-            println!("{} {:?} {:?}:{:?} - {}",n, record.level(), record.file().unwrap(), record.line().unwrap(), record.args());
+            println!(
+                "{} {:>5} {}:{}: {}",
+                short_time(),
+                record.level(),
+                record.file().unwrap_or("?"),
+                record.line().unwrap_or(0),
+                record.args()
+            );
         }
     }
 
     fn flush(&self) {}
 }
-pub static LOGGER: SimpleLogger = SimpleLogger;
 
-pub fn init_logging(level:Option<LevelFilter>){
+/// Install a simple stdout logger for whichever backend Hive was built
+/// with. Safe to call more than once (tests sharing a process do); only the
+/// first call takes effect. Apps that set up their own logger or
+/// subscriber shouldn't call this at all, Hive's output goes to theirs.
+///
+/// - `tracing` (default): installs a tracing-subscriber fmt subscriber.
+///   With `mqtt` or `gui`, dependencies that log through `log` are bridged
+///   into it.
+/// - `log` (with or without `tracing`): installs a `log` logger.
+/// - neither: does nothing, logging is compiled out.
+pub fn init_logging(level: Option<LevelFilter>) {
     // Info by default: at Debug/Trace every message on the hot path logs
-    // several lines, each a println with a formatted timestamp.
-    let my_level = level.unwrap_or(LevelFilter::Info);
-    // set_logger can only succeed once per process; ignore AlreadySet
-    // errors so multiple tests sharing a process don't panic.
-    if log::set_logger(&LOGGER).is_ok() {
-        log::set_max_level(my_level);
+    // several lines.
+    #[allow(unused_variables)]
+    let level = level.unwrap_or(LevelFilter::Info);
+
+    #[cfg(all(feature = "tracing", not(feature = "log")))]
+    {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::level_filters::LevelFilter::from(level))
+            .with_timer(ShortTime)
+            .with_target(false)
+            .with_file(true)
+            .with_line_number(true)
+            .with_ansi(false)
+            .try_init();
+    }
+
+    #[cfg(feature = "log")]
+    {
+        static LOGGER: StdoutLogger = StdoutLogger;
+        if log::set_logger(&LOGGER).is_ok() {
+            log::set_max_level(level.into());
+        }
     }
 }
 

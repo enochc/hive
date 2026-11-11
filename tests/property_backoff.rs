@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-use log::{debug, info, LevelFilter};
+use tracing::{debug, info};
+use hive::LevelFilter;
 
 use hive::hive::Hive;
 use hive::init_logging;

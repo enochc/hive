@@ -12,7 +12,7 @@ use std::sync::Arc;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 #[allow(unused_imports)]
-use log::{debug, info};
+use crate::logging::{debug, info};
 use toml::Value;
 
 use toml::value::Table;

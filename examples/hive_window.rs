@@ -1,7 +1,8 @@
 use std::rc::{Rc};
 use std::sync::{Arc, Weak, Mutex};
-use log::{debug, LevelFilter};
-use log::warn;
+use tracing::debug;
+use hive::LevelFilter;
+use tracing::warn;
 use hive::hive::Hive;
 #[cfg(feature = "gui")]
 use hive::hive_gui::{HiveWindow, Gui};

@@ -7,7 +7,7 @@ use hive::property::{Property, PropertyValue};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use hive::init_logging;
-use log::{debug, info, error};
+use tracing::{debug, info, error};
 use hive::LevelFilter;
 use hive::CancellationToken;
 use std::time::Duration;

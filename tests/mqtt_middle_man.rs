@@ -26,7 +26,7 @@ use hive::property::{Property, PropertyValue, property_value_to_bytes};
 use hive::LevelFilter;
 use hive::CancellationToken;
 #[allow(unused_imports)]
-use log::{debug, info};
+use tracing::{debug, info};
 
 fn should_skip() -> bool {
     std::env::var("SKIP_MQTT_TESTS").unwrap_or_default() == "1"

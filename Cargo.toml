@@ -1,6 +1,6 @@
 [package]
 name = "hive"
-version = "0.2.200"
+version = "0.2.201"
 authors = ["Enoch Carter <mrenoch@gmail.com>"]
 edition = "2021"
 license-file = "LICENSE.txt"
@@ -8,27 +8,31 @@ license-file = "LICENSE.txt"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
 #default = []
-default = ["gui"]
+default = ["tracing"]
 
 bluetooth = ["bluster", "blurz", "uuid", "lazy_static", "regex"]
 websock = ["websocket-codec", "base64", "sha-1"]
 rest = ["reqwest"]
-mqtt = ["rumqttc"]
-gui = ["slint", "crossbeam-channel"]
+mqtt = ["rumqttc", "tracing-subscriber?/tracing-log"]
+gui = ["slint", "crossbeam-channel", "dep:slint-build", "tracing-subscriber?/tracing-log"]
+
+# Logging backend, see src/logging.rs. `tracing` is the default; turning
+# on `log` switches Hive to the standard `log` crate, and `log` wins when
+# both are on, so `features = ["log"]` is enough on its own. Add
+# `default-features = false` as well to drop the tracing dependency
+# entirely. Neither: logging is compiled out.
+tracing = ["dep:tracing", "dep:tracing-subscriber"]
+log = ["dep:log", "tracing?/log"]
 
 [dependencies]
 slint = { version="1.13", optional=true }
 futures = "0.3"
 #https://docs.rs/config/0.10.1/config/
 toml = "1.0.1+spec-1.1.0"
-# The "log" feature matters, don't drop it. hive.rs logs through `tracing`
-# while peer.rs, handler.rs and property.rs log through `log`, and
-# init_logging only ever installs a `log` logger. Without this feature every
-# tracing event is discarded when no tracing subscriber is set, which
-# silently swallowed all of hive.rs's output, including the connect failure
-# in run(). A client that couldn't reach its server printed nothing at all.
-tracing = { version = "0.1", features = ["log"] }
-log = "0.4.29"
+# Optional logging backends, selected by the `tracing` / `log` features.
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", optional = true, default-features = false, features = ["fmt", "std"] }
+log = { version = "0.4.29", optional = true }
 chrono = "0.4.42"
 # bytes version limited to reduce duplication with bluetooth
 bytes = { version = "1.10"}
@@ -65,5 +69,14 @@ crate-type = ["staticlib", "cdylib", "lib"]
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { version = "0.21.1", default-features = false }
 
+[dev-dependencies]
+# Tests and examples log through tracing directly, whatever backend the
+# library itself was built with.
+tracing = "0.1"
+
+[[example]]
+name = "hive_window"
+required-features = ["gui"]
+
 [build-dependencies]
-slint-build = "1.13"
+slint-build = { version = "1.13", optional = true }

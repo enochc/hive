@@ -3,7 +3,7 @@ use bytes::{BufMut, BytesMut};
 use futures::channel::mpsc::{SendError, UnboundedSender};
 use crate::futures::SinkExt;
 #[allow(unused_imports)]
-use log::{debug, error, info};
+use crate::logging::{debug, error, info};
 use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
 use crate::peer::SocketEvent;
 use crate::property::{Property, property_to_bytes, PropertyValue, PropertyType};

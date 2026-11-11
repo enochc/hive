@@ -22,7 +22,7 @@ async fn main() {
     use hive::LevelFilter;
     use hive::CancellationToken;
     use std::time::Duration;
-    use log::info;
+    use tracing::info;
 
     init_logging(Some(LevelFilter::Debug));
 

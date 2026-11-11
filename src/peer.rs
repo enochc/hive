@@ -21,9 +21,8 @@ use futures::channel::mpsc::UnboundedSender;
 use crate::futures::SinkExt;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 #[allow(unused_imports)]
-use log::{debug, info, trace, warn};
+use crate::logging::{debug, error, info, trace, warn};
 use tokio_util::sync::CancellationToken;
-use tracing::error;
 
 #[cfg(not(feature = "bluetooth"))]
 #[derive(Debug)]

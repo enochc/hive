@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use tracing::{debug, trace};
+use crate::logging::{debug, trace};
 use futures::future::join_all;
 
 

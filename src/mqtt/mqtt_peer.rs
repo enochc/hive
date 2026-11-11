@@ -34,7 +34,7 @@ use futures::channel::mpsc::UnboundedSender;
 use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS};
 use tokio::sync::{Notify, mpsc as tokio_mpsc};
 #[allow(unused_imports)]
-use log::{debug, error, info, trace, warn};
+use crate::logging::{debug, error, info, trace, warn};
 
 use crate::hive::Result;
 use crate::peer::SocketEvent;

@@ -10,7 +10,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{channel::mpsc::channel, prelude::*};
 use futures::channel::mpsc;
 #[allow(unused_imports)]
-use log::{debug, info};
+use crate::logging::{debug, info};
 use uuid::Uuid;
 
 use bluster::{

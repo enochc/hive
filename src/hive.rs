@@ -9,7 +9,7 @@ use std::sync::Arc;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crate::futures::channel::mpsc;
 use crate::futures::{SinkExt, StreamExt};
-use tracing::{info, debug, warn, error};
+use crate::logging::{info, debug, warn, error};
 
 use toml;
 

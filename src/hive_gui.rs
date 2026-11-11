@@ -8,7 +8,7 @@ use futures::StreamExt;
 use std::rc::Rc;
 use futures::channel::mpsc::channel;
 
-use log::debug;
+use crate::logging::debug;
 
 pub trait Gui {
     fn launch(hive: Option<Hive>);

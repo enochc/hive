@@ -22,7 +22,7 @@ use hive::init_logging;
 use hive::property::{Property, PropertyValue, property_value_to_bytes};
 use hive::LevelFilter;
 use hive::CancellationToken;
-use log::{debug, info};
+use tracing::{debug, info};
 
 /// Drain the notification channel looking for a message that matches `target`.
 async fn wait_for(rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>, target: &str) {

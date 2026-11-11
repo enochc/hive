@@ -4,7 +4,7 @@ use hive::init_logging;
 use hive::property::Property;
 use hive::LevelFilter;
 #[allow(unused_imports)]
-use log::{debug, info};
+use tracing::{debug, info};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;

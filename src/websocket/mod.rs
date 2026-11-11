@@ -12,7 +12,7 @@ use bytes::{Bytes, BytesMut};
 use crate::SinkExt;
 use futures::channel::mpsc::UnboundedSender;
 #[allow(unused_imports)]
-use log::{debug, info, trace};
+use crate::logging::{debug, info, trace};
 use sha1::{Digest, Sha1};
 use websocket_codec::{Message, MessageCodec, Opcode};
 
