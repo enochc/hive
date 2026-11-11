@@ -83,3 +83,23 @@ async fn cancelled_connect_attempt_stops_dialing() {
     token.cancel();
     tokio::time::sleep(Duration::from_millis(200)).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn server_that_cannot_bind_never_reports_connected() {
+    // Navio2r's motor_server relies on this to tell "listening" apart from
+    // "the port was already taken". `go` returns before the bind happens and
+    // a bind failure only panics inside the spawned run task, so
+    // is_connected staying false is the only signal the caller gets.
+    let first = Hive::new_from_str_unknown("listen = \"127.0.0.1:34611\"\nname = \"first\"");
+    let first_handler = first.go(true, CancellationToken::new()).await;
+    assert!(first_handler.is_connected(), "first server should bind");
+
+    let second = Hive::new_from_str_unknown("listen = \"127.0.0.1:34611\"\nname = \"second\"");
+    let second_handler = second.go(false, CancellationToken::new()).await;
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !second_handler.is_connected(),
+        "second server bound a port that was already taken"
+    );
+}

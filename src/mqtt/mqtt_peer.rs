@@ -38,7 +38,7 @@ use log::{debug, error, info, trace, warn};
 
 use crate::hive::Result;
 use crate::peer::SocketEvent;
-use crate::property::{Property, property_to_bytes, property_value_to_bytes, bytes_to_property_value};
+use crate::property::{Property, property_to_bytes, property_value_to_bytes, try_bytes_to_property_value};
 
 /// Configuration for the MQTT peer, typically parsed from the Hive TOML config.
 ///
@@ -242,7 +242,13 @@ impl MqttPeer {
             // so we use bytes_to_property_value (type_tag + value only)
             // and rebuild a named Property for the Hive event channel.
             let mut payload = incoming.payload;
-            let prop_value = bytes_to_property_value(&mut payload);
+            let prop_value = match try_bytes_to_property_value(&mut payload) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("MQTT dropping malformed payload for {}: {}", incoming.property_name, e);
+                    continue;
+                }
+            };
 
             let prop = Property::from_name(&incoming.property_name, prop_value);
             let msg = property_to_bytes(&prop, true);

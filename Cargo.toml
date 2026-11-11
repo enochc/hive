@@ -21,7 +21,13 @@ slint = { version="1.13", optional=true }
 futures = "0.3"
 #https://docs.rs/config/0.10.1/config/
 toml = "1.0.1+spec-1.1.0"
-tracing = { version = "0.1" }
+# The "log" feature matters, don't drop it. hive.rs logs through `tracing`
+# while peer.rs, handler.rs and property.rs log through `log`, and
+# init_logging only ever installs a `log` logger. Without this feature every
+# tracing event is discarded when no tracing subscriber is set, which
+# silently swallowed all of hive.rs's output, including the connect failure
+# in run(). A client that couldn't reach its server printed nothing at all.
+tracing = { version = "0.1", features = ["log"] }
 log = "0.4.29"
 chrono = "0.4.42"
 # bytes version limited to reduce duplication with bluetooth

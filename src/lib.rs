@@ -3,7 +3,7 @@
 
 use std::ffi::CStr;
 use chrono::Local;
-use log::{Metadata, Level, Record};
+use log::{Metadata, Record};
 pub use log::LevelFilter;
 pub use tokio_util::sync::CancellationToken;
 pub use futures;
@@ -45,7 +45,7 @@ mod android;
 pub struct SimpleLogger;
 impl log::Log for SimpleLogger {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        metadata.level() <= Level::Debug
+        metadata.level() <= log::max_level()
     }
 
     fn log(&self, record: &Record<'_>) {
@@ -61,7 +61,9 @@ impl log::Log for SimpleLogger {
 pub static LOGGER: SimpleLogger = SimpleLogger;
 
 pub fn init_logging(level:Option<LevelFilter>){
-    let my_level = level.unwrap_or_else(|| LevelFilter::Trace);
+    // Info by default: at Debug/Trace every message on the hot path logs
+    // several lines, each a println with a formatted timestamp.
+    let my_level = level.unwrap_or(LevelFilter::Info);
     // set_logger can only succeed once per process; ignore AlreadySet
     // errors so multiple tests sharing a process don't panic.
     if log::set_logger(&LOGGER).is_ok() {

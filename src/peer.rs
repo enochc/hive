@@ -5,12 +5,13 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::io::BufReader;
 #[cfg(feature = "bluetooth")]
 use bluster::gatt::event::Response;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::fmt::Debug;
 use std::io;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::atomic::Ordering::Relaxed;
-use std::time::{Duration, SystemTime};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 #[cfg(feature = "bluetooth")]
 use crate::bluetooth::central::Central;
 use crate::hive::{Result, Sender, HEADER, HEADER_NAME, HIVE_PROTOCOL, PING, PONG};
@@ -40,7 +41,8 @@ pub struct Central {}
 pub enum SocketEvent {
     NewPeer {
         name: String,
-        stream: Option<TcpStream>,
+        /// Already handshaken TCP connection, None for bluetooth.
+        stream: Option<Connection>,
         peripheral: Option<Sender<Bytes>>,
         central: Option<Central>,
         address: String,
@@ -74,7 +76,11 @@ pub struct Peer {
     pub peripheral: Option<Sender<Bytes>>,
     central: Option<Central>,
     pub address: String,
-    last_received: Arc<RwLock<SystemTime>>,
+    /// Milliseconds since process start (`now_ms`) when anything was last
+    /// heard from this peer. An atomic so `ack`, which runs on every
+    /// message, never takes a lock, and monotonic so a wall-clock change
+    /// can't trigger a false hangup.
+    last_received: Arc<AtomicU64>,
     ack_check: Arc<AtomicBool>,
     web_sock: Option<WebSock>,
     event_sender: UnboundedSender<SocketEvent>,
@@ -107,6 +113,11 @@ impl Debug for Peer {
     }
 }
 
+fn now_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
 fn as_u32_be(array: &[u8; 4]) -> u32 {
     ((array[0] as u32) << 24) + ((array[1] as u32) << 16) + ((array[2] as u32) << 8) + (array[3] as u32)
 }
@@ -136,7 +147,7 @@ impl Peer {
 
     pub async fn new(
         name: String,
-        stream: Option<TcpStream>,
+        conn: Option<Connection>,
         peripheral: Option<Sender<Bytes>>,
         central: Option<Central>,
         sender: UnboundedSender<SocketEvent>,
@@ -145,18 +156,16 @@ impl Peer {
         peer_type: PeerType,
         max_message_size: u32,
     ) -> Result<Peer> {
-        if let Some(tcp_stream) = stream {
-            let addr = tcp_stream.peer_addr()?.to_string();
-            let from = addr.clone();
-            
-            let mut peer = Peer {
-                name: Arc::new(RwLock::new(name)),
-                write_stream: None,
+        if let Some(conn) = conn {
+            let Connection { reader, writer, address, remote_name } = conn;
+            let peer = Peer {
+                name: Arc::new(RwLock::new(remote_name.unwrap_or(name))),
+                write_stream: Some(Arc::new(TokioMutex::new(writer))),
                 update_peers: false,
                 peripheral,
                 central,
-                address: addr,
-                last_received: Arc::new(RwLock::new(std::time::SystemTime::now())),
+                address: address.clone(),
+                last_received: Arc::new(AtomicU64::new(now_ms())),
                 ack_check: Arc::new(AtomicBool::new(false)),
                 event_sender: sender.clone(),
                 web_sock: None,
@@ -165,26 +174,12 @@ impl Peer {
                 shutdown: CancellationToken::new(),
             };
 
-            let send_clone = sender.clone();
-
-            // Perform handshake, then split the stream
-            let (reader, write_half) = peer.handshake(tcp_stream, &sender).await?;
-            peer.write_stream = Some(Arc::new(TokioMutex::new(write_half)));
-
-            let is_websocket = peer.is_web_socket();
-
-            // WebSock runs its own read loop
-            if !is_websocket {
-                let name_id = peer.get_id_name();
-                let shutdown = peer.shutdown.clone();
-                debug!("start tcp socket read loop for({})", name_id);
-
-                tokio::spawn(async move {
-                    read_loop(send_clone, name_id, from, reader, max_message_size, shutdown)
-                        .await
-                        .expect("Read Loop Failed");
-                });
-            }
+            let name_id = peer.get_id_name();
+            let shutdown = peer.shutdown.clone();
+            debug!("start tcp socket read loop for({})", name_id);
+            tokio::spawn(async move {
+                let _ = read_loop(sender, name_id, address, reader, max_message_size, shutdown).await;
+            });
 
             Ok(peer)
         } else {
@@ -195,7 +190,7 @@ impl Peer {
                 peripheral,
                 central,
                 address,
-                last_received: Arc::new(RwLock::new(std::time::SystemTime::now())),
+                last_received: Arc::new(AtomicU64::new(now_ms())),
                 ack_check: Arc::new(AtomicBool::new(false)),
                 event_sender: sender,
                 web_sock: None,
@@ -203,98 +198,6 @@ impl Peer {
                 peer_type,
                 shutdown: CancellationToken::new(),
             })
-        }
-    }
-
-    async fn handshake(
-        &mut self,
-        stream: TcpStream,
-        _sender: &UnboundedSender<SocketEvent>,
-    ) -> Result<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
-        match self.peer_type {
-            PeerType::TcpServer => {
-                // Split stream into read/write halves
-                let (read_half, mut write_half) = stream.into_split();
-                
-                // send name of client connecting to server
-                debug!("<<<< SEND CLIENT HANDSHAKE ⭐️🔻 ");
-                let mut bm = BytesMut::new();
-                bm.put_slice(format!("{}\n", HIVE_PROTOCOL).as_bytes());
-                bm.put_u8(HEADER_NAME);
-                bm.put_slice(format!("{}\n", self.hive_name).as_bytes());
-                debug!("<<<<< SENDING:: {:?} >>>>>>", bm);
-                write_half.write_all(bm.as_ref()).await.expect("write failed");
-                write_half.flush().await.expect("flush failed");
-
-                Ok((BufReader::new(read_half), write_half))
-            }
-            PeerType::TcpClient => {
-                // Split stream into read/write halves
-                let (read_half, mut write_half) = stream.into_split();
-                let mut reader = BufReader::new(read_half);
-                
-                debug!("<<<< READ CLIENT HANDSHAKE ⭐️⭐️🔺 ");
-                let mut str = String::new();
-                let bytes = reader.read_line(&mut str).await?;
-                debug!("READ🔥🔥🔥🔥: {}, {:?}", bytes, str);
-                if bytes == 0 {
-                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Client disconnected").into());
-                }
-                info!("BYTES READ ***** : {:?}", str);
-                if str == "\u{0}\u{0}\u{0}\n" {
-                    str = "".to_string();
-                    reader.read_line(&mut str).await?;
-                    debug!("again: {:?}", str);
-                }
-
-                if str.starts_with(HIVE_PROTOCOL) {
-                    loop {
-                        let mut bm = BytesMut::new();
-                        str = "".to_string();
-                        reader.read_line(&mut str)
-                            .await
-                            .expect("failed to read line post header");
-                        debug!("next line:: {:?}", str);
-                        bm.put_slice(str.as_bytes());
-                        let my8 = bm.get_u8();
-                        match my8 {
-                            HEADER_NAME => {
-                                debug!("got name: {:?}", bm);
-                                bm.truncate(bm.len() - 1);
-                                let name = String::from_utf8(bm.to_vec()).expect("Can't parse name");
-                                self.set_name(&name);
-                                break;
-                            }
-                            _ => {
-                                warn!("something else: {:?}", my8);
-                                break;
-                            }
-                        }
-                    }
-                }
-                
-                // send headers using the write half
-                let name_bytes = self.hive_name.as_bytes();
-                let mut header_bytes = BytesMut::with_capacity(name_bytes.len() + 2);
-                header_bytes.put_u8(HEADER);
-                header_bytes.put_u8(HEADER_NAME);
-                header_bytes.put_slice(name_bytes);
-                info!(".... send headers: {:?}", header_bytes);
-                
-                // Build the message with length prefix
-                let msg = header_bytes.freeze();
-                let mut wire_bytes = Vec::new();
-                let msg_length: u32 = msg.len() as u32;
-                wire_bytes.extend_from_slice(&msg_length.to_be_bytes());
-                wire_bytes.extend_from_slice(&msg);
-                write_half.write_all(&wire_bytes).await?;
-                write_half.flush().await?;
-                
-                Ok((reader, write_half))
-            }
-            _ => {
-                unimplemented!("finish this!!");
-            }
         }
     }
 
@@ -312,8 +215,7 @@ impl Peer {
     }
     
     pub fn ack(&self) {
-        debug!("ACK {:?}", self.to_string());
-        *self.last_received.write().unwrap() = SystemTime::now();
+        self.last_received.store(now_ms(), Relaxed);
     }
     
     pub async fn send_pong(&self) -> Result<()> {
@@ -355,9 +257,8 @@ impl Peer {
         tokio::spawn(async move {
             'wave_loop: loop {
                 tokio::time::sleep(tick).await;
-                let since_last_comm = SystemTime::now()
-                    .duration_since(*last_received_clone.read().unwrap())
-                    .unwrap_or_default();
+                let since_last_comm =
+                    Duration::from_millis(now_ms().saturating_sub(last_received_clone.load(Relaxed)));
                 if since_last_comm >= timeout {
                     let nc = name_clone.read().unwrap().clone();
                     debug!("wave: no traffic from {:?} for {:?}, pinging", nc, since_last_comm);
@@ -433,12 +334,12 @@ impl Peer {
             self.peripheral
                 .as_ref()
                 .unwrap()
-                .send(b.clone())
-                .await
-                .expect("failed to send something somewhere");
+                .clone()
+                .send(b)
+                .await?;
             debug!("sent...");
         } else {
-            unimplemented!("cant send: {:?}", msg);
+            return Err(format!("peer {:?} has no transport to send on", self.address).into());
         }
 
         Ok(())
@@ -465,6 +366,110 @@ async fn write_framed(stream: &Arc<TokioMutex<OwnedWriteHalf>>, message: &Bytes)
     Ok(())
 }
 
+/// A TCP connection that has completed the Hive handshake and is ready to
+/// become a `Peer`. Produced off the event loop (in the accept or connect
+/// task) so a slow or silent remote can never stall the hive itself.
+#[derive(Debug)]
+pub struct Connection {
+    pub(crate) reader: BufReader<OwnedReadHalf>,
+    pub(crate) writer: OwnedWriteHalf,
+    pub(crate) address: String,
+    /// The name the remote announced in its handshake, when it sends one
+    /// there (clients do; servers send theirs later as a HEADER message).
+    pub(crate) remote_name: Option<String>,
+}
+
+/// Longest handshake line we'll buffer. Hive's are a protocol tag or a
+/// name, a few dozen bytes. Without a cap a remote could stream bytes with
+/// no newline and grow the line buffer without bound.
+const MAX_HANDSHAKE_LINE: u64 = 1024;
+pub(crate) const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn protocol_err(msg: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, msg.into())
+}
+
+async fn read_handshake_line(reader: &mut BufReader<OwnedReadHalf>) -> io::Result<String> {
+    let mut line = String::new();
+    let n = (&mut *reader).take(MAX_HANDSHAKE_LINE).read_line(&mut line).await?;
+    if n == 0 {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "closed during handshake"));
+    }
+    if !line.ends_with('\n') {
+        return Err(protocol_err("handshake line too long or truncated"));
+    }
+    Ok(line)
+}
+
+/// Run the Hive handshake on a freshly connected or accepted stream, with
+/// `timeout` covering the whole exchange.
+///
+/// `peer_type` is what the *remote* is to us: `TcpServer` when we dialed
+/// out (we announce ourselves), `TcpClient` when we accepted (we read the
+/// remote's announcement, then send our name back as a HEADER frame).
+pub(crate) async fn handshake(
+    stream: TcpStream,
+    peer_type: &PeerType,
+    hive_name: &str,
+    timeout: Duration,
+) -> io::Result<Connection> {
+    // Small frames are the norm here; don't let Nagle hold them back.
+    stream.set_nodelay(true)?;
+    let address = stream.peer_addr()?.to_string();
+    let (read_half, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+
+    let exchange = async {
+        match peer_type {
+            PeerType::TcpServer => {
+                let mut bm = BytesMut::with_capacity(HIVE_PROTOCOL.len() + hive_name.len() + 3);
+                bm.put_slice(HIVE_PROTOCOL.as_bytes());
+                bm.put_u8(b'\n');
+                bm.put_u8(HEADER_NAME);
+                bm.put_slice(hive_name.as_bytes());
+                bm.put_u8(b'\n');
+                writer.write_all(&bm).await?;
+                writer.flush().await?;
+                Ok(None)
+            }
+            PeerType::TcpClient => {
+                let mut line = read_handshake_line(&mut reader).await?;
+                if line == "\u{0}\u{0}\u{0}\n" {
+                    line = read_handshake_line(&mut reader).await?;
+                }
+                if !line.starts_with(HIVE_PROTOCOL) {
+                    return Err(protocol_err("not a Hive client"));
+                }
+                let line = read_handshake_line(&mut reader).await?;
+                let bytes = line.as_bytes();
+                let remote_name = if bytes.first() == Some(&HEADER_NAME) {
+                    Some(line[1..line.len() - 1].to_string())
+                } else {
+                    warn!("handshake from {} had no name header", address);
+                    None
+                };
+
+                let name_bytes = hive_name.as_bytes();
+                let mut out = BytesMut::with_capacity(4 + 2 + name_bytes.len());
+                out.put_u32((name_bytes.len() + 2) as u32);
+                out.put_u8(HEADER);
+                out.put_u8(HEADER_NAME);
+                out.put_slice(name_bytes);
+                writer.write_all(&out).await?;
+                writer.flush().await?;
+                Ok(remote_name)
+            }
+            other => Err(protocol_err(format!("no TCP handshake for {:?}", other))),
+        }
+    };
+
+    let remote_name = tokio::time::timeout(timeout, exchange)
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "handshake timed out"))??;
+
+    Ok(Connection { reader, writer, address, remote_name })
+}
+
 // Messages on the wire here are property syncs and small control frames, a
 // float, a short string, at most a modest peer list, never anything close
 // to this. The 4-byte length prefix comes straight off the wire with no
@@ -484,99 +489,67 @@ async fn read_loop(
     max_message_size: u32,
     shutdown: CancellationToken,
 ) -> Result<()> {
-    let mut is_running = true;
-    while is_running {
-        let mut sender = sender.clone();
-        let mut size_buff = [0; 4];
-        debug!("{:?} READING!!!!", peer_id_string);
+    loop {
         let r = tokio::select! {
             _ = shutdown.cancelled() => {
                 debug!("{:?} read loop shutting down, peer dropped", peer_id_string);
                 break;
             }
-            r = reader.read(&mut size_buff) => r,
+            r = read_frame(&mut reader, max_message_size) => r,
         };
-        let from = String::from(&from);
         match r {
-            Ok(read) => {
-                if read == 0 {
-                    debug!("Read zero bytes");
-                    sender
-                        .send(SocketEvent::Hangup { from })
-                        .await
-                        .expect("Failed to send Hangup");
-                    is_running = false;
-                } else {
-                    let message_size = as_u32_be(&size_buff);
-                    if message_size > max_message_size {
-                        error!(
-                            "{:?} claimed message size {} exceeds {} byte cap, dropping connection",
-                            peer_id_string, message_size, max_message_size
-                        );
-                        sender
-                            .send(SocketEvent::Hangup { from })
-                            .await
-                            .expect("Failed to send Hangup");
-                        is_running = false;
-                        continue;
-                    }
-
-                    // BytesMut::with_capacity reserves the exact size but
-                    // leaves it uninitialized rather than zero-filling it
-                    // like vec![0u8; n] would, read_buf writes directly
-                    // into that spare capacity. We're about to overwrite
-                    // every byte with the real read anyway, so there's no
-                    // reason to pay for zeroing memory first.
-                    let mut buf = BytesMut::with_capacity(message_size as usize);
-                    let mut read_err = None;
-                    while buf.len() < message_size as usize {
-                        match reader.read_buf(&mut buf).await {
-                            Ok(0) => {
-                                read_err = Some(io::Error::new(
-                                    io::ErrorKind::UnexpectedEof,
-                                    "connection closed mid-message",
-                                ));
-                                break;
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                read_err = Some(e);
-                                break;
-                            }
-                        }
-                    }
-
-                    match read_err {
-                        None => {
-                            let msg = buf.freeze();
-                            debug!("<<<<<<<<<<<<<<<<< {:?} Read message: {:?}", peer_id_string, &msg);
-                            let debug_msg = msg.clone();
-                            let se = SocketEvent::Message { from, msg };
-                            if !sender.is_closed() {
-                                sender.send(se).await.expect("Failed to send message");
-                                debug!("{:?} send message {:?}", peer_id_string, debug_msg);
-                            }
-                        }
-                        Some(e) => {
-                            error!("Error reading from socket: {:?}", e);
-                            sender
-                                .send(SocketEvent::Hangup { from })
-                                .await
-                                .expect("Failed to send Hangup");
-                        }
-                    }
+            Ok(msg) => {
+                trace!("{:?} read message: {:?}", peer_id_string, &msg);
+                // unbounded_send only fails once the hive has stopped
+                // receiving, at which point there is nobody left to tell.
+                if sender
+                    .unbounded_send(SocketEvent::Message { from: from.clone(), msg })
+                    .is_err()
+                {
+                    break;
                 }
             }
             Err(e) => {
-                error!("ERROR: {:?}", e);
-                sender
-                    .send(SocketEvent::Hangup { from })
-                    .await
-                    .expect("Failed to send hangup");
-                is_running = false;
+                if e.kind() == io::ErrorKind::UnexpectedEof {
+                    debug!("{:?} closed the connection", peer_id_string);
+                } else {
+                    error!("{:?} read failed, dropping connection: {:?}", peer_id_string, e);
+                }
+                let _ = sender.unbounded_send(SocketEvent::Hangup { from });
+                break;
             }
         }
     }
     debug!("<< Peer run done");
     Ok(())
+}
+
+/// Read one length-prefixed frame. `read_exact` for the prefix matters: a
+/// plain `read` can legally return 1-3 bytes when the 4-byte header
+/// straddles a buffer boundary, which used to desync the whole stream.
+/// The body read is bounded with `take` so it can never consume bytes
+/// belonging to the next frame, and fills `BytesMut`'s spare capacity
+/// directly instead of zeroing a buffer first.
+pub(crate) async fn read_frame<R>(reader: &mut R, max_message_size: u32) -> io::Result<Bytes>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut size_buff = [0u8; 4];
+    reader.read_exact(&mut size_buff).await?;
+    let message_size = as_u32_be(&size_buff);
+    if message_size > max_message_size {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("claimed message size {} exceeds {} byte cap", message_size, max_message_size),
+        ));
+    }
+    let n = message_size as usize;
+    let mut buf = BytesMut::with_capacity(n);
+    let mut limited = reader.take(n as u64);
+    while buf.len() < n {
+        if limited.read_buf(&mut buf).await? == 0 {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "connection closed mid-message"));
+        }
+    }
+    Ok(buf.freeze())
 }

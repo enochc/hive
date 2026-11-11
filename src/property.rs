@@ -113,6 +113,32 @@ pub(crate) const IS_INT: i8 = 0x16;
 pub(crate) const IS_FLOAT: i8 = 0x17;
 // 64 bits
 pub(crate) const IS_NONE: i8 = 0x18;
+/// String longer than 255 bytes: `u32` big-endian length, then the bytes.
+/// Strings up to 255 bytes keep using `IS_STR` with a `u8` length, so
+/// peers running an older build still interoperate for those.
+pub(crate) const IS_LONG_STR: i8 = 0x22;
+
+/// Error decoding a value or property off the wire. Always the sender's
+/// fault (truncated frame, unknown tag, bad UTF-8), never ours, so callers
+/// log it and drop the message rather than panic.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecodeError(pub String);
+
+impl Display for DecodeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "decode error: {}", self.0)
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
+fn need(bytes: &Bytes, n: usize, what: &str) -> std::result::Result<(), DecodeError> {
+    if bytes.remaining() < n {
+        Err(DecodeError(format!("{} needs {} bytes, {} left", what, n, bytes.remaining())))
+    } else {
+        Ok(())
+    }
+}
 
 /// Reactive stream for observing property value changes.
 ///
@@ -522,7 +548,32 @@ pub trait SetProperty<T> {
 /*
    |P|one=1\ntwo=2\nthree=3
 */
-pub(crate) fn properties_to_bytes(properties: &HashMap<u64, Property>) -> Bytes {
+/// Hasher for keys that are already well-mixed 64-bit hashes (property ids
+/// are FNV-1a of the name), so hashing them again with SipHash is wasted
+/// work on every lookup.
+#[derive(Default, Clone, Copy)]
+pub struct IdHasher(u64);
+
+impl std::hash::Hasher for IdHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        // Only u64 keys are expected; fold anything else in FNV style so
+        // it still works if someone hashes another type with it.
+        for b in bytes {
+            self.0 = (self.0 ^ *b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    fn write_u64(&mut self, n: u64) {
+        self.0 = n;
+    }
+}
+
+/// Property id to property. Same API as a plain `HashMap<u64, Property>`.
+pub type PropertyMap = HashMap<u64, Property, std::hash::BuildHasherDefault<IdHasher>>;
+
+pub(crate) fn properties_to_bytes(properties: &PropertyMap) -> Bytes {
     let mut bytes = BytesMut::new();
     bytes.put_u8(PROPERTIES);
     for p in properties {
@@ -552,10 +603,17 @@ pub fn property_value_to_bytes(property: &Property) -> Bytes {
                 bytes.put_i8(IS_BOOL);
                 bytes.put_u8(if p.val.as_bool().unwrap() { 1 } else { 0 });
             } else if p.val.is_str() {
-                bytes.put_i8(IS_STR);
                 let str_val = p.val.as_str().unwrap();
-                let str_length: u8 = str_val.len() as u8;
-                bytes.put_u8(str_length);
+                match u8::try_from(str_val.len()) {
+                    Ok(len) => {
+                        bytes.put_i8(IS_STR);
+                        bytes.put_u8(len);
+                    }
+                    Err(_) => {
+                        bytes.put_i8(IS_LONG_STR);
+                        bytes.put_u32(str_val.len() as u32);
+                    }
+                }
                 bytes.put_slice(str_val.as_bytes())
             } else if p.val.is_integer() {
                 let int = p.val.as_integer().unwrap();
@@ -610,59 +668,130 @@ pub fn property_to_bytes(property: &Property, inc_head: bool) -> Bytes {
     bytes.freeze()
 }
 
-pub(crate) fn bytes_to_property(bytes: &mut Bytes) -> Option<Property> {
+/// Decode `[u64 id][type_tag][value]` without building a `Property`.
+pub(crate) fn decode_property(
+    bytes: &mut Bytes,
+) -> std::result::Result<(u64, Option<PropertyValue>), DecodeError> {
+    need(bytes, 8, "property id")?;
     let property_id = bytes.get_u64();
-    debug!("id: {:?}", property_id);
+    let value = try_bytes_to_property_value(bytes)?;
+    Ok((property_id, value))
+}
 
-    let value = bytes_to_property_value(bytes);
-    match value {
-        Some(pv) => Some(Property::from_value(&property_id, pv.val)),
-        None => Some(Property::from_id(&property_id, None)),
-    }
+/// Decode just the type-tagged value portion of the Hive wire format.
+///
+/// Panics on malformed input; kept for API compatibility. Anything reading
+/// bytes that came off a network should use `try_bytes_to_property_value`.
+pub fn bytes_to_property_value(bytes: &mut Bytes) -> Option<PropertyValue> {
+    try_bytes_to_property_value(bytes).expect("malformed property value")
 }
 
 /// Decode just the type-tagged value portion of the Hive wire format.
 ///
 /// This reads `[type_tag][value_bytes]` without the leading `u64` property
 /// ID.  Used by the MQTT peer where the property identity is carried by the
-/// MQTT topic rather than an in-band hash.
-pub fn bytes_to_property_value(bytes: &mut Bytes) -> Option<PropertyValue> {
+/// MQTT topic rather than an in-band hash. `Ok(None)` is a real `IS_NONE`
+/// (property cleared); malformed input is an `Err`, never a panic.
+pub fn try_bytes_to_property_value(
+    bytes: &mut Bytes,
+) -> std::result::Result<Option<PropertyValue>, DecodeError> {
+    need(bytes, 1, "type tag")?;
     let value_type = bytes.get_i8();
-    match value_type {
-        IS_STR => {
-            let str_length = bytes.get_u8() as usize;
-            let value = String::from_utf8(bytes.slice(..str_length).to_vec());
-            bytes.advance(str_length);
-            let v = value.ok().unwrap();
-            Some(PropertyValue::from(v.as_str()))
+    let v = match value_type {
+        IS_STR | IS_LONG_STR => {
+            let str_length = if value_type == IS_STR {
+                need(bytes, 1, "string length")?;
+                bytes.get_u8() as usize
+            } else {
+                need(bytes, 4, "long string length")?;
+                bytes.get_u32() as usize
+            };
+            need(bytes, str_length, "string body")?;
+            let raw = bytes.split_to(str_length);
+            let s = std::str::from_utf8(&raw).map_err(|e| DecodeError(format!("string not UTF-8: {}", e)))?;
+            PropertyValue::from(s)
         }
         IS_BOOL => {
-            let b = bytes.get_u8() > 0;
-            Some(PropertyValue::from(b))
+            need(bytes, 1, "bool")?;
+            PropertyValue::from(bytes.get_u8() > 0)
         }
         IS_SHORT => {
-            let short = bytes.get_i8();
-            Some(PropertyValue::from(short as i32))
+            need(bytes, 1, "i8")?;
+            PropertyValue::from(bytes.get_i8() as i32)
         }
         IS_SMALL => {
-            let small = bytes.get_i16();
-            Some(PropertyValue::from(small as i32))
+            need(bytes, 2, "i16")?;
+            PropertyValue::from(bytes.get_i16() as i32)
         }
         IS_LONG => {
-            let long = bytes.get_i32();
-            Some(PropertyValue::from(long))
+            need(bytes, 4, "i32")?;
+            PropertyValue::from(bytes.get_i32())
         }
         IS_INT => {
-            let int = bytes.get_i64();
-            Some(PropertyValue::from(int))
+            need(bytes, 8, "i64")?;
+            PropertyValue::from(bytes.get_i64())
         }
         IS_FLOAT => {
-            let float = bytes.get_f64();
-            Some(PropertyValue::from(float))
+            need(bytes, 8, "f64")?;
+            PropertyValue::from(bytes.get_f64())
         }
-        IS_NONE => None,
-        _ => {
-            unimplemented!("bytes_to_property_value: unhandled type tag {:?}", value_type)
+        IS_NONE => return Ok(None),
+        other => return Err(DecodeError(format!("unknown type tag {:#04x}", other))),
+    };
+    Ok(Some(v))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trip(v: PropertyValue) -> Option<PropertyValue> {
+        let p = Property::from_name("x", Some(v));
+        let mut b = property_to_bytes(&p, false);
+        let (id, val) = decode_property(&mut b).unwrap();
+        assert_eq!(id, Property::hash_id("x"));
+        assert!(b.is_empty(), "trailing bytes left after decode");
+        val
+    }
+
+    #[test]
+    fn short_and_long_strings_round_trip() {
+        for n in [0usize, 1, 255, 256, 300, 70_000] {
+            let s = "a".repeat(n);
+            assert_eq!(round_trip(PropertyValue::from(s.as_str())), Some(PropertyValue::from(s.as_str())), "len {}", n);
+        }
+    }
+
+    #[test]
+    fn short_strings_keep_old_encoding() {
+        let p = Property::from_name("x", Some("hi".into()));
+        let b = property_value_to_bytes(&p);
+        assert_eq!(&b[..], &[IS_STR as u8, 2, b'h', b'i']);
+    }
+
+    #[test]
+    fn numbers_round_trip() {
+        for v in [0i64, -1, 127, 128, -32768, 40_000, i32::MAX as i64 + 1, i64::MIN] {
+            assert_eq!(round_trip(PropertyValue::from(v)), Some(PropertyValue::from(v)));
+        }
+        assert_eq!(round_trip(PropertyValue::from(1.5f64)), Some(PropertyValue::from(1.5f64)));
+        assert_eq!(round_trip(PropertyValue::from(true)), Some(PropertyValue::from(true)));
+    }
+
+    #[test]
+    fn malformed_input_is_an_error_not_a_panic() {
+        let cases: &[&[u8]] = &[
+            &[],                                 // no id
+            &[0, 0, 0, 0, 0, 0, 0, 1],           // id, no tag
+            &[0, 0, 0, 0, 0, 0, 0, 1, 0x7f],     // unknown tag
+            &[0, 0, 0, 0, 0, 0, 0, 1, IS_STR as u8, 5, b'a'], // short body
+            &[0, 0, 0, 0, 0, 0, 0, 1, IS_STR as u8, 2, 0xff, 0xfe], // bad utf-8
+            &[0, 0, 0, 0, 0, 0, 0, 1, IS_FLOAT as u8, 1, 2], // short float
+            &[0, 0, 0, 0, 0, 0, 0, 1, IS_LONG_STR as u8, 0xff, 0xff, 0xff, 0xff],
+        ];
+        for c in cases {
+            let mut b = Bytes::copy_from_slice(c);
+            assert!(decode_property(&mut b).is_err(), "{:?} should fail", c);
         }
     }
 }

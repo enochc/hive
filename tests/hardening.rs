@@ -1,0 +1,194 @@
+//! Phase 1 hardening: a misbehaving or slow remote must never take down or
+//! stall the hive for everyone else. Uses a raw TCP client that speaks the
+//! Hive handshake by hand so it can send exactly the bytes a test needs.
+
+use hive::hive::Hive;
+use hive::property::Property;
+use hive::CancellationToken;
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+
+const PROPERTY: u8 = 0x11;
+const IS_LONG: u8 = 0x15; // i32 value
+
+async fn wait_for<F: Fn() -> bool>(f: F, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    while Instant::now() < deadline {
+        if f() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    f()
+}
+
+/// Connect and complete the client side of the Hive handshake.
+async fn raw_client(port: u16) -> TcpStream {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    s.write_all(b"HVEP\n\x78raw\n").await.unwrap();
+    s
+}
+
+fn property_frame(name: &str, value: i32) -> Vec<u8> {
+    let mut body = vec![PROPERTY];
+    body.extend_from_slice(&Property::hash_id(name).to_be_bytes());
+    body.push(IS_LONG);
+    body.extend_from_slice(&value.to_be_bytes());
+    frame(&body)
+}
+
+fn frame(body: &[u8]) -> Vec<u8> {
+    let mut out = (body.len() as u32).to_be_bytes().to_vec();
+    out.extend_from_slice(body);
+    out
+}
+
+/// A server whose `m` property reports every change into `last`/`count`.
+async fn server(port: u16) -> (hive::handler::Handler, Arc<AtomicI64>, Arc<AtomicUsize>) {
+    let mut h = Hive::new_from_str_unknown(&format!(
+        "listen = \"127.0.0.1:{port}\"\nname = \"Serv\"\nhandshake_timeout_ms = 2000\n[Properties]\nm = 0"
+    ));
+    let last = Arc::new(AtomicI64::new(-1));
+    let count = Arc::new(AtomicUsize::new(0));
+    let (l, c) = (last.clone(), count.clone());
+    h.get_mut_property_by_name("m").unwrap().on_next(move |v| {
+        l.store(v.val.as_integer().unwrap(), Ordering::SeqCst);
+        c.fetch_add(1, Ordering::SeqCst);
+    });
+    let handler = h.go(true, CancellationToken::new()).await;
+    (handler, last, count)
+}
+
+/// A hive client whose `m` property reports the latest value into `last`.
+async fn hive_client(port: u16, name: &str) -> (hive::handler::Handler, Arc<AtomicI64>) {
+    let mut c = Hive::new_from_str_unknown(&format!("connect = \"127.0.0.1:{port}\"\nname = \"{name}\""));
+    let last = Arc::new(AtomicI64::new(-1));
+    let l = last.clone();
+    c.get_mut_property_by_name("m").unwrap().on_next(move |v| {
+        l.store(v.val.as_integer().unwrap(), Ordering::SeqCst);
+    });
+    let h = c.go(false, CancellationToken::new()).await;
+    (h, last)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn frames_split_one_byte_at_a_time_and_bursts_arrive_intact() {
+    let (_srv, last, count) = server(34701).await;
+    let mut s = raw_client(34701).await;
+
+    // One frame dribbled a byte at a time, so the length prefix is split
+    // across several reads.
+    for b in property_frame("m", 7) {
+        s.write_all(&[b]).await.unwrap();
+        s.flush().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    assert!(wait_for(|| last.load(Ordering::SeqCst) == 7, Duration::from_secs(2)).await);
+
+    // A burst written as one buffer, so frame boundaries land anywhere
+    // inside the server's read buffer.
+    let mut burst = Vec::new();
+    for v in 1..=5000 {
+        burst.extend(property_frame("m", v));
+    }
+    let before = count.load(Ordering::SeqCst);
+    s.write_all(&burst).await.unwrap();
+    assert!(
+        wait_for(|| last.load(Ordering::SeqCst) == 5000, Duration::from_secs(5)).await,
+        "last value seen: {}",
+        last.load(Ordering::SeqCst)
+    );
+    assert_eq!(count.load(Ordering::SeqCst) - before, 5000, "every frame should be decoded once");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn silent_connection_does_not_block_other_clients() {
+    let (srv, _, _) = server(34702).await;
+
+    // Connects and never says a word.
+    let _silent = TcpStream::connect("127.0.0.1:34702").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let (_c, _) = hive_client(34702, "real").await;
+    assert!(
+        wait_for(|| srv.peer_count() == 1, Duration::from_secs(1)).await,
+        "a real client should attach while the silent one is still pending"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_messages_drop_only_the_sender() {
+    let (mut srv, _, _) = server(34703).await;
+    let (_c, client_last) = hive_client(34703, "real").await;
+    assert!(wait_for(|| srv.peer_count() == 1, Duration::from_secs(2)).await);
+
+    let mut bad = raw_client(34703).await;
+    assert!(wait_for(|| srv.peer_count() == 2, Duration::from_secs(2)).await);
+
+    // Unknown message type: ignored, connection stays up.
+    bad.write_all(&frame(&[0x7f, 1, 2, 3])).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(srv.peer_count(), 2, "unknown type should be ignored, not fatal");
+
+    // Truncated property: the sender gets dropped.
+    bad.write_all(&frame(&[PROPERTY, 0, 0, 0])).await.unwrap();
+    assert!(
+        wait_for(|| srv.peer_count() == 1, Duration::from_secs(2)).await,
+        "malformed sender should be dropped"
+    );
+
+    // Its socket is actually closed.
+    let mut sink = Vec::new();
+    let closed = tokio::time::timeout(Duration::from_secs(2), bad.read_to_end(&mut sink)).await;
+    assert!(closed.is_ok(), "server should close the malformed peer's socket");
+
+    // And the hive still serves everyone else.
+    srv.set_property("m", Some(&42.into())).await;
+    assert!(wait_for(|| client_last.load(Ordering::SeqCst) == 42, Duration::from_secs(2)).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dead_peer_does_not_stop_broadcasts_to_others() {
+    let (mut srv, _, _) = server(34704).await;
+    let (_c, client_last) = hive_client(34704, "real").await;
+    assert!(wait_for(|| srv.peer_count() == 1, Duration::from_secs(2)).await);
+
+    let dead = raw_client(34704).await;
+    assert!(wait_for(|| srv.peer_count() == 2, Duration::from_secs(2)).await);
+    // Reset rather than close, so the server's next writes to it fail.
+    #[allow(deprecated)]
+    dead.set_linger(Some(Duration::ZERO)).unwrap();
+    drop(dead);
+
+    for v in 100..200 {
+        srv.set_property("m", Some(&v.into())).await;
+    }
+    assert!(
+        wait_for(|| client_last.load(Ordering::SeqCst) == 199, Duration::from_secs(3)).await,
+        "surviving client stopped receiving, last = {}",
+        client_last.load(Ordering::SeqCst)
+    );
+    assert!(wait_for(|| srv.peer_count() == 1, Duration::from_secs(2)).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn long_strings_sync_between_hives() {
+    let mut s = Hive::new_from_str_unknown("listen = \"127.0.0.1:34705\"\nname = \"Serv\"\n[Properties]\nt = \"x\"");
+    let got = Arc::new(std::sync::Mutex::new(String::new()));
+    let g = got.clone();
+    s.get_mut_property_by_name("t").unwrap().on_next(move |v| {
+        *g.lock().unwrap() = v.val.as_str().unwrap().to_string();
+    });
+    let srv = s.go(true, CancellationToken::new()).await;
+
+    let (mut c, _) = hive_client(34705, "real").await;
+    assert!(wait_for(|| srv.peer_count() == 1, Duration::from_secs(2)).await);
+
+    let long = "y".repeat(10_000);
+    c.set_property("t", Some(&long.as_str().into())).await;
+    assert!(wait_for(|| got.lock().unwrap().len() == 10_000, Duration::from_secs(2)).await);
+    assert_eq!(*got.lock().unwrap(), long);
+}

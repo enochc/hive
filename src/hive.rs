@@ -18,8 +18,8 @@ use crate::bluetooth::central::Central;
 use crate::handler::Handler;
 #[cfg(feature = "mqtt")]
 use crate::mqtt::mqtt_peer::{MqttConfig, MqttPeerHandle, spawn_mqtt_peer};
-use crate::peer::{Peer, PeerType, SocketEvent, DEFAULT_MAX_MESSAGE_SIZE};
-use crate::property::{bytes_to_property, properties_to_bytes, property_to_bytes, Property};
+use crate::peer::{handshake, Peer, PeerType, SocketEvent, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_MAX_MESSAGE_SIZE};
+use crate::property::{decode_property, properties_to_bytes, property_to_bytes, DecodeError, Property, PropertyMap};
 use crate::signal::Signal;
 use ctrlc::Error;
 use std::fmt::{Debug, Formatter};
@@ -32,7 +32,7 @@ pub type Receiver<T> = mpsc::UnboundedReceiver<T>;
 
 // #[derive(Debug)]
 pub struct Hive {
-    pub properties: HashMap<u64, Property>,
+    pub properties: PropertyMap,
     sender: Sender<SocketEvent>,
     receiver: Receiver<SocketEvent>,
     connect_to: Option<String>,
@@ -50,6 +50,10 @@ pub struct Hive {
     /// `DEFAULT_MAX_MESSAGE_SIZE`, see `Peer::read_loop` for why this
     /// exists at all.
     max_message_size: u32,
+    /// How long a new connection gets to complete the Hive handshake, from
+    /// the `handshake_timeout_ms` config key. The handshake runs off the
+    /// event loop, so this only bounds how long a silent socket is held.
+    handshake_timeout: Duration,
     /// Shared with every `Handler` cloned from this `Hive`, so debounce
     /// state for a given property name is consistent no matter which
     /// clone sends it. See `Handler::set_property_debounced`.
@@ -213,10 +217,16 @@ impl Hive {
             .map(|bytes| bytes as u32)
             .unwrap_or(DEFAULT_MAX_MESSAGE_SIZE);
 
+        let handshake_timeout = config
+            .get("handshake_timeout_ms")
+            .and_then(|v| v.as_integer())
+            .map(|ms| Duration::from_millis(ms as u64))
+            .unwrap_or(DEFAULT_HANDSHAKE_TIMEOUT);
+
         #[cfg(feature = "mqtt")]
         let mqtt_config = config.get("MQTT").and_then(MqttConfig::from_toml);
 
-        let props: HashMap<u64, Property> = HashMap::new();
+        let props = PropertyMap::default();
 
         let (send_chan, receive_chan) = mpsc::unbounded();
         let mut hive = Hive {
@@ -230,6 +240,7 @@ impl Hive {
             name,
             wave_timeout,
             max_message_size,
+            handshake_timeout,
             debounce: Arc::new(Mutex::new(HashMap::new())),
             peers: Vec::new(),
             message_received: Default::default(),
@@ -306,13 +317,7 @@ impl Hive {
     }
 
     pub fn get_mut_property(&mut self, key: &u64) -> Option<&mut Property> {
-        if !self.properties.contains_key(key) {
-            let p = Property::from_id(key, None);
-            self.set_property(p);
-        }
-
-        let op = self.properties.get_mut(key);
-        return op;
+        Some(self.properties.entry(*key).or_insert_with(|| Property::from_id(key, None)))
     }
     // pub fn get_mut_property_by_name(&mut self, name: &str) -> Option<&mut Property> {
     //     let key = &Property::hash_id(name);
@@ -325,14 +330,7 @@ impl Hive {
     //     return op;
     // }
     pub fn get_mut_property_by_name(&mut self, name: &str) -> Option<&mut Property> {
-        let key = &Property::hash_id(name);
-        if !self.properties.contains_key(key) {
-            let p = Property::from_id(key, None);
-            self.set_property(p);
-        }
-
-        let op = self.properties.get_mut(key);
-         op
+        self.get_mut_property(&Property::hash_id(name))
     }
 
     pub fn get_property(&self, key: &u64) -> Option<&Property> {
@@ -340,22 +338,34 @@ impl Hive {
          op
     }
 
-    fn has_property(&self, key: &u64) -> bool {
-         self.properties.contains_key(key)
-    }
-
     fn set_property(&mut self, property: Property) {
         debug!("{:?} SET PROPERTY: {:?}", property.get_name(), property);
-        let id = &property.id;
-        if self.has_property(id) {
-            /*
-            This calls emit on the existing property
-             */
-            self.get_mut_property(id).unwrap().set_from_prop(property);
-        } else {
+        use std::collections::hash_map::Entry;
+        match self.properties.entry(property.id) {
+            // set_from_prop emits on_next on the existing property
+            Entry::Occupied(mut e) => {
+                e.get_mut().set_from_prop(property);
+            }
             // TODO when added for first time, no change event is emitted, EMIT CHANGE!!
-            //  De couple add_property and get_mut_property
-            self.properties.insert(*id, property);
+            Entry::Vacant(e) => {
+                e.insert(property);
+            }
+        }
+    }
+
+    /// Apply a decoded `(id, value)` from the wire to the local property,
+    /// creating it if needed. A `None` value is ignored here, deletes go
+    /// through the PROPERTY/DELETE paths.
+    fn apply_value(&mut self, id: u64, value: Option<crate::property::PropertyValue>) {
+        if let Some(v) = value {
+            match self.properties.get_mut(&id) {
+                Some(p) => {
+                    p.set_value(v);
+                }
+                None => {
+                    self.properties.insert(id, Property::from_id(&id, Some(v)));
+                }
+            }
         }
     }
 
@@ -382,19 +392,44 @@ impl Hive {
     */
 
     // servers run this to accept client connections
-    async fn accept_loop(mut sender: Sender<SocketEvent>, listener: TcpListener, hive_name: String) -> Result<()> {
+    async fn accept_loop(
+        sender: Sender<SocketEvent>,
+        listener: TcpListener,
+        hive_name: String,
+        handshake_timeout: Duration,
+    ) {
         loop {
-            let (stream, peer_addr) = listener.accept().await?;
-            debug!("{:?} ------------  Accepting from: {}", hive_name, peer_addr);
-            let se = SocketEvent::NewPeer {
-                name: "unnamed client".to_string(),
-                stream: Some(stream),
-                peripheral: None,
-                central: None,
-                address: peer_addr.to_string(),
-                ptype: PeerType::TcpClient,
+            let (stream, peer_addr) = match listener.accept().await {
+                Ok(s) => s,
+                Err(e) => {
+                    // Usually transient (out of file descriptors, a
+                    // connection reset before accept). Back off briefly
+                    // instead of ending the listener for good.
+                    warn!("{:?} accept failed: {:?}", hive_name, e);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
             };
-            sender.send(se).await.expect("failed to send message");
+            debug!("{:?} ------------  Accepting from: {}", hive_name, peer_addr);
+            let sender = sender.clone();
+            let name = hive_name.clone();
+            // Each handshake runs in its own task so one slow or silent
+            // client can't hold up the next accept or the event loop.
+            tokio::spawn(async move {
+                match handshake(stream, &PeerType::TcpClient, &name, handshake_timeout).await {
+                    Ok(conn) => {
+                        let _ = sender.unbounded_send(SocketEvent::NewPeer {
+                            name: "unnamed client".to_string(),
+                            address: conn.address.clone(),
+                            stream: Some(conn),
+                            peripheral: None,
+                            central: None,
+                            ptype: PeerType::TcpClient,
+                        });
+                    }
+                    Err(e) => warn!("{:?} handshake with {} failed: {}", name, peer_addr, e),
+                }
+            });
         }
     }
 
@@ -439,36 +474,31 @@ impl Hive {
                 let addr = address.clone();
                 let send_chan_clone = send_chan.clone();
                 let mut tx_clone = tx.clone();
+                let my_name = self.name.clone();
+                let timeout = self.handshake_timeout;
                 tokio::spawn(async move {
-                    let stream = TcpStream::connect(&addr).await;
-                    match stream {
-                        Ok(s) => match s.peer_addr() {
-                            Ok(_addr) => {
-                                let se = SocketEvent::NewPeer {
-                                    name: String::from("unnamed server"),
-                                    stream: Some(s),
-                                    peripheral: None,
-                                    central: None,
-                                    address: addr,
-                                    ptype: PeerType::TcpServer,
-                                };
-                                send_chan_clone.clone().send(se).await.expect("failed to send peer");
-
-                                tx_clone.send(true).await.expect("Failed to send connected signal");
-                            }
-                            Err(e) => {
-                                let msg = format!("No peer address: {:?}", e);
-                                warn!("{:?}", msg);
-                            }
-                        },
-                        Err(e) => {
-                            error!("Nope:: {:?}", e);
-                            tx_clone
-                                .send(false)
-                                .await
-                                .expect("Failed to send connect failed signal");
-                        }
+                    let attempt = async {
+                        let s = TcpStream::connect(&addr).await?;
+                        handshake(s, &PeerType::TcpServer, &my_name, timeout).await
                     };
+                    match attempt.await {
+                        Ok(conn) => {
+                            let se = SocketEvent::NewPeer {
+                                name: String::from("unnamed server"),
+                                address: conn.address.clone(),
+                                stream: Some(conn),
+                                peripheral: None,
+                                central: None,
+                                ptype: PeerType::TcpServer,
+                            };
+                            let _ = send_chan_clone.unbounded_send(se);
+                            let _ = tx_clone.send(true).await;
+                        }
+                        Err(e) => {
+                            error!("{} connect to {} failed: {:?}", my_name, addr, e);
+                            let _ = tx_clone.send(false).await;
+                        }
+                    }
                 });
 
                 // Both the wait for the attempt's result and the retry
@@ -483,7 +513,7 @@ impl Hive {
                         debug!("{} connect loop cancelled", self.name);
                         return Ok(());
                     }
-                    r = rx.next() => r.unwrap(),
+                    r = rx.next() => r.unwrap_or(false),
                 };
                 if !connected {
                     warn!("failed to connect, retry in a moment");
@@ -516,14 +546,7 @@ impl Hive {
                 let listener = TcpListener::bind(&port).await?;
                 let send_chan = self.sender.clone();
                 let name_clone = self.name.clone();
-                tokio::spawn(async move {
-                    match Hive::accept_loop(send_chan, listener, name_clone).await {
-                        Err(e) => {
-                            panic!("Failed accept loop: {:?}", e)
-                        }
-                        _ => (),
-                    }
-                });
+                tokio::spawn(Hive::accept_loop(send_chan, listener, name_clone, self.handshake_timeout));
                 // Port is bound and accepting — safe to signal ready
                 self.broadcast_ready();
             }
@@ -612,7 +635,10 @@ impl Hive {
                             // we auto send all the peers via TCP because it prevents un additional request
                             // TODO should this be moved into the Peer handshake
                             if ptype == PeerType::TcpClient {
-                                self.send_properties(&peer).await?;
+                                if let Err(e) = self.send_properties(&peer).await {
+                                    warn!("{} failed to send properties to new peer {:?}: {:?}", self.name, peer.address, e);
+                                    continue;
+                                }
                             }
 
                             debug!("<<<< NEW PEER for {:?}: {:?}", self.name, peer.get_name());
@@ -645,22 +671,22 @@ impl Hive {
                 }
                 Some(SocketEvent::Message { from, msg }) => {
                     debug!("GOT MESSAGE {}, {:?}", from, msg);
-                    self.got_message(from.as_str(), msg).await?;
+                    // A bad message or a failed write to one peer must
+                    // never end the event loop for every other peer.
+                    if let Err(e) = self.got_message(from.as_str(), msg).await {
+                        if e.downcast_ref::<DecodeError>().is_some() {
+                            // The peer sent something we can't parse; its
+                            // stream can't be trusted past this point.
+                            warn!("{} malformed message from {:?}, dropping peer: {}", self.name, from, e);
+                            self.remove_peer(&from).await;
+                        } else {
+                            warn!("{} error handling message from {:?}: {:?}", self.name, from, e);
+                        }
+                    }
                 }
                 Some(SocketEvent::Hangup { from }) => {
                     debug!("received hangup from {:?}", from);
-                    for x in 0..self.peers.len() {
-                        if self.peers[x].address == from {
-                            debug!("removing peer at index {}", x);
-                            self.peers.remove(x);
-                            self.peer_count.store(self.peers.len(), Ordering::Relaxed);
-                            if self.peers.is_empty() {
-                                self.connected.store(false, Ordering::Relaxed);
-                            }
-                            self.notify_peers_change().await;
-                            break;
-                        }
-                    }
+                    self.remove_peer(&from).await;
                 }
                 #[allow(unused_variables)]
                 Some(SocketEvent::SendBtProps { sender }) => {
@@ -777,7 +803,7 @@ impl Hive {
         Arc::downgrade(&mp).clone()
     }
 
-    async fn set_headers_from_peer(&mut self, mut head: Bytes, from: &str) {
+    async fn set_headers_from_peer(&mut self, mut head: Bytes, from: &str) -> Result<()> {
         debug!(
             ".... Set headers from peer: {:?} = {:?}, self={:?}",
             from, head, self.name
@@ -787,9 +813,11 @@ impl Hive {
                 while head.remaining() > 0 {
                     match head.get_u8() {
                         HEADER_NAME => {
-                            let name = String::from_utf8(head.to_vec()).unwrap();
-                            head.advance(name.len());
-                            p.set_name(&name);
+                            // The name runs to the end of the header.
+                            let raw = head.split_to(head.remaining());
+                            let name = std::str::from_utf8(&raw)
+                                .map_err(|e| DecodeError(format!("peer name not UTF-8: {}", e)))?;
+                            p.set_name(name);
                         }
                         PEER_REQUESTS => {
                             p.update_peers = true;
@@ -807,9 +835,25 @@ impl Hive {
             // other Hive sockets send the name in the initial connection heder.
             self.notify_peers_change().await;
         }
+        Ok(())
     }
 
-    async fn broadcast(&self, msg_type: u8, property: &Property, except: &str) -> Result<()> {
+    /// Remove the peer at `address`, if present, and tell the remaining
+    /// peers. Shared by a read-side hangup, a HANGUP message, and a failed
+    /// write during broadcast.
+    async fn remove_peer(&mut self, address: &str) {
+        if let Some(idx) = self.peers.iter().position(|p| p.address == address) {
+            debug!("removing peer {:?} at index {}", address, idx);
+            self.peers.remove(idx);
+            self.peer_count.store(self.peers.len(), Ordering::Relaxed);
+            if self.peers.is_empty() {
+                self.connected.store(false, Ordering::Relaxed);
+            }
+            self.notify_peers_change().await;
+        }
+    }
+
+    async fn broadcast(&mut self, msg_type: u8, property: &Property, except: &str) {
         /*
         Dont broadcast to the same Peer that the original change came from
         to prevent an infinite re-broadcast loop
@@ -818,6 +862,7 @@ impl Hive {
         // bluetooth clients dont receive independent updates,
         // bluetooth really is a broadcast and only needs to go out once
         let mut sent_bt_broadcast = false;
+        let mut failed: Vec<String> = Vec::new();
         let msg = property_to_bytes(property, false);
         for p in &self.peers {
             debug!("{} broadcasting: {:?}, {:?}", self.name, p.get_name(), p.is_bt_client(),);
@@ -834,11 +879,15 @@ impl Hive {
                 msg_out.put_u8(msg_type);
                 msg_out.put_slice(&msg.clone());
                 debug!("<<{} sending:{:?} {}", self.name, msg_out, msg_out.len());
-                p.send(msg_out.freeze()).await?;
+                if let Err(e) = p.send(msg_out.freeze()).await {
+                    warn!("{} write to {:?} failed, dropping peer: {:?}", self.name, p.address, e);
+                    failed.push(p.address.clone());
+                }
             }
         }
-
-        Ok(())
+        for address in failed {
+            self.remove_peer(&address).await;
+        }
     }
 
     async fn got_message(&mut self, from: &str, mut msg: Bytes) -> Result<()> {
@@ -856,6 +905,12 @@ impl Hive {
             // peer, so the ack at the bottom skips it explicitly rather
             // than trusting a now-possibly-stale index.
             let peer_idx = self.peers.iter().position(|p| p.address == from);
+            // Any message counts as "heard from this peer". Done up front
+            // because broadcast or HANGUP below can remove peers, which
+            // would leave peer_idx pointing at the wrong slot afterwards.
+            if let Some(idx) = peer_idx {
+                self.peers[idx].ack();
+            }
 
             match msg_type {
                 PING => {
@@ -874,42 +929,29 @@ impl Hive {
                 }
                 HANGUP => {
                     debug!("<<<< hangup from {:?}", from);
-                    let idx = peer_idx.expect("hangup from unknown peer");
-                    self.peers.remove(idx);
-                    self.peer_count.store(self.peers.len(), Ordering::Relaxed);
-                    if self.peers.is_empty() {
-                        self.connected.store(false, Ordering::Relaxed);
-                    }
-                    self.notify_peers_change().await;
+                    self.remove_peer(from).await;
                 }
                 PROPERTIES => {
                     debug!("properties:: {:?}", msg);
-                    while msg.has_remaining().clone() {
-                        let p = bytes_to_property(&mut msg);
-                        debug!("thing: {:?}", p);
-                        match p {
-                            None => {}
-                            Some(p) => self.set_property(p),
-                        }
+                    while msg.has_remaining() {
+                        let (id, value) = decode_property(&mut msg)?;
+                        self.apply_value(id, value);
                     }
 
                     debug!("done");
                 }
 
                 PROPERTY => {
-                    let p = bytes_to_property(&mut msg);
-                    debug!("property: {:?}", p);
-                    match p {
-                        None => {
-                            unimplemented!("Why are you here?")
-                        }
-                        Some(p) => {
+                    let (id, value) = decode_property(&mut msg)?;
+                    let p = Property::from_id(&id, value);
+                    {
+                        {
                             if p.is_none() {
                                 debug!("DELETING {:?}", p.get_name());
-                                self.broadcast(DELETE, &p, from).await?;
+                                self.broadcast(DELETE, &p, from).await;
                                 self.properties.remove(&p.id);
                             } else {
-                                self.broadcast(PROPERTY, &p, from).await?;
+                                self.broadcast(PROPERTY, &p, from).await;
                                 let prop_id = p.id;
                                 self.set_property(p);
                                 // Publish to MQTT if the change did NOT originate from MQTT.
@@ -934,21 +976,25 @@ impl Hive {
                 // todo Delete is redundant, setting the value to None does the same thing
                 DELETE => {
                     // let message = String::from_utf8(msg.to_vec()).unwrap();
+                    if msg.remaining() < 8 {
+                        return Err(DecodeError("DELETE needs an 8 byte id".into()).into());
+                    }
                     let p = self.properties.remove(&msg.get_u64());
                     match p {
                         None => {}
                         Some(p) => {
-                            self.broadcast(DELETE, &p, from).await?;
+                            self.broadcast(DELETE, &p, from).await;
                             // this is unnecessary, but fun
                             drop(p);
                         }
                     }
                 }
                 HEADER => {
-                    self.set_headers_from_peer(msg, from).await;
+                    self.set_headers_from_peer(msg, from).await?;
                 }
                 PEER_MESSAGE => {
-                    let message = String::from_utf8(msg.to_vec()).unwrap();
+                    let message = String::from_utf8(msg.to_vec())
+                        .map_err(|e| DecodeError(format!("peer message not UTF-8: {}", e)))?;
                     let c = message.split(PEER_MESSAGE_DIV);
                     let vec: Vec<&str> = c.collect();
                     if vec.len() == 1 {
@@ -977,15 +1023,9 @@ impl Hive {
                         self.peers[idx].update_peers = true;
                     }
                 }
-                _ => unimplemented!("Unknown message {:#02x}", msg_type), //error!("Unknown message {:?}", msg_type)
-            }
-            // do ACK for peer. Skip on HANGUP, that peer is already gone
-            // and peer_idx would refer to whatever peer (if any) shifted
-            // into its old slot after the removal.
-            if msg_type != HANGUP {
-                if let Some(idx) = peer_idx {
-                    self.peers[idx].ack();
-                }
+                // Ignore rather than drop: a newer peer may speak message
+                // types this build doesn't know yet.
+                _ => warn!("{} ignoring unknown message type {:#04x} from {:?}", self.name, msg_type, from),
             }
         }
         Ok(())
