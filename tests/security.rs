@@ -70,6 +70,15 @@ fn auth_config_without_auth_feature_refuses_to_start() {
     Hive::new_from_str_unknown("listen = \"127.0.0.1:34991\"\nauth_secret = \"s\"");
 }
 
+/// A key written below a [table] header belongs to that table. A secret
+/// that landed in one must stop the hive, not leave it open (or, under
+/// [Properties], turn the secret into a property synced to every peer).
+#[test]
+#[should_panic(expected = "must be at the top level")]
+fn auth_secret_inside_a_table_refuses_to_start() {
+    Hive::new_from_str_unknown("listen = \"127.0.0.1:34992\"\n[Properties]\nm = 0\nauth_secret = \"s\"");
+}
+
 #[cfg(feature = "tls")]
 mod tls {
     use super::*;
@@ -237,6 +246,32 @@ mod tls {
         Hive::new_from_str_unknown(&format!(
             "listen = \"127.0.0.1:34906\"\n[TLS]\ncert = \"{cert}\"\nkey = \"/nonexistent/hive.key\""
         ));
+    }
+
+    /// One letter out, and without this check the server would start with
+    /// client verification silently off.
+    #[test]
+    #[should_panic(expected = "unknown key `require_client_certs`")]
+    fn misspelled_tls_option_refuses_to_start() {
+        Hive::new_from_str_unknown(
+            "listen = \"127.0.0.1:34909\"\n[TLS]\ncert = \"a\"\nkey = \"b\"\nca = \"c\"\nrequire_client_certs = true",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "`require_client_cert` must be true or false")]
+    fn quoted_tls_boolean_refuses_to_start() {
+        Hive::new_from_str_unknown(
+            "listen = \"127.0.0.1:34910\"\n[TLS]\ncert = \"a\"\nkey = \"b\"\nca = \"c\"\nrequire_client_cert = \"true\"",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown key `auth_secret`")]
+    fn auth_secret_under_tls_refuses_to_start() {
+        Hive::new_from_str_unknown(
+            "listen = \"127.0.0.1:34911\"\n[TLS]\ncert = \"a\"\nkey = \"b\"\nauth_secret = \"s\"",
+        );
     }
 
     #[test]

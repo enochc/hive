@@ -82,6 +82,8 @@ jni = { version = "0.21.1", default-features = false }
 # Tests and examples log through tracing directly, whatever backend the
 # library itself was built with.
 tracing = "0.1"
+# Paused (virtual) time for the slow-peer tests in src/peer.rs.
+tokio = { version = "1.48.0", features = ["test-util"] }
 # Generates throwaway CA and node certificates for the TLS tests.
 rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }
 

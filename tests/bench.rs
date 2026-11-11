@@ -121,14 +121,23 @@ async fn latency(label: &str, port: u16, n_receivers: usize, rounds: i64, sec: &
     );
 }
 
+/// Updates per throughput run. 50,000 finishes in tens of milliseconds;
+/// set `HIVE_BENCH_UPDATES` higher for a steadier number or to profile.
+fn updates() -> i64 {
+    std::env::var("HIVE_BENCH_UPDATES").ok().and_then(|v| v.parse().ok()).unwrap_or(50_000)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore]
 async fn bench_property_updates() {
     // cargo prints "test bench_property_updates ... " with no newline.
     println!();
+    if std::env::var("HIVE_BENCH_LOG").is_ok() {
+        hive::init_logging(Some(hive::LevelFilter::Warn));
+    }
     let plain = Sec::default();
-    throughput("plain", 34801, 1, 50_000, &plain).await;
-    throughput("plain", 34802, 8, 50_000, &plain).await;
+    throughput("plain", 34801, 1, updates(), &plain).await;
+    throughput("plain", 34802, 8, updates(), &plain).await;
     latency("plain", 34803, 1, 2_000, &plain).await;
     latency("plain", 34804, 8, 2_000, &plain).await;
 }
@@ -161,8 +170,8 @@ async fn bench_property_updates_tls() {
         server: format!("[TLS]\ncert = \"{}\"\nkey = \"{}\"", cert_p.display(), key_p.display()),
         client: format!("[TLS]\nca = \"{}\"", ca_p.display()),
     };
-    throughput("tls", 34811, 1, 50_000, &tls).await;
-    throughput("tls", 34812, 8, 50_000, &tls).await;
+    throughput("tls", 34811, 1, updates(), &tls).await;
+    throughput("tls", 34812, 8, updates(), &tls).await;
     latency("tls", 34813, 1, 2_000, &tls).await;
     latency("tls", 34814, 8, 2_000, &tls).await;
     let _ = std::fs::remove_dir_all(&dir);

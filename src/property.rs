@@ -481,20 +481,20 @@ impl Property {
     where
         PropertyValue: Debug + PartialEq + Sync + Send + Clone + 'static,
     {
-        let does_eq = {
-            let current = self.stream.sender.borrow();
-            match &*current {
-                None => false,
-                Some(pt) => pt.eq(&new_prop),
+        // Compare and store under one lock. The watch channel is updated
+        // straight away so get_value() and stream subscribers reflect the
+        // latest state; an unchanged value notifies nobody.
+        let changed = self.stream.sender.send_if_modified(|current| {
+            if current.as_ref() == Some(&new_prop) {
+                false
+            } else {
+                *current = Some(new_prop.clone());
+                true
             }
-        }; // borrow dropped before we modify
+        });
 
-        if !does_eq {
+        if changed {
             debug!("emit change (backoff={})", self.backoff);
-
-            // Always update the watch channel immediately so get_value()
-            // and stream subscribers reflect the latest state.
-            self.stream.sender.send_modify(|val| *val = Some(new_prop.clone()));
 
             if self.backoff > 0 {
                 // Debounce: gate the on_next callback with a timer.

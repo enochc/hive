@@ -121,7 +121,29 @@ impl Security {
     }
 }
 
+/// The keys that turn shared-secret auth on.
+const SECRET_KEYS: [&str; 2] = ["auth_secret", "auth_secret_env"];
+
 fn secret_from_config(config: &toml::Value) -> Result<Option<Vec<u8>>, String> {
+    // In TOML a key written after a `[table]` header belongs to that table.
+    // An `auth_secret` that ended up in one would be ignored (or, under
+    // [Properties], synced to every peer) and the hive would run without
+    // authentication, so that is an error rather than a silent no-op.
+    if let Some(top) = config.as_table() {
+        for (name, value) in top {
+            if let Some(key) = SECRET_KEYS.iter().find(|k| value.get(**k).is_some()) {
+                return Err(format!(
+                    "`{}` is inside [{}]; it must be at the top level, above every [table] header",
+                    key, name
+                ));
+            }
+        }
+    }
+    for key in SECRET_KEYS {
+        if config.get(key).is_some_and(|v| !v.is_str()) {
+            return Err(format!("`{}` must be a string", key));
+        }
+    }
     let secret = if let Some(s) = config.get("auth_secret").and_then(|v| v.as_str()) {
         s.to_string()
     } else if let Some(var) = config.get("auth_secret_env").and_then(|v| v.as_str()) {
@@ -246,17 +268,49 @@ pub(crate) mod tls {
         server_name: Option<String>,
     }
 
-    fn get_str<'a>(t: &'a toml::Value, k: &str) -> Option<&'a str> {
-        t.get(k).and_then(|v| v.as_str())
+    /// Everything `[TLS]` understands. Anything else is refused: a typo
+    /// such as `require_client_certs` would otherwise be ignored and leave
+    /// the option it was meant to set switched off.
+    const KEYS: [&str; 6] = ["cert", "key", "ca", "server_name", "prefer_chacha20", "require_client_cert"];
+
+    fn check_keys(t: &toml::Value) -> Result<(), String> {
+        let table = t.as_table().ok_or("[TLS] must be a table")?;
+        match table.keys().find(|k| !KEYS.contains(&k.as_str())) {
+            Some(unknown) => Err(format!(
+                "[TLS] has an unknown key `{}` (expected one of: {})",
+                unknown,
+                KEYS.join(", ")
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// A string option; present with any other type is an error, not "unset".
+    fn get_str<'a>(t: &'a toml::Value, k: &str) -> Result<Option<&'a str>, String> {
+        match t.get(k) {
+            None => Ok(None),
+            Some(v) => v.as_str().map(Some).ok_or_else(|| format!("[TLS] `{}` must be a string", k)),
+        }
+    }
+
+    /// A true/false option, off when absent. `"true"` in quotes is an error
+    /// rather than a quiet false.
+    fn get_bool(t: &toml::Value, k: &str) -> Result<bool, String> {
+        match t.get(k) {
+            None => Ok(false),
+            Some(v) => v.as_bool().ok_or_else(|| format!("[TLS] `{}` must be true or false", k)),
+        }
     }
 
     impl TlsSettings {
         pub(crate) fn from_toml(t: &toml::Value, is_server: bool, is_client: bool) -> Result<Self, String> {
-            let cert = get_str(t, "cert");
-            let key = get_str(t, "key");
-            let ca = get_str(t, "ca");
-            let prefer_chacha = t.get("prefer_chacha20").and_then(|v| v.as_bool()).unwrap_or(false);
-            let require_client_cert = t.get("require_client_cert").and_then(|v| v.as_bool()).unwrap_or(false);
+            check_keys(t)?;
+            let cert = get_str(t, "cert")?;
+            let key = get_str(t, "key")?;
+            let ca = get_str(t, "ca")?;
+            let server_name = get_str(t, "server_name")?;
+            let prefer_chacha = get_bool(t, "prefer_chacha20")?;
+            let require_client_cert = get_bool(t, "require_client_cert")?;
 
             let acceptor = if is_server {
                 let (cert, key) = cert
@@ -281,7 +335,7 @@ pub(crate) mod tls {
             Ok(TlsSettings {
                 acceptor,
                 connector,
-                server_name: get_str(t, "server_name").map(String::from),
+                server_name: server_name.map(String::from),
             })
         }
 

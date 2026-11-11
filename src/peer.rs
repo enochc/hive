@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::net::TcpStream;
 use tokio::io::BufReader;
 #[cfg(feature = "bluetooth")]
@@ -19,7 +19,7 @@ use crate::websocket::WebSock;
 use futures::channel::mpsc::UnboundedSender;
 use crate::futures::SinkExt;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc as tokio_mpsc;
+use tokio::sync::Notify;
 #[allow(unused_imports)]
 use crate::logging::{debug, error, info, trace, warn};
 use tokio_util::sync::CancellationToken;
@@ -40,8 +40,9 @@ pub struct Central {}
 pub enum SocketEvent {
     NewPeer {
         name: String,
-        /// Already handshaken TCP connection, None for bluetooth.
-        stream: Option<Connection>,
+        /// Already handshaken TCP connection, None for bluetooth. Boxed
+        /// so this rare event doesn't set the size of every queued one.
+        stream: Option<Box<Connection>>,
         peripheral: Option<Sender<Bytes>>,
         central: Option<Central>,
         address: String,
@@ -50,6 +51,14 @@ pub enum SocketEvent {
     Message {
         from: String,
         msg: Bytes,
+    },
+    /// A run of complete length-prefixed frames from one TCP peer, exactly
+    /// as they came off the wire. `read_loop` hands over everything a read
+    /// returned as one event, so a burst of small updates costs one channel
+    /// hop and no per-message allocation.
+    Frames {
+        from: Arc<str>,
+        data: Bytes,
     },
     SendBtProps {
         sender: futures::channel::oneshot::Sender<Response>,
@@ -76,8 +85,12 @@ pub enum PeerType {
 
 pub struct Peer {
     name: Arc<RwLock<String>>,
-    /// Queue to this peer's writer task (TCP peers only). See `write_loop`.
-    out: Option<tokio_mpsc::Sender<Bytes>>,
+    /// Bytes waiting for this peer's writer task (TCP peers only). See
+    /// `Outbox` and `write_loop`.
+    out: Option<Arc<Outbox>>,
+    /// Something was queued with `try_send` and the writer hasn't been
+    /// woken for it yet, see `flush`.
+    unflushed: AtomicBool,
     pub update_peers: bool,
     pub peripheral: Option<Sender<Bytes>>,
     central: Option<Central>,
@@ -124,10 +137,6 @@ fn now_ms() -> u64 {
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
-fn as_u32_be(array: &[u8; 4]) -> u32 {
-    ((array[0] as u32) << 24) + ((array[1] as u32) << 16) + ((array[2] as u32) << 8) + (array[3] as u32)
-}
-
 impl Peer {
     pub fn is_bt_client(&self) -> bool {
         self.peripheral.is_some()
@@ -167,6 +176,7 @@ impl Peer {
             let mut peer = Peer {
                 name: Arc::new(RwLock::new(remote_name.unwrap_or(name))),
                 out: None,
+                unflushed: AtomicBool::new(false),
                 update_peers: false,
                 peripheral,
                 central,
@@ -180,22 +190,21 @@ impl Peer {
                 shutdown: CancellationToken::new(),
             };
 
-            let (tx, rx) = tokio_mpsc::channel(SEND_QUEUE_FRAMES);
-            peer.out = Some(tx);
-            tokio::spawn(write_loop(writer, rx, sender.clone(), address.clone(), peer.shutdown.clone()));
+            let out = Outbox::new();
+            peer.out = Some(out.clone());
+            tokio::spawn(write_loop(writer, out, sender.clone(), address.clone(), peer.shutdown.clone()));
 
             let name_id = peer.get_id_name();
             let shutdown = peer.shutdown.clone();
             debug!("start tcp socket read loop for({})", name_id);
-            tokio::spawn(async move {
-                let _ = read_loop(sender, name_id, address, reader, max_message_size, shutdown).await;
-            });
+            tokio::spawn(read_loop(sender, name_id, address, reader, max_message_size, shutdown));
 
             Ok(peer)
         } else {
             Ok(Peer {
                 name: Arc::new(RwLock::new(name)),
                 out: None,
+                unflushed: AtomicBool::new(false),
                 update_peers: false,
                 peripheral,
                 central,
@@ -279,12 +288,15 @@ impl Peer {
 
                     ack_check_clone.store(true, Relaxed);
                     let sent: Result<()> = if let Some(out) = &out {
-                        // A full queue means plenty is already headed
+                        // A full outbox means plenty is already headed
                         // out; the PONG (or that traffic's replies) will
                         // still settle ack_check.
-                        match out.try_send(bytes) {
-                            Err(tokio_mpsc::error::TrySendError::Closed(_)) => Err("writer closed".into()),
-                            _ => Ok(()),
+                        match out.push(&bytes) {
+                            Queued::Closed => Err("writer closed".into()),
+                            _ => {
+                                out.ready.notify_one();
+                                Ok(())
+                            }
                         }
                     } else {
                         peripheral
@@ -316,32 +328,66 @@ impl Peer {
         });
     }
 
-    /// Queue `msg` for this peer. For TCP this never waits on the socket:
-    /// the writer task does the I/O. If the queue is full the call waits up
-    /// to `SLOW_PEER_TIMEOUT` for room (backpressure for a healthy peer
-    /// that's briefly behind), then gives up with an error so the hive can
-    /// drop a peer that has stopped reading.
+    /// Queue `msg` without waiting or waking anything. `Ok(true)`: it is in
+    /// the outbox, and `flush` (once per batch of sends) gets it written.
+    /// `Ok(false)`: the outbox is full, or this transport has none; call
+    /// `send`.
+    pub(crate) fn try_send(&self, msg: &Bytes) -> Result<bool> {
+        match &self.out {
+            Some(out) => match out.push(msg) {
+                Queued::Yes => {
+                    self.unflushed.store(true, Relaxed);
+                    Ok(true)
+                }
+                Queued::Full => Ok(false),
+                Queued::Closed => Err(format!("{} writer closed", self.address).into()),
+            },
+            None => Ok(false),
+        }
+    }
+
+    /// Wake the writer task if `try_send` queued anything since last time.
+    pub(crate) fn flush(&self) {
+        if self.unflushed.load(Relaxed) {
+            self.unflushed.store(false, Relaxed);
+            if let Some(out) = &self.out {
+                out.ready.notify_one();
+            }
+        }
+    }
+
+    /// Queue `msg` for this peer and wake its writer. For TCP this never
+    /// waits on the socket: the writer task does the I/O. If the outbox is
+    /// full the call waits for the writer to take it (backpressure for a
+    /// healthy peer that's behind). A peer that accepts nothing at all for
+    /// `SLOW_PEER_TIMEOUT` while we wait has stopped reading: the call
+    /// gives up with an error so the hive can drop it.
     pub async fn send(&self, msg: Bytes) -> Result<()> {
         if let Some(out) = &self.out {
-            match out.try_send(msg) {
-                Ok(()) => {}
-                Err(tokio_mpsc::error::TrySendError::Full(msg)) => {
-                    match tokio::time::timeout(SLOW_PEER_TIMEOUT, out.send(msg)).await {
-                        Ok(Ok(())) => {}
-                        Ok(Err(_)) => return Err(format!("{} writer closed", self.address).into()),
-                        Err(_) => {
-                            return Err(format!(
-                                "{} send queue full for {:?}, peer not reading",
-                                self.address, SLOW_PEER_TIMEOUT
-                            )
-                            .into())
-                        }
-                    }
+            let mut written = out.written.load(Relaxed);
+            loop {
+                match out.push(&msg) {
+                    Queued::Yes => break,
+                    Queued::Closed => return Err(format!("{} writer closed", self.address).into()),
+                    Queued::Full => {}
                 }
-                Err(tokio_mpsc::error::TrySendError::Closed(_)) => {
-                    return Err(format!("{} writer closed", self.address).into())
+                out.ready.notify_one();
+                if tokio::time::timeout(SLOW_PEER_TIMEOUT, out.drained.notified()).await.is_err() {
+                    // Slow is fine, stuck is not: keep waiting as long as
+                    // the socket took something since we last looked.
+                    let now = out.written.load(Relaxed);
+                    if now == written {
+                        return Err(format!(
+                            "{} send queue full for {:?}, peer not reading",
+                            self.address, SLOW_PEER_TIMEOUT
+                        )
+                        .into());
+                    }
+                    written = now;
                 }
             }
+            self.unflushed.store(false, Relaxed);
+            out.ready.notify_one();
         } else if self.central.is_some() {
             #[cfg(feature = "bluetooth")]
             {
@@ -360,26 +406,83 @@ impl Peer {
     }
 }
 
-/// Frames a single peer's writer may queue before `Peer::send` starts
-/// waiting. Frames are mostly property updates of a few dozen bytes.
-const SEND_QUEUE_FRAMES: usize = 1024;
-/// How long `Peer::send` waits on a full queue before declaring the peer
-/// stuck. Bounds how long one non-reading peer can stall the event loop.
+/// Most bytes that may wait in a peer's outbox before `Peer::send` starts
+/// waiting for the writer. One frame may take it past this, so a message
+/// larger than the limit still goes through.
+const OUTBOX_LIMIT: usize = 256 * 1024;
+/// How long `Peer::send` waits on a full outbox, with the socket accepting
+/// nothing, before declaring the peer stuck. Bounds how long one
+/// non-reading peer can stall the event loop.
 const SLOW_PEER_TIMEOUT: Duration = Duration::from_secs(2);
-/// Stop batching once a write buffer reaches this size.
-const MAX_WRITE_BATCH: usize = 64 * 1024;
+/// The writer hands the socket this much at a time and counts each piece
+/// as progress, so "accepting nothing" means under this much in
+/// `SLOW_PEER_TIMEOUT` however large the backlog is.
+const WRITE_CHUNK: usize = 64 * 1024;
+/// An idle writer gives back any buffer that grew past this.
+const WRITE_BUF_KEEP: usize = 64 * 1024;
 
-/// Owns a peer's write half. Takes everything queued, length-prefixes it
-/// into one reused buffer and writes it with a single `write_all`, so a
-/// burst of small updates costs one syscall rather than one each, and no
-/// per-message allocation. Generic over the writer so TLS can reuse it.
+/// Framed bytes waiting for one peer's writer task. The hive appends under
+/// a mutex that is never held across an await or a syscall; the writer
+/// swaps the whole buffer for an empty one and writes it with a single
+/// `write_all`. So a burst of small updates costs one copy each into a
+/// reused buffer and one syscall for the lot, with no per-message
+/// allocation, channel hop or task wake-up.
+pub(crate) struct Outbox {
+    buf: Mutex<BytesMut>,
+    /// Wakes the writer: there is something to write.
+    ready: Notify,
+    /// Wakes a sender waiting on a full outbox: the writer took the buffer.
+    drained: Notify,
+    /// Set when the writer exits; nothing queued after that goes anywhere.
+    closed: AtomicBool,
+    /// Pieces of `WRITE_CHUNK` the socket has accepted so far. A waiting
+    /// sender uses it to tell a slow peer from one that stopped reading.
+    written: AtomicU64,
+}
+
+enum Queued {
+    Yes,
+    Full,
+    Closed,
+}
+
+impl Outbox {
+    fn new() -> Arc<Outbox> {
+        Arc::new(Outbox {
+            buf: Mutex::new(BytesMut::new()),
+            ready: Notify::new(),
+            drained: Notify::new(),
+            closed: AtomicBool::new(false),
+            written: AtomicU64::new(0),
+        })
+    }
+
+    /// Append `msg` as one length-prefixed frame, unless `OUTBOX_LIMIT`
+    /// bytes are already waiting.
+    fn push(&self, msg: &[u8]) -> Queued {
+        if self.closed.load(Relaxed) {
+            return Queued::Closed;
+        }
+        let mut buf = self.buf.lock().unwrap();
+        if buf.len() >= OUTBOX_LIMIT {
+            return Queued::Full;
+        }
+        buf.reserve(4 + msg.len());
+        buf.put_u32(msg.len() as u32);
+        buf.put_slice(msg);
+        Queued::Yes
+    }
+}
+
+/// Owns a peer's write half and drains its `Outbox`. Generic over the
+/// writer so TLS can reuse it.
 ///
 /// Ends when the peer is dropped (`shutdown`, also aborting a write stuck
 /// on a dead link) or on a write error, which it reports as a Hangup.
 /// Dropping the write half on exit sends FIN.
 pub(crate) async fn write_loop<W>(
     mut writer: W,
-    mut rx: tokio_mpsc::Receiver<Bytes>,
+    out: Arc<Outbox>,
     events: UnboundedSender<SocketEvent>,
     address: String,
     shutdown: CancellationToken,
@@ -387,44 +490,53 @@ pub(crate) async fn write_loop<W>(
     W: AsyncWrite + Unpin,
 {
     let mut buf = BytesMut::with_capacity(8 * 1024);
-    loop {
-        let first = tokio::select! {
-            _ = shutdown.cancelled() => break,
-            m = rx.recv() => match m {
-                Some(m) => m,
-                None => break,
-            },
-        };
-        buf.clear();
-        put_frame(&mut buf, &first);
-        while buf.len() < MAX_WRITE_BATCH {
-            match rx.try_recv() {
-                Ok(m) => put_frame(&mut buf, &m),
-                Err(_) => break,
+    let cancelled = shutdown.cancelled();
+    tokio::pin!(cancelled);
+    'run: loop {
+        // Trade our empty buffer for whatever has been queued.
+        loop {
+            {
+                let mut pending = out.buf.lock().unwrap();
+                if !pending.is_empty() {
+                    std::mem::swap(&mut *pending, &mut buf);
+                    break;
+                }
+            }
+            // Nothing to do: don't sit on a buffer one large burst grew.
+            if buf.capacity() > WRITE_BUF_KEEP {
+                buf = BytesMut::with_capacity(8 * 1024);
+            }
+            tokio::select! {
+                biased;
+                _ = &mut cancelled => break 'run,
+                _ = out.ready.notified() => {}
             }
         }
+        out.drained.notify_one();
         let res = tokio::select! {
-            _ = shutdown.cancelled() => break,
-            // flush is a no-op on a plain TCP half; for TLS it makes sure
-            // the encrypted records are actually on the socket.
-            r = async { writer.write_all(&buf).await?; writer.flush().await } => r,
+            biased;
+            _ = &mut cancelled => break,
+            r = async {
+                for piece in buf.chunks(WRITE_CHUNK) {
+                    writer.write_all(piece).await?;
+                    out.written.fetch_add(1, Relaxed);
+                }
+                // A no-op on a plain TCP half; for TLS it makes sure the
+                // encrypted records are actually on the socket.
+                writer.flush().await
+            } => r,
         };
         if let Err(e) = res {
             debug!("write to {} failed: {:?}", address, e);
             let _ = events.unbounded_send(SocketEvent::Hangup { from: address.clone() });
             break;
         }
-        // Don't keep a one-off huge buffer around for the peer's lifetime.
-        if buf.capacity() > 4 * MAX_WRITE_BATCH {
-            buf = BytesMut::with_capacity(8 * 1024);
-        }
+        buf.clear();
     }
+    // Anyone still queueing, or waiting for room, finds out now.
+    out.closed.store(true, Relaxed);
+    out.drained.notify_one();
     trace!("writer for {} stopped", address);
-}
-
-fn put_frame(buf: &mut BytesMut, msg: &Bytes) {
-    buf.put_u32(msg.len() as u32);
-    buf.put_slice(msg);
 }
 
 /// A TCP connection that has completed the Hive handshake and is ready to
@@ -578,75 +690,329 @@ pub(crate) async fn handshake(
 // key (see Hive::new_from_str), this is only the fallback when that's unset.
 pub(crate) const DEFAULT_MAX_MESSAGE_SIZE: u32 = 1024 * 1024;
 
+/// How much `read_loop` asks for when it needs a fresh read buffer. Reads
+/// go straight into it, and the frames handed to the hive are slices of it.
+const READ_CHUNK: usize = 64 * 1024;
+/// Get a new chunk once the current one has less room than this.
+const MIN_READ_SPACE: usize = 8 * 1024;
+
+/// Reads whatever the socket has into one buffer and hands every complete
+/// frame in it to the hive as a single `SocketEvent::Frames`, zero-copy.
+/// A frame split across reads (even inside its 4-byte length prefix) just
+/// waits in the buffer for the rest.
 async fn read_loop(
     sender: UnboundedSender<SocketEvent>,
     peer_id_string: String,
     from: String,
-    mut reader: BufReader<BoxRead>,
+    reader: BufReader<BoxRead>,
     max_message_size: u32,
     shutdown: CancellationToken,
-) -> Result<()> {
-    loop {
-        let r = tokio::select! {
-            _ = shutdown.cancelled() => {
-                debug!("{:?} read loop shutting down, peer dropped", peer_id_string);
-                break;
-            }
-            r = read_frame(&mut reader, max_message_size) => r,
-        };
-        match r {
-            Ok(msg) => {
-                trace!("{:?} read message: {:?}", peer_id_string, &msg);
-                // unbounded_send only fails once the hive has stopped
-                // receiving, at which point there is nobody left to tell.
-                if sender
-                    .unbounded_send(SocketEvent::Message { from: from.clone(), msg })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-            Err(e) => {
-                if e.kind() == io::ErrorKind::UnexpectedEof {
-                    debug!("{:?} closed the connection", peer_id_string);
-                } else {
-                    error!("{:?} read failed, dropping connection: {:?}", peer_id_string, e);
-                }
-                let _ = sender.unbounded_send(SocketEvent::Hangup { from });
-                break;
+) {
+    let from_shared: Arc<str> = Arc::from(from.as_str());
+    let mut buf = BytesMut::with_capacity(READ_CHUNK);
+    // The handshake read through a BufReader; keep anything it read ahead.
+    buf.extend_from_slice(reader.buffer());
+    let mut reader = reader.into_inner();
+    let cancelled = shutdown.cancelled();
+    tokio::pin!(cancelled);
+
+    let ended: io::Error = loop {
+        let (complete, rest) = complete_frames(&buf, max_message_size);
+        if complete > 0 {
+            let data = buf.split_to(complete).freeze();
+            trace!("{:?} read {} bytes of frames", peer_id_string, data.len());
+            // unbounded_send only fails once the hive has stopped
+            // receiving, at which point there is nobody left to tell.
+            if sender
+                .unbounded_send(SocketEvent::Frames { from: from_shared.clone(), data })
+                .is_err()
+            {
+                return;
             }
         }
+        // Whatever came before a bad frame has been handed over by now.
+        let next_frame = match rest {
+            Ok(size) => size,
+            Err(e) => break e,
+        };
+        // Room for the rest of a frame we've seen the start of, and never
+        // so little that a read turns into a string of tiny syscalls.
+        let want = next_frame.saturating_sub(buf.len()).max(MIN_READ_SPACE);
+        if buf.capacity() - buf.len() < want {
+            buf.reserve(want.max(READ_CHUNK));
+        }
+        let read = tokio::select! {
+            biased;
+            _ = &mut cancelled => {
+                debug!("{:?} read loop shutting down, peer dropped", peer_id_string);
+                return;
+            }
+            r = reader.read_buf(&mut buf) => r,
+        };
+        match read {
+            Ok(0) => break io::Error::new(io::ErrorKind::UnexpectedEof, "connection closed"),
+            Ok(_) => {}
+            Err(e) => break e,
+        }
+    };
+    if ended.kind() == io::ErrorKind::UnexpectedEof {
+        debug!("{:?} closed the connection", peer_id_string);
+    } else {
+        error!("{:?} read failed, dropping connection: {:?}", peer_id_string, ended);
     }
+    let _ = sender.unbounded_send(SocketEvent::Hangup { from });
     debug!("<< Peer run done");
-    Ok(())
 }
 
-/// Read one length-prefixed frame. `read_exact` for the prefix matters: a
-/// plain `read` can legally return 1-3 bytes when the 4-byte header
-/// straddles a buffer boundary, which used to desync the whole stream.
-/// The body read is bounded with `take` so it can never consume bytes
-/// belonging to the next frame, and fills `BytesMut`'s spare capacity
-/// directly instead of zeroing a buffer first.
-pub(crate) async fn read_frame<R>(reader: &mut R, max_message_size: u32) -> io::Result<Bytes>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let mut size_buff = [0u8; 4];
-    reader.read_exact(&mut size_buff).await?;
-    let message_size = as_u32_be(&size_buff);
-    if message_size > max_message_size {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("claimed message size {} exceeds {} byte cap", message_size, max_message_size),
-        ));
-    }
-    let n = message_size as usize;
-    let mut buf = BytesMut::with_capacity(n);
-    let mut limited = reader.take(n as u64);
-    while buf.len() < n {
-        if limited.read_buf(&mut buf).await? == 0 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "connection closed mid-message"));
+/// How many bytes at the front of `buf` are whole frames, and what follows
+/// them: the full size (prefix included) of a partial frame, 0 if its
+/// length prefix hasn't all arrived, or an error. The 4-byte prefix comes
+/// straight off the wire, so a claimed size over `max_message_size` is
+/// rejected here, before any buffer is grown to hold it.
+pub(crate) fn complete_frames(buf: &[u8], max_message_size: u32) -> (usize, io::Result<usize>) {
+    let mut at = 0;
+    while let Some(prefix) = buf.get(at..at + 4) {
+        let size = u32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
+        if size > max_message_size {
+            let e = format!("claimed message size {} exceeds {} byte cap", size, max_message_size);
+            return (at, Err(io::Error::new(io::ErrorKind::InvalidData, e)));
         }
+        let end = at + 4 + size as usize;
+        if end > buf.len() {
+            return (at, Ok(end - at));
+        }
+        at = end;
     }
-    Ok(buf.freeze())
+    (at, Ok(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::channel::mpsc::{unbounded, UnboundedReceiver};
+    use futures::StreamExt;
+    use tokio::io::DuplexStream;
+
+    /// A `Peer` whose socket is one end of an in-memory pipe holding at
+    /// most `pipe` bytes; the test drives the other end.
+    async fn piped_peer(pipe: usize) -> (Peer, DuplexStream, UnboundedReceiver<SocketEvent>) {
+        let (near, far) = tokio::io::duplex(pipe);
+        let (r, w) = tokio::io::split(near);
+        let conn = Connection {
+            reader: BufReader::new(Box::new(r) as BoxRead),
+            writer: Box::new(w),
+            address: "pipe:1".to_string(),
+            remote_name: None,
+        };
+        let (tx, rx) = unbounded();
+        let peer = Peer::new(
+            "remote".to_string(),
+            Some(conn),
+            None,
+            None,
+            tx,
+            "pipe:1".to_string(),
+            "local".to_string(),
+            PeerType::TcpClient,
+            DEFAULT_MAX_MESSAGE_SIZE,
+        )
+        .await
+        .unwrap();
+        (peer, far, rx)
+    }
+
+    fn framed(body: &[u8]) -> Vec<u8> {
+        let mut out = (body.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// (bytes of whole frames, size of the partial frame after them).
+    fn scan(buf: &[u8]) -> (usize, usize) {
+        let (complete, rest) = complete_frames(buf, 1024);
+        (complete, rest.unwrap())
+    }
+
+    #[test]
+    fn complete_frames_finds_whole_frames_and_sizes_the_partial_one() {
+        assert_eq!(scan(&[]), (0, 0));
+        // Part of a length prefix: nothing known yet.
+        assert_eq!(scan(&[0, 0]), (0, 0));
+        // Prefix complete, body not: the frame will be 4 + 3 bytes.
+        assert_eq!(scan(&[0, 0, 0, 3, b'a']), (0, 7));
+
+        let mut buf = framed(b"abc");
+        buf.extend(framed(b""));
+        buf.extend(framed(b"de"));
+        let whole = buf.len();
+        assert_eq!(scan(&buf), (whole, 0));
+        // Two bytes of the next prefix.
+        buf.extend([0, 0]);
+        assert_eq!(scan(&buf), (whole, 0));
+        // The rest of that prefix (a 0x0100 = 256 byte frame) and one byte.
+        buf.extend([1, 0, b'x']);
+        assert_eq!(scan(&buf), (whole, 4 + 256));
+    }
+
+    #[test]
+    fn complete_frames_rejects_an_oversized_claim_before_its_body_arrives() {
+        assert_eq!(scan(&1024u32.to_be_bytes()), (0, 4 + 1024));
+        let (complete, rest) = complete_frames(&1025u32.to_be_bytes(), 1024);
+        assert_eq!(complete, 0);
+        assert_eq!(rest.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        // Good frames ahead of it in the same read still count.
+        let mut buf = framed(b"ok");
+        buf.extend(u32::MAX.to_be_bytes());
+        let (complete, rest) = complete_frames(&buf, 1024);
+        assert_eq!(complete, 6);
+        assert!(rest.is_err());
+    }
+
+    /// Every frame the read loop hands over, until it reports a hangup.
+    async fn frames_until_hangup(events: &mut UnboundedReceiver<SocketEvent>) -> Vec<Vec<u8>> {
+        let mut got = Vec::new();
+        while let Some(event) = events.next().await {
+            match event {
+                SocketEvent::Frames { from, mut data } => {
+                    assert_eq!(&*from, "pipe:1");
+                    while !data.is_empty() {
+                        let len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+                        let _ = data.split_to(4);
+                        got.push(data.split_to(len).to_vec());
+                    }
+                }
+                SocketEvent::Hangup { from } => {
+                    assert_eq!(from, "pipe:1");
+                    break;
+                }
+                other => panic!("unexpected event {:?}", other),
+            }
+        }
+        got
+    }
+
+    #[tokio::test]
+    async fn read_loop_reassembles_frames_however_the_bytes_arrive() {
+        let (_peer, mut far, mut events) = piped_peer(32 * 1024).await;
+        // Larger than a read chunk, so its buffer has to be grown for it.
+        let big: Vec<u8> = (0..200_000u32).map(|i| i as u8).collect();
+        let expected: Vec<Vec<u8>> =
+            vec![b"first".to_vec(), b"a".to_vec(), Vec::new(), b"ccc".to_vec(), big.clone(), b"last".to_vec()];
+
+        let writer = tokio::spawn(async move {
+            // One byte at a time: the length prefix itself is split.
+            for b in framed(b"first") {
+                far.write_all(&[b]).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+            // Several frames and the front of a large one in one write.
+            let mut burst = framed(b"a");
+            burst.extend(framed(b""));
+            burst.extend(framed(b"ccc"));
+            let big_frame = framed(&big);
+            burst.extend(&big_frame[..70_000]);
+            far.write_all(&burst).await.unwrap();
+            // The rest of it with another frame straight behind.
+            let mut rest = big_frame[70_000..].to_vec();
+            rest.extend(framed(b"last"));
+            far.write_all(&rest).await.unwrap();
+            // A claimed size over the cap ends the connection.
+            far.write_all(&(DEFAULT_MAX_MESSAGE_SIZE + 1).to_be_bytes()).await.unwrap();
+            far
+        });
+
+        let got = frames_until_hangup(&mut events).await;
+        assert_eq!(got.len(), expected.len());
+        for (g, e) in got.iter().zip(&expected) {
+            assert!(g == e, "frame of {} bytes differs from the {} sent", g.len(), e.len());
+        }
+        let _far = writer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sends_reach_the_socket_framed_and_in_order() {
+        let (peer, mut far, _events) = piped_peer(64 * 1024).await;
+        // try_send only queues; nothing moves until the flush.
+        assert!(peer.try_send(&Bytes::from_static(b"one")).unwrap());
+        assert!(peer.try_send(&Bytes::from_static(b"")).unwrap());
+        peer.flush();
+        peer.send(Bytes::from_static(b"three")).await.unwrap();
+
+        let mut expected = framed(b"one");
+        expected.extend(framed(b""));
+        expected.extend(framed(b"three"));
+        let mut got = vec![0u8; expected.len()];
+        far.read_exact(&mut got).await.unwrap();
+        assert_eq!(got, expected);
+    }
+
+    /// Every queued update is one `SocketEvent`, so a rare variant must
+    /// not make all of them big.
+    #[cfg(not(feature = "bluetooth"))]
+    #[test]
+    fn socket_event_stays_small() {
+        let size = std::mem::size_of::<SocketEvent>();
+        eprintln!("size_of SocketEvent = {}", size);
+        assert!(size <= 96, "SocketEvent grew to {} bytes", size);
+    }
+
+    const BIG: usize = 32 * 1024;
+    const COUNT: usize = 40;
+
+    /// A peer reading far too slowly to empty a full outbox within
+    /// SLOW_PEER_TIMEOUT, but never idle that long, is backpressure, not a
+    /// dead link: every send must wait it out.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_reader_is_waited_for_not_dropped() {
+        let (peer, mut far, _events) = piped_peer(16 * 1024).await;
+        let total = COUNT * (BIG + 4);
+        // 16 KiB every 250 ms: a quarter of a second per step, about 20 s
+        // (virtual) for the lot, and over 4 s for one full outbox.
+        let reader = tokio::spawn(async move {
+            let mut buf = vec![0u8; 16 * 1024];
+            let mut seen = 0;
+            while seen < total {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                seen += far.read(&mut buf).await.unwrap();
+            }
+            far
+        });
+
+        let started = tokio::time::Instant::now();
+        let msg = Bytes::from(vec![7u8; BIG]);
+        for i in 0..COUNT {
+            peer.send(msg.clone()).await.unwrap_or_else(|e| panic!("send {} failed: {}", i, e));
+        }
+        assert!(
+            started.elapsed() > SLOW_PEER_TIMEOUT,
+            "the sends never had to wait, so this didn't test backpressure"
+        );
+        tokio::time::timeout(Duration::from_secs(60), reader)
+            .await
+            .expect("the reader never got everything")
+            .unwrap();
+    }
+
+    /// A peer that takes nothing at all is reported after SLOW_PEER_TIMEOUT.
+    #[tokio::test(start_paused = true)]
+    async fn a_reader_that_stops_is_reported_stuck() {
+        let (peer, _far, _events) = piped_peer(16 * 1024).await;
+        let started = tokio::time::Instant::now();
+        let msg = Bytes::from(vec![7u8; BIG]);
+        let mut failed = None;
+        for _ in 0..COUNT {
+            if let Err(e) = peer.send(msg.clone()).await {
+                failed = Some(e.to_string());
+                break;
+            }
+        }
+        let failed = failed.expect("sends to a peer that never reads kept succeeding");
+        assert!(failed.contains("peer not reading"), "{}", failed);
+        let waited = started.elapsed();
+        assert!(
+            waited >= SLOW_PEER_TIMEOUT && waited < SLOW_PEER_TIMEOUT * 2,
+            "gave up after {:?}",
+            waited
+        );
+    }
 }

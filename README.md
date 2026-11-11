@@ -247,7 +247,7 @@ Note that a server sends its entire property set to a client as soon as that cli
 max_message_size_bytes = 4194304   # 4 MiB
 ```
 
-**Slow or stuck peers** Each TCP peer has its own writer task and send queue, so a peer that stops reading can't stall updates to everyone else. If its queue stays full for 2 seconds it's dropped. A malformed message also drops only the peer that sent it, and a new connection gets `handshake_timeout_ms` to complete the handshake without holding up anyone else.
+**Slow or stuck peers** Each TCP peer has its own writer task and send buffer (256 KiB), so a peer that stops reading can't stall updates to everyone else. A slow peer is waited for; one whose buffer is full and whose socket accepts nothing for 2 seconds is dropped. A malformed message also drops only the peer that sent it, and a new connection gets `handshake_timeout_ms` to complete the handshake without holding up anyone else.
 
 **Connection limits (`max_peers`, `max_pending_handshakes`)** A server can cap how many clients it keeps (`max_peers`, unlimited by default) and how many connections may be mid-handshake at once (`max_pending_handshakes`, default 64). Connections over either limit are closed straight after `accept`, before any handshake or TLS work. To keep a server off the LAN entirely, listen on loopback: `listen = "127.0.0.1:3000"`. A bare port such as `listen = "3000"` binds the machine's LAN address.
 
@@ -264,7 +264,7 @@ Out of the box Hive has no authentication or encryption: anything that can reach
 
 **Recommendation:** TLS with `require_client_cert = true` (mutual TLS) on anything beyond a trusted LAN. `auth_secret` alone is a cheap way to keep stray clients out of a network you already trust; it can also be combined with TLS.
 
-Misconfiguration fails closed. A `[TLS]` table or `auth_secret` in a Hive built without the matching feature, an unreadable certificate, or a client with no `ca` all panic at `Hive::new*`, never fall back to plaintext. Both ends must use the same settings: a TLS client can't talk to a plaintext server and vice versa, and a hive with `auth_secret` refuses one without it in either direction.
+Misconfiguration fails closed. A `[TLS]` table or `auth_secret` in a Hive built without the matching feature, an unreadable certificate, a client with no `ca`, a misspelled or wrongly typed key under `[TLS]`, or an `auth_secret` that ended up inside a table all panic at `Hive::new*`, never fall back to plaintext. Remember that in TOML every key below a `[table]` header belongs to that table, so `auth_secret` has to come before the first one. Both ends must use the same settings: a TLS client can't talk to a plaintext server and vice versa, and a hive with `auth_secret` refuses one without it in either direction.
 
 ### Shared secret
 
@@ -296,7 +296,7 @@ server_name = "hive.local"       # optional, defaults to the host in `connect`
 
 A Hive that both listens and connects (a middle man) uses the same `[TLS]` table for both roles. TLS 1.3 and 1.2 via rustls on the ring backend, so cross-compiling to ARM needs no CMake or C++ toolchain. `prefer_chacha20 = true` puts ChaCha20-Poly1305 first, much faster than AES on boards without AES instructions (most Raspberry Pis); leave it off on x86 and Apple silicon.
 
-**Cost:** on loopback (Apple M2 Pro, `tests/bench.rs`) TLS throughput matched plain TCP at about 1.4-1.8M updates/s to one receiver, and median latency went up by 5-10 us. Updates are batched into large writes, so encryption cost grows with bytes sent rather than with message count. Expect a larger difference on small ARM boards.
+**Cost:** on loopback (Apple M2 Pro, `tests/bench.rs`) TLS throughput matched plain TCP at about 3M updates/s to one receiver, and median latency was within a few us. Updates are batched into large writes, so encryption cost grows with bytes sent rather than with message count. Expect a larger difference on small ARM boards.
 
 **Making certificates** with OpenSSL (any CA works, this is a minimal private one):
 

@@ -8,7 +8,7 @@ use tokio::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crate::futures::channel::mpsc;
-use crate::futures::{SinkExt, StreamExt};
+use crate::futures::{FutureExt, SinkExt, StreamExt};
 use crate::logging::{info, debug, warn, error};
 
 use toml;
@@ -68,6 +68,9 @@ pub struct Hive {
     /// clone sends it. See `Handler::set_property_debounced`.
     debounce: crate::handler::DebounceMap,
     peers: Vec<Peer>,
+    /// Index of the peer the last message came from. Messages arrive in
+    /// runs from one peer, so `peer_index` checks here before scanning.
+    last_from: usize,
     pub message_received: Signal<String>,
     pub connected: Arc<AtomicBool>,
     /// Number of peers currently attached, mirrored out to every `Handler`.
@@ -159,6 +162,12 @@ async fn spawn_bluetooth_central(ble_name: String, sender: Sender<SocketEvent>) 
 pub(crate) const REQUEST_PEERS: &str = "<p|";
 
 const DEFAULT_MAX_PENDING_HANDSHAKES: usize = 64;
+
+/// Most messages the event loop handles before it wakes the peers' writers
+/// and lets other tasks on its worker thread run. Batching is what makes a
+/// burst cheap (one write per peer for the lot); the cap keeps a sustained
+/// flood from holding output back, or the thread to itself, for long.
+const EVENT_BATCH: usize = 1024;
 
 struct AcceptLimits {
     max_peers: Option<usize>,
@@ -285,6 +294,7 @@ impl Hive {
             security: Arc::new(security),
             debounce: Arc::new(Mutex::new(HashMap::new())),
             peers: Vec::new(),
+            last_from: 0,
             message_received: Default::default(),
             connected: Arc::new(AtomicBool::new(false)),
             peer_count: Arc::new(AtomicUsize::new(0)),
@@ -482,7 +492,7 @@ impl Hive {
                         let _ = sender.unbounded_send(SocketEvent::NewPeer {
                             name: "unnamed client".to_string(),
                             address: conn.address.clone(),
-                            stream: Some(conn),
+                            stream: Some(Box::new(conn)),
                             peripheral: None,
                             central: None,
                             ptype: PeerType::TcpClient,
@@ -548,7 +558,7 @@ impl Hive {
                             let se = SocketEvent::NewPeer {
                                 name: String::from("unnamed server"),
                                 address: conn.address.clone(),
-                                stream: Some(conn),
+                                stream: Some(Box::new(conn)),
                                 peripheral: None,
                                 central: None,
                                 ptype: PeerType::TcpServer,
@@ -680,134 +690,225 @@ impl Hive {
     async fn receive_events(&mut self) -> Result<()> {
         while !self.sender.is_closed() {
             debug!("{:?} waiting for event", self.name);
-            let nn = self.receiver.next().await;
-            debug!("{:?} Received event: {:?}", self.name, nn);
-            match nn {
-                Some(SocketEvent::NewPeer {
-                    name,
-                    stream,
-                    peripheral,
-                    central,
-                    address,
-                    ptype,
-                }) => {
-                    let has_peer = self.peers.iter().find(|p| p.address == address);
-
-                    let is_tcp_server = self.listen_port.is_some();
-                    let is_tcp_client = self.connect_to.is_some();
-
-                    let at_limit = ptype == PeerType::TcpClient
-                        && self.max_peers.is_some_and(|max| self.peers.len() >= max);
-                    if at_limit {
-                        // Several handshakes can finish together after the
-                        // accept-time check passed; this is the exact one.
-                        warn!("{} dropping {}: at max_peers", self.name, address);
-                    } else if has_peer.is_none() {
-                        debug!("----------------------- {:?} building peer: {:?}", self.name, name);
-                        let ptype_clne = ptype.clone();
-                        let p = Peer::new(
-                            name,
-                            stream,
-                            peripheral,
-                            central,
-                            self.sender.clone(),
-                            address,
-                            self.name.clone(),
-                            ptype_clne,
-                            self.max_message_size,
-                        )
-                        .await;
-                        if p.is_ok() {
-                            debug!(".... PEER: {:?}, {}", p, is_tcp_server);
-                            let peer = p?;
-                            // we auto send all the peers via TCP because it prevents un additional request
-                            // TODO should this be moved into the Peer handshake
-                            if ptype == PeerType::TcpClient {
-                                if let Err(e) = self.send_properties(&peer).await {
-                                    warn!("{} failed to send properties to new peer {:?}: {:?}", self.name, peer.address, e);
-                                    continue;
-                                }
-                            }
-
-                            debug!("<<<< NEW PEER for {:?}: {:?}", self.name, peer.get_name());
-                            let is_web_sock_peer = peer.is_web_socket();
-
-                            if let Some(timeout) = self.wave_timeout {
-                                peer.wave(timeout).await;
-                            }
-
-                            self.peers.push(peer);
-                            self.peer_count.store(self.peers.len(), Ordering::Relaxed);
-                            self.connected.store(true, Ordering::Relaxed);
-
-                            if !is_tcp_client {
-                                // I'm a server and another tcp hive client connected
-                                // a websock sends a separate Header package with it's name, other
-                                // tcp sockets send the name in the handshake so we can update peers
-                                // right away, instead of waiting for the header update
-                                if !is_web_sock_peer {
-                                    self.notify_peers_change().await;
-                                }
-                            }
-                        }
-                    } else {
-                        debug!("<<< Existing peer reconnected: {:?}", has_peer.unwrap().to_string());
-                    }
-
-                    // We've connected or been connected to, so were ready by most definitions.
-                    self.broadcast_ready();
-                }
-                Some(SocketEvent::Message { from, msg }) => {
-                    debug!("GOT MESSAGE {}, {:?}", from, msg);
-                    // A bad message or a failed write to one peer must
-                    // never end the event loop for every other peer.
-                    if let Err(e) = self.got_message(from.as_str(), msg).await {
-                        if e.downcast_ref::<DecodeError>().is_some() {
-                            // The peer sent something we can't parse; its
-                            // stream can't be trusted past this point.
-                            warn!("{} malformed message from {:?}, dropping peer: {}", self.name, from, e);
-                            self.remove_peer(&from).await;
-                        } else {
-                            warn!("{} error handling message from {:?}: {:?}", self.name, from, e);
-                        }
+            let mut next = self.receiver.next().await;
+            // Handle everything that's already waiting before waking any
+            // writer, so each peer gets a burst as one write.
+            let mut handled = 0;
+            loop {
+                debug!("{:?} Received event: {:?}", self.name, next);
+                match next {
+                    Some(event) => handled += self.handle_event(event).await,
+                    None => {
+                        println!("Received Nothing...");
+                        break;
                     }
                 }
-                Some(SocketEvent::Hangup { from }) => {
-                    debug!("received hangup from {:?}", from);
-                    self.remove_peer(&from).await;
+                if handled >= EVENT_BATCH {
+                    break;
                 }
-                Some(SocketEvent::MqttText { id, text }) => {
-                    let hint = self.properties.get(&id).and_then(|p| p.get_value());
-                    match crate::property::text_to_value(&text, hint.as_ref()) {
-                        Ok(v) => {
-                            // From here on it's an ordinary property update:
-                            // applied locally, broadcast to TCP peers, and
-                            // not echoed back to MQTT.
-                            let frame = crate::property::encode_property(id, Some(&v), true);
-                            if let Err(e) = self.got_message("mqtt", frame).await {
-                                warn!("{} MQTT text update failed: {:?}", self.name, e);
-                            }
-                        }
-                        Err(e) => warn!("{} dropping MQTT text payload: {}", self.name, e),
-                    }
-                }
-                #[allow(unused_variables)]
-                Some(SocketEvent::SendBtProps { sender }) => {
-                    #[cfg(all(target_os = "linux", feature = "bluetooth"))]
-                    {
-                        debug!("<<<........... HAHAHAHAHAHA {:?}", sender);
-                        let bytes = properties_to_bytes(&self.properties);
-                        let resp = bluster::gatt::event::Response::Success(bytes.to_vec());
-                        sender.send(resp).unwrap();
-                    }
-                }
-                None => {
-                    println!("Received Nothing...");
-                }
+                // Take another only if one is already there.
+                next = match self.receiver.next().now_or_never() {
+                    Some(event) => event,
+                    None => break,
+                };
+            }
+            self.flush_peers();
+            if handled >= EVENT_BATCH {
+                // More is probably queued. Nothing above waits while there
+                // is work, so step aside for the writers just woken and
+                // whatever else shares this worker thread.
+                tokio::task::yield_now().await;
             }
         }
         info!("Stopped receiving events!");
         Ok(())
+    }
+
+    /// Wake the writer of every peer that had something queued.
+    fn flush_peers(&self) {
+        for p in &self.peers {
+            p.flush();
+        }
+    }
+
+    /// Queue `msg` for `peer`. The writer is woken by `flush_peers` at the
+    /// end of the current batch of events.
+    async fn send_peer(&self, peer: &Peer, msg: &Bytes) -> Result<()> {
+        if peer.try_send(msg)? {
+            return Ok(());
+        }
+        // About to wait on a full outbox (or use a transport that has
+        // none): don't leave what is already queued for the other peers
+        // sitting behind that wait.
+        self.flush_peers();
+        peer.send(msg.clone()).await
+    }
+
+    /// Position in `self.peers` of the peer at address `from`.
+    fn peer_index(&mut self, from: &str) -> Option<usize> {
+        if self.peers.get(self.last_from).is_some_and(|p| p.address == from) {
+            return Some(self.last_from);
+        }
+        let idx = self.peers.iter().position(|p| p.address == from)?;
+        self.last_from = idx;
+        Some(idx)
+    }
+
+    /// Any traffic counts as "heard from this peer" for the liveness check.
+    /// Only `wave` reads the timestamp, so skip the clock read without it.
+    fn ack_peer(&mut self, from: &str) {
+        if self.wave_timeout.is_some() {
+            if let Some(idx) = self.peer_index(from) {
+                self.peers[idx].ack();
+            }
+        }
+    }
+
+    /// Handle one message. False if the sender had to be dropped for it.
+    async fn on_message(&mut self, from: &str, msg: Bytes) -> bool {
+        // A bad message or a failed write to one peer must never end the
+        // event loop for every other peer.
+        if let Err(e) = self.got_message(from, msg).await {
+            if e.downcast_ref::<DecodeError>().is_some() {
+                // The peer sent something we can't parse; its stream can't
+                // be trusted past this point.
+                warn!("{} malformed message from {:?}, dropping peer: {}", self.name, from, e);
+                self.remove_peer(from).await;
+                return false;
+            }
+            warn!("{} error handling message from {:?}: {:?}", self.name, from, e);
+        }
+        true
+    }
+
+    /// Handle one event. Returns how many messages it carried, for the
+    /// batch accounting in `receive_events`.
+    async fn handle_event(&mut self, event: SocketEvent) -> usize {
+        match event {
+            SocketEvent::NewPeer {
+                name,
+                stream,
+                peripheral,
+                central,
+                address,
+                ptype,
+            } => {
+                let has_peer = self.peers.iter().find(|p| p.address == address);
+
+                let is_tcp_server = self.listen_port.is_some();
+                let is_tcp_client = self.connect_to.is_some();
+
+                let at_limit = ptype == PeerType::TcpClient
+                    && self.max_peers.is_some_and(|max| self.peers.len() >= max);
+                if at_limit {
+                    // Several handshakes can finish together after the
+                    // accept-time check passed; this is the exact one.
+                    warn!("{} dropping {}: at max_peers", self.name, address);
+                } else if has_peer.is_none() {
+                    debug!("----------------------- {:?} building peer: {:?}", self.name, name);
+                    let ptype_clne = ptype.clone();
+                    let p = Peer::new(
+                        name,
+                        stream.map(|conn| *conn),
+                        peripheral,
+                        central,
+                        self.sender.clone(),
+                        address,
+                        self.name.clone(),
+                        ptype_clne,
+                        self.max_message_size,
+                    )
+                    .await;
+                    if let Ok(peer) = p {
+                        debug!(".... PEER: {:?}, {}", peer, is_tcp_server);
+                        // we auto send all the peers via TCP because it prevents un additional request
+                        // TODO should this be moved into the Peer handshake
+                        if ptype == PeerType::TcpClient {
+                            if let Err(e) = self.send_properties(&peer).await {
+                                warn!("{} failed to send properties to new peer {:?}: {:?}", self.name, peer.address, e);
+                                return 1;
+                            }
+                        }
+
+                        debug!("<<<< NEW PEER for {:?}: {:?}", self.name, peer.get_name());
+                        let is_web_sock_peer = peer.is_web_socket();
+
+                        if let Some(timeout) = self.wave_timeout {
+                            peer.wave(timeout).await;
+                        }
+
+                        self.peers.push(peer);
+                        self.peer_count.store(self.peers.len(), Ordering::Relaxed);
+                        self.connected.store(true, Ordering::Relaxed);
+
+                        if !is_tcp_client {
+                            // I'm a server and another tcp hive client connected
+                            // a websock sends a separate Header package with it's name, other
+                            // tcp sockets send the name in the handshake so we can update peers
+                            // right away, instead of waiting for the header update
+                            if !is_web_sock_peer {
+                                self.notify_peers_change().await;
+                            }
+                        }
+                    }
+                } else {
+                    debug!("<<< Existing peer reconnected: {:?}", has_peer.unwrap().to_string());
+                }
+
+                // We've connected or been connected to, so were ready by most definitions.
+                self.broadcast_ready();
+            }
+            SocketEvent::Message { from, msg } => {
+                debug!("GOT MESSAGE {}, {:?}", from, msg);
+                self.ack_peer(&from);
+                self.on_message(&from, msg).await;
+            }
+            SocketEvent::Frames { from, mut data } => {
+                self.ack_peer(&from);
+                let mut count = 0;
+                // `read_loop` only sends whole frames, each within the
+                // size cap, so the lengths here need no second check.
+                while data.remaining() >= 4 {
+                    let len = data.get_u32() as usize;
+                    let msg = data.split_to(len.min(data.remaining()));
+                    count += 1;
+                    if !self.on_message(&from, msg).await {
+                        break;
+                    }
+                }
+                return count;
+            }
+            SocketEvent::Hangup { from } => {
+                debug!("received hangup from {:?}", from);
+                self.remove_peer(&from).await;
+            }
+            SocketEvent::MqttText { id, text } => {
+                let hint = self.properties.get(&id).and_then(|p| p.get_value());
+                match crate::property::text_to_value(&text, hint.as_ref()) {
+                    Ok(v) => {
+                        // From here on it's an ordinary property update:
+                        // applied locally, broadcast to TCP peers, and
+                        // not echoed back to MQTT.
+                        let frame = crate::property::encode_property(id, Some(&v), true);
+                        if let Err(e) = self.got_message("mqtt", frame).await {
+                            warn!("{} MQTT text update failed: {:?}", self.name, e);
+                        }
+                    }
+                    Err(e) => warn!("{} dropping MQTT text payload: {}", self.name, e),
+                }
+            }
+            #[allow(unused_variables)]
+            SocketEvent::SendBtProps { sender } => {
+                #[cfg(all(target_os = "linux", feature = "bluetooth"))]
+                {
+                    debug!("<<<........... HAHAHAHAHAHA {:?}", sender);
+                    let bytes = properties_to_bytes(&self.properties);
+                    let resp = bluster::gatt::event::Response::Success(bytes.to_vec());
+                    sender.send(resp).unwrap();
+                }
+            }
+        }
+        1
     }
 
     fn peer_string(&self) -> String {
@@ -837,7 +938,6 @@ impl Hive {
 
     async fn notify_peers_change(&mut self) {
         debug!("..... notify peers changed");
-        use futures::future::join_all;
         let peer_string = self.peer_string();
         let peer_str = peer_string.as_bytes();
         let mut bytes = BytesMut::with_capacity(peer_str.len() + 1);
@@ -846,12 +946,11 @@ impl Hive {
         let bf = bytes.freeze();
         // debug!(".. TEST 3: {:?}", bf);
 
-        let mut futures = vec![];
-        self.peers.iter().filter(|p| p.update_peers).for_each(|p| {
-            futures.push(p.send(bf.clone()));
-        });
-        debug!("send peers update to {:?} peers", futures.len());
-        join_all(futures).await;
+        for p in self.peers.iter().filter(|p| p.update_peers) {
+            if let Err(e) = self.send_peer(p, &bf).await {
+                debug!("peers update to {:?} failed: {:?}", p.address, e);
+            }
+        }
     }
 
     async fn send_to_peer(&self, msg: &str, peer_name: &str) -> Result<()> {
@@ -862,7 +961,7 @@ impl Hive {
                 bytes.put_u8(PEER_MESSAGE);
                 bytes.put_slice(msg.as_bytes());
 
-                peer.send(bytes.freeze()).await?;
+                self.send_peer(peer, &bytes.freeze()).await?;
             }
             _ => {
                 let err_msg = format!("No peer {} ... {}", peer_name, self.name);
@@ -892,8 +991,7 @@ impl Hive {
     // TODO send properties with handshake
     async fn send_properties(&self, peer: &Peer) -> Result<()> {
         let bts = properties_to_bytes(&self.properties);
-        peer.send(bts).await?;
-        Ok(())
+        self.send_peer(peer, &bts).await
     }
 
     pub fn get_weak_property(&mut self, prop_name: &str) -> Weak<Mutex<Property>> {
@@ -956,17 +1054,18 @@ impl Hive {
         }
     }
 
-    /// Send an already encoded message to every peer except `except` (the
-    /// peer it came from, so it isn't echoed back in a loop). Each peer gets
-    /// a refcount clone of the same `Bytes`, nothing is re-encoded or copied
-    /// per peer; the peer's writer task does the framing.
-    async fn broadcast(&mut self, msg: Bytes, except: &str) {
+    /// Send an already encoded message to every peer except the one at
+    /// index `except` (the peer it came from, so it isn't echoed back in a
+    /// loop). Nothing is re-encoded: each TCP peer's outbox gets the bytes
+    /// copied in behind a length prefix, and its writer is woken once per
+    /// batch of events rather than per message.
+    async fn broadcast(&mut self, msg: &Bytes, except: Option<usize>) {
         // bluetooth clients dont receive independent updates,
         // bluetooth really is a broadcast and only needs to go out once
         let mut sent_bt_broadcast = false;
         let mut failed: Vec<String> = Vec::new();
-        for p in &self.peers {
-            if p.address == except {
+        for (i, p) in self.peers.iter().enumerate() {
+            if Some(i) == except {
                 continue;
             }
             if p.is_bt_client() {
@@ -975,7 +1074,7 @@ impl Hive {
                 }
                 sent_bt_broadcast = true;
             }
-            if let Err(e) = p.send(msg.clone()).await {
+            if let Err(e) = self.send_peer(p, msg).await {
                 warn!("{} write to {:?} failed, dropping peer: {:?}", self.name, p.address, e);
                 failed.push(p.address.clone());
             }
@@ -997,25 +1096,18 @@ impl Hive {
             let msg_type = msg.get_u8();
 
             // Most branches below act on the peer that sent this message,
-            // and the trailing ack does too, so look it up once by index
-            // instead of re-scanning self.peers (and re-cloning its
-            // address for the comparison) per branch. HANGUP removes this
-            // peer, so the ack at the bottom skips it explicitly rather
-            // than trusting a now-possibly-stale index.
-            let peer_idx = self.peers.iter().position(|p| p.address == from);
-            // Any message counts as "heard from this peer". Done up front
-            // because broadcast or HANGUP below can remove peers, which
-            // would leave peer_idx pointing at the wrong slot afterwards.
-            if let Some(idx) = peer_idx {
-                self.peers[idx].ack();
-            }
+            // so look it up once by index instead of re-scanning self.peers
+            // per branch. (The liveness ack happens before this, per event,
+            // in `handle_event`.)
+            let peer_idx = self.peer_index(from);
 
             match msg_type {
                 PING => {
                     // Someone is asking if we're alive, answer with a PONG.
                     debug!("<<< <<< PING from {:?}", from);
                     if let Some(idx) = peer_idx {
-                        self.peers[idx].send_pong().await?;
+                        debug!("SEND PONG {:?}", self.peers[idx].to_string());
+                        self.send_peer(&self.peers[idx], &Bytes::from_static(&[PONG])).await?;
                     }
                 }
                 PONG => {
@@ -1051,11 +1143,11 @@ impl Hive {
                             let mut del = BytesMut::with_capacity(frame.len());
                             del.put_u8(DELETE);
                             del.put_slice(&frame[1..]);
-                            self.broadcast(del.freeze(), from).await;
+                            self.broadcast(&del.freeze(), peer_idx).await;
                             self.properties.remove(&prop_id);
                         }
                         Some(v) => {
-                            self.broadcast(frame, from).await;
+                            self.broadcast(&frame, peer_idx).await;
                             self.apply_value(prop_id, Some(v));
                             // Publish to MQTT if the change did NOT originate from MQTT.
                             // We look up the property from self.properties by ID because
@@ -1064,6 +1156,10 @@ impl Hive {
                             #[cfg(feature = "mqtt")]
                             if from != "mqtt" {
                                 if let Some(ref handle) = self.mqtt_handle {
+                                    // The publish can wait on the broker
+                                    // link; don't hold the peers' share of
+                                    // this update behind it.
+                                    self.flush_peers();
                                     if let Some(named_prop) = self.properties.get(&prop_id) {
                                         if let Err(e) = handle.publish(named_prop).await {
                                             warn!("MQTT publish failed: {:?}", e);
@@ -1081,7 +1177,7 @@ impl Hive {
                         return Err(DecodeError("DELETE needs an 8 byte id".into()).into());
                     }
                     if self.properties.remove(&msg.get_u64()).is_some() {
-                        self.broadcast(raw.slice(..9), from).await;
+                        self.broadcast(&raw.slice(..9), peer_idx).await;
                     }
                 }
                 HEADER => {
@@ -1096,12 +1192,16 @@ impl Hive {
                         // the PEER_MESSAGE_DIV separates the peer name from the message
                         // without the DIV, there is only a message and its for me
                         info!("the message was forwarded for me: {:?}", message);
+                        // Listeners run before this returns; don't hold
+                        // queued output behind them.
+                        self.flush_peers();
                         self.message_received.emit(String::from(message)).await;
                         return Ok(());
                     }
                     let pear_name = vec[0];
                     if self.name.to_string() == pear_name.to_string() {
                         info!("Message is for me: {:?}", vec[1]);
+                        self.flush_peers();
                         self.message_received.emit(String::from(vec[1])).await;
                     } else {
                         self.send_to_peer(vec[1], pear_name).await?;
@@ -1114,7 +1214,7 @@ impl Hive {
                     peer_bytes.put_slice(str.as_bytes());
 
                     if let Some(idx) = peer_idx {
-                        self.peers[idx].send(peer_bytes.freeze()).await?;
+                        self.send_peer(&self.peers[idx], &peer_bytes.freeze()).await?;
                         self.peers[idx].update_peers = true;
                     }
                 }
