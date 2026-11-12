@@ -56,6 +56,7 @@ async fn mqtt_middle_man() {
         let config_a = r#"
             name = "HiveA"
             [MQTT]
+            payload = "binary"   # third-party publishes below use Hive's binary format
             host = "127.0.0.1"
             port = 1883
             client_id = "hive-mm-a"
@@ -84,6 +85,7 @@ async fn mqtt_middle_man() {
         let config_b = r#"
             name = "HiveB"
             [MQTT]
+            payload = "binary"   # third-party publishes below use Hive's binary format
             host = "127.0.0.1"
             port = 1883
             client_id = "hive-mm-b"
@@ -231,6 +233,7 @@ async fn mqtt_round_trip() {
         let config_a = r#"
             name = "RoundTripA"
             [MQTT]
+            payload = "binary"   # third-party publishes below use Hive's binary format
             host = "127.0.0.1"
             port = 1883
             client_id = "hive-rt-a"
@@ -259,6 +262,7 @@ async fn mqtt_round_trip() {
         let config_b = r#"
             name = "RoundTripB"
             [MQTT]
+            payload = "binary"   # third-party publishes below use Hive's binary format
             host = "127.0.0.1"
             port = 1883
             client_id = "hive-rt-b"

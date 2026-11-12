@@ -82,7 +82,7 @@ handler.send_to_peer("Client", "hello there").await;
 
 ### MQTT
 
-The MQTT transport connects Hive to any standard MQTT broker (Mosquitto, EMQX, HiveMQ, etc.). Properties map to MQTT topics under a configurable prefix, using a compact binary wire format for payloads:
+The MQTT transport connects Hive to any standard MQTT broker (Mosquitto, EMQX, HiveMQ, etc.). Properties map to MQTT topics under a configurable prefix, with plain-text payloads by default:
 
 ```toml
 name = "SensorNode"
@@ -103,15 +103,7 @@ humidity = 0
 
 With this config, property changes publish to `hive/home/temperature`, `hive/home/humidity`, etc. Any other Hive instance subscribed to the same topics will receive updates.
 
-**Payload format.** By default payloads use Hive's compact binary encoding, which only other Hive nodes can read: a standard client such as `mosquitto_sub` sees `72` arrive as the bytes `0x21 0x48`, and plain text published by `mosquitto_pub` is ignored. To work with ordinary MQTT clients, dashboards and home-automation tools, set `payload = "text"`:
-
-```toml
-[MQTT]
-host = "192.168.1.100"
-topic_prefix = "hive/home"
-payload = "text"        # default "binary"
-subscribe = ["temperature", "heater", "mode"]
-```
+**Payload format.** Payloads are plain text by default (`payload = "text"`), so ordinary MQTT clients, dashboards and home-automation tools can read and publish them:
 
 ```bash
 mosquitto_pub -t hive/home/temperature -m 21.5   # Hive receives 21.5
@@ -119,6 +111,8 @@ mosquitto_sub -t 'hive/home/#' -v                # prints e.g. "hive/home/heater
 ```
 
 Values are published as plain text: `72`, `21.5` (floats always keep a decimal point), `true`/`false`, or the string itself. Incoming text is read as the property's current type, so a string property stays a string when someone publishes `123`, a float property reads `21` as 21.0, and a boolean property also accepts `on`/`off`, `yes`/`no` and `1`/`0` (case-insensitive). Properties without a value yet are inferred: `true`/`false`, then integer, then float, then string. An empty payload (how MQTT clears a retained message) is ignored unless the property is a string, where it sets `""`, so it never turns a number or boolean into a string. Every node sharing a topic prefix should use the same `payload` setting.
+
+If every client on the topics is another hive, `payload = "binary"` uses Hive's compact typed encoding instead. Nothing else can read it: `mosquitto_sub` sees `72` arrive as the bytes `0x21 0x48`, and plain text published by `mosquitto_pub` is dropped as malformed.
 
 Publishing never holds up the rest of the hive. Outgoing updates are queued, with only the latest value kept per topic, and sent by a background task. While the broker is slow or unreachable, TCP peers keep syncing and the broker gets the current values once it is back.
 
@@ -178,7 +172,7 @@ topic_prefix = "hive"
 qos = 1                            # 0 = AtMostOnce, 1 = AtLeastOnce, 2 = ExactlyOnce
 keep_alive = 30
 subscribe = ["prop1", "prop2"]
-payload = "binary"                 # or "text" for non-Hive MQTT clients
+payload = "text"                   # default; "binary" if only other hives use the topics
 username = "hive"                  # optional broker login
 password_env = "MQTT_PASSWORD"     # or password = "..."
 [MQTT.TLS]                         # optional, requires "tls"; port then defaults to 8883

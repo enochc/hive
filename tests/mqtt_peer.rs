@@ -157,6 +157,7 @@ async fn mqtt_external_publish_received() {
             port = 1883
             client_id = "hive-test-recv"
             topic_prefix = "hive/ext_test"
+            payload = "binary"   # the external client below sends Hive's binary format
             qos = 1
             keep_alive = 30
             subscribe = ["sensor"]

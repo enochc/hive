@@ -52,6 +52,9 @@ Behaviour:
 
   `[TLS]`, `[MQTT]` and `[MQTT.TLS]` also refuse unknown keys. Configs that
   used to start may now fail fast; the README lists the accepted ranges.
+- MQTT payloads are plain text by default (`payload = "text"`). 0.2.x
+  always used Hive's binary encoding; set `payload = "binary"` on every
+  node of a hive-to-hive MQTT setup to keep talking to older versions.
 - MQTT `payload = "text"`: an empty payload is ignored unless the property
   is a string. It used to turn numbers and booleans into `""`.
 - A `Property`'s own `stream` field subscribes when first polled, so it
@@ -66,7 +69,8 @@ Behaviour:
   closed. See the README's Security section.
 - MQTT broker login (`username`, `password` / `password_env`) and TLS
   (`[MQTT.TLS]`).
-- MQTT `payload = "text"` for interoperating with ordinary MQTT clients.
+- MQTT `payload = "text"` (the default) for interoperating with ordinary
+  MQTT clients; `payload = "binary"` keeps Hive's own encoding.
 - `max_peers` and `max_pending_handshakes` connection limits.
 - Backpressure:
   - a TCP peer that sends faster than the hive can handle is slowed by TCP

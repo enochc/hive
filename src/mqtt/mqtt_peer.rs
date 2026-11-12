@@ -52,9 +52,10 @@ use crate::property::{Property, property_to_bytes, property_value_to_bytes, try_
 /// keep_alive = 30                 # seconds
 /// subscribe = ["lightValue", "thermostatName"]
 ///
-/// # "binary" (default): Hive's compact typed encoding, only other Hive
-/// # nodes can read it. "text": plain values (72, 1.5, true, hello) that
-/// # any MQTT client, dashboard or home-automation tool can read and send.
+/// # "text" (default): plain values (72, 1.5, true, hello) that any MQTT
+/// # client, dashboard or home-automation tool can read and send.
+/// # "binary": Hive's compact typed encoding, only other Hive nodes can
+/// # read it.
 /// payload = "text"
 ///
 /// # optional broker login
@@ -99,12 +100,14 @@ const MQTT_TLS_KEYS: [&str; 4] = ["ca", "cert", "key", "prefer_chacha20"];
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PayloadFormat {
     /// `[type_tag][value]`, Hive's wire format. Compact and exactly typed,
-    /// but opaque to anything that isn't Hive.
-    #[default]
+    /// but opaque to anything that isn't Hive. Only useful when every
+    /// client on the topics is another hive.
     Binary,
     /// UTF-8 text: `72`, `1.5`, `true`, `hello`. Readable and writable by
     /// any MQTT client. Incoming text is parsed using the property's current
-    /// type, see `property::text_to_value`.
+    /// type, see `property::text_to_value`. The default: an MQTT peer is
+    /// usually talking to ordinary MQTT clients, not other hives.
+    #[default]
     Text,
 }
 
@@ -170,8 +173,8 @@ impl MqttConfig {
         let port = get_int(table, T, "port", 1, 65535)?.unwrap_or(default_port);
 
         let payload = match get_str(table, T, "payload")? {
-            None | Some("binary") => PayloadFormat::Binary,
-            Some("text") => PayloadFormat::Text,
+            None | Some("text") => PayloadFormat::Text,
+            Some("binary") => PayloadFormat::Binary,
             Some(other) => return Err(format!("payload = {:?}, expected \"binary\" or \"text\"", other)),
         };
         let username = get_str(table, T, "username")?.map(String::from);

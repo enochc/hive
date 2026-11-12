@@ -84,10 +84,9 @@ async fn main() {
     handler.set_property("temperature", Some(&"75".into())).await;
 
     // Keep running until Ctrl+C
-    info!("Hive running with MQTT.  Use mosquitto_sub to watch binary traffic.");
+    info!("Hive running with MQTT. Payloads are plain text, so watch and publish with:");
     info!("  mosquitto_sub -t 'hive/demo/#' -v");
-    info!("Note: payloads use the Hive binary wire format, not plain text.");
-    info!("Use another Hive instance or the property_to_bytes API to publish.");
+    info!("  mosquitto_pub -t hive/demo/lightValue -m 42");
     tokio::time::sleep(Duration::from_secs(3600)).await;
 }
 

@@ -159,3 +159,15 @@ async fn plain_text_mqtt_clients_interoperate() {
 fn unknown_payload_format_is_rejected() {
     Hive::new_from_str_unknown("[MQTT]\nhost = \"127.0.0.1\"\npayload = \"json\"");
 }
+
+/// An MQTT peer usually talks to ordinary MQTT clients, so text is the
+/// default; binary has to be asked for.
+#[test]
+fn text_is_the_default_payload_format() {
+    use hive::mqtt::mqtt_peer::{MqttConfig, PayloadFormat};
+    let t = |s: &str| toml::from_str::<toml::Value>(s).unwrap();
+    let default = MqttConfig::from_toml(&t("host = \"127.0.0.1\"")).unwrap();
+    assert_eq!(default.payload, PayloadFormat::Text);
+    let binary = MqttConfig::from_toml(&t("host = \"127.0.0.1\"\npayload = \"binary\"")).unwrap();
+    assert_eq!(binary.payload, PayloadFormat::Binary);
+}
