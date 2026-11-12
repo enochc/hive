@@ -27,7 +27,14 @@ impl From<std::io::Error> for BtError {
 }
 impl std::fmt::Display for BtError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:}", std::error::Error::to_string(self))
+        // (Was `Error::to_string(self)`, which doesn't compile, and as
+        // Display it would have recursed.)
+        match self {
+            BtError::Unknown => f.write_str("unknown bluetooth error"),
+            BtError::Errno(code, msg) => write!(f, "errno {}: {}", code, msg),
+            BtError::Desc(msg) => f.write_str(msg),
+            BtError::IoError(e) => write!(f, "{}", e),
+        }
     }
 }
 use std::str::FromStr;

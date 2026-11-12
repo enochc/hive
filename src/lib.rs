@@ -17,6 +17,7 @@ pub mod hive_gui;
 mod hive_macros;
 mod logging;
 mod security;
+mod config;
 pub mod property;
 pub mod signal;
 pub mod hive;

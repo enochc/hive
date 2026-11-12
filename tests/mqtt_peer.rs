@@ -273,3 +273,70 @@ async fn cancel_while_broker_unreachable() {
     // panicked or hung the runtime.
     tokio::time::sleep(Duration::from_millis(200)).await;
 }
+
+/// todo.md 5.2: the broker going away must not stall TCP peers. The fake
+/// broker accepts one connection, acks it, then disappears, so rumqttc's
+/// request channel stops draining. Publishing used to be awaited on the
+/// hive's event loop, which then stopped forwarding to TCP peers as soon
+/// as that channel (64 requests) filled. Needs no real broker.
+#[tokio::test(flavor = "multi_thread")]
+async fn lost_broker_does_not_stall_tcp_peers() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let broker = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let broker_port = broker.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut s, _) = broker.accept().await.unwrap();
+        let mut buf = [0u8; 256];
+        let _ = s.read(&mut buf).await; // CONNECT
+        s.write_all(&[0x20, 0x02, 0x00, 0x00]).await.unwrap(); // CONNACK, accepted
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Socket and listener drop here: reconnects are refused from now on.
+    });
+
+    let cancel = CancellationToken::new();
+    let server = Hive::new_from_str_unknown(&format!(
+        r#"
+        name = "LostBroker"
+        listen = "127.0.0.1:34960"
+        [MQTT]
+        host = "127.0.0.1"
+        port = {broker_port}
+        client_id = "hive-lost-broker"
+        topic_prefix = "hive/lost"
+        [Properties]
+        n = 0
+        "#
+    ));
+    let mut srv = tokio::time::timeout(Duration::from_secs(5), server.go(true, cancel.clone()))
+        .await
+        .expect("hive never became ready");
+    tokio::time::sleep(Duration::from_millis(300)).await; // broker now gone
+
+    let mut client = Hive::new_from_str_unknown("connect = \"127.0.0.1:34960\"\nname = \"tcp\"");
+    let last = Arc::new(AtomicUsize::new(0));
+    let l = last.clone();
+    client.get_mut_property_by_name("n").unwrap().on_next(move |v| {
+        l.store(v.val.as_integer().unwrap() as usize, Ordering::Relaxed);
+    });
+    let _client = client.go(false, cancel.clone()).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while srv.peer_count() < 1 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(srv.peer_count(), 1, "TCP client never attached");
+
+    let updates = 500usize; // well past rumqttc's 64 request slots
+    for v in 1..=updates {
+        srv.set_property("n", Some(&(v as i64).into())).await;
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while last.load(Ordering::Relaxed) != updates && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        last.load(Ordering::Relaxed),
+        updates,
+        "TCP peer stalled behind the unreachable broker"
+    );
+    cancel.cancel();
+}

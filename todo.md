@@ -263,7 +263,7 @@ left, most important first. "Read, not reproduced" means the finding comes
 from reading the code and has no failing test or run behind it yet, so
 start by writing one.
 
-- [ ] **5.1 An empty MQTT text payload changes a property's type**
+- [x] **5.1 An empty MQTT text payload changes a property's type**
   With `payload = "text"`, `property::text_to_value` falls through to
   "string" for an empty payload whatever the property holds, so an empty
   message on an integer, float or boolean property turns it into `""`, and
@@ -280,8 +280,9 @@ start by writing one.
   the type unchanged.
   (Read, not reproduced; `text_inference_edge_cases` only covers the
   no-hint case.)
+  > Done 2026-11-11: an empty (or all-whitespace) payload is ignored unless the property is a string, where it is `""`. `text_to_value` now returns `Result<Option<Value>>`, `None` meaning ignore. A no-hint empty payload is ignored too, so it can't create a `""` property. Tests: `empty_text_never_changes_a_non_string_type` and an empty-payload step in `mqtt_text`.
 
-- [ ] **5.2 Keep MQTT publishing off the event loop**
+- [x] **5.2 Keep MQTT publishing off the event loop**
   The `PROPERTY` branch of `Hive::got_message` awaits
   `MqttPeerHandle::publish`, which awaits rumqttc's request channel (64
   slots, `AsyncClient::new(opts, 64)`). While the broker link is down
@@ -295,8 +296,9 @@ start by writing one.
   Done when: a test that stops the broker mid-run still sees TCP peers
   syncing within the usual latency.
   (Read, not reproduced.)
+  > Done 2026-11-11: the event loop calls `MqttPeerHandle::publish_latest`, which drops the payload into a per-topic latest-value queue (insertion-ordered) and returns; a `publish_task` per handle does the awaiting. Memory is bounded by the number of topics, and the broker gets current values once back. `publish` (awaiting) is still there for direct use. Test: `lost_broker_does_not_stall_tcp_peers` (fake broker that acks then disappears, no mosquitto needed), fails on the old code.
 
-- [ ] **5.3 Backpressure on the way in**
+- [x] **5.3 Backpressure on the way in**
   `read_loop` and `Handler` push into an unbounded channel
   (`mpsc::unbounded` in `Hive::new_from_str`). A peer or local producer
   that outruns the event loop grows memory without limit; nothing ever
@@ -310,8 +312,9 @@ start by writing one.
   Done when: a test with a slow `on_next` on the server and a raw client
   writing far more than the limit shows the client's writes blocking
   rather than the queue growing.
+  > Done 2026-11-11: `peer::Inbound` budgets, 256 KiB each (`INBOUND_LIMIT`). `read_loop` charges each batch and stops reading while over (TCP pushes back); the `Credit` in `SocketEvent::Frames` gives it back on drop. `Handler` updates go as a new `SocketEvent::Local` and share one budget per hive, released by the event loop once per batch (a per-message guard cost ~20% throughput). Senders resume at half the limit (resuming at the limit halved throughput). Dropping the `Hive` closes the budget so no `Handler` waits forever. Tests: `a_fast_sender_is_slowed_down_not_buffered`, `a_fast_local_producer_waits_for_the_hive`; both fail with the wait disabled. MQTT ingest is not budgeted, see 5.12.
 
-- [ ] **5.4 Range-check config integers**
+- [x] **5.4 Range-check config integers**
   `Hive::new_from_str` casts TOML integers straight to the target type:
   `wave_timeout_ms` and `handshake_timeout_ms` with `as u64` (a negative
   value becomes centuries), `max_message_size_bytes` with `as u32` (wraps
@@ -324,8 +327,9 @@ start by writing one.
   security config does.
   Done when: tests for a negative, an oversized and a quoted value each
   panic with the key's name.
+  > Done 2026-11-11: new `src/config.rs` (`get_int` with range, `get_str`, `get_bool`, `get_str_list`, `check_keys`), used by `Hive::new_from_str`, `[TLS]` and `[MQTT]`. Ranges: timeouts 1 ms to 1 day, `max_message_size_bytes` 64 B to 1 GiB, `max_peers` 0 to 1M, `max_pending_handshakes` 1 to 1M, MQTT `port` 1-65535, `keep_alive` 0-65535, `qos` 0-2 (3 used to mean 1). String keys (`listen`, `name`, ...) with another type now panic with the key name instead of an `unwrap` panic. Tests: `tests/config.rs`.
 
-- [ ] **5.5 Strict keys for `[MQTT]` and `[MQTT.TLS]`**
+- [x] **5.5 Strict keys for `[MQTT]` and `[MQTT.TLS]`**
   The `[TLS]` table now refuses unknown or wrongly typed keys; the MQTT
   tables still ignore them. Lower risk (a missing `ca` already errors and
   a missing client certificate just gets refused by the broker), but a
@@ -333,8 +337,9 @@ start by writing one.
   Reuse the helpers in `security::tls` (`check_keys`, `get_str`,
   `get_bool`).
   Done when: a misspelled key under each table refuses to start.
+  > Done 2026-11-11: `[MQTT]` and `[MQTT.TLS]` refuse unknown keys and wrong types via `config::check_keys`; `subscribe` must be an array of strings. Tests in `tests/config.rs`. An `[MQTT]` table without `host` still just disables MQTT.
 
-- [ ] **5.6 Cheaper `Property::set_value`**
+- [x] **5.6 Cheaper `Property::set_value`**
   Now the largest single cost per message (PERF_NOTES.md): the
   `tokio::sync::watch` send takes a write lock and eight `Notify` mutexes
   whether or not anyone is subscribed. About 13% of worker CPU at 1
@@ -345,8 +350,9 @@ start by writing one.
   `tests/streams.rs`).
   Done when: `tests/streams.rs` and `tests/property_backoff.rs` pass and
   the benchmark rows improve.
+  > Done 2026-11-11: a `Property`'s own `PropertyStream` holds no receiver until first polled, and `set_value` stores without notifying while `receiver_count() == 0`. 8 rx throughput +15-25% (PERF_NOTES.md). Semantics change: the original `stream` field yields changes from its first poll, not from creation; clones unchanged. Unit test `streams_subscribe_lazily_and_see_later_changes`; `tests/streams.rs` and `tests/property_backoff.rs` pass.
 
-- [ ] **5.7 `Hive::go(true, ..)` never returns if the hive fails to start**
+- [x] **5.7 `Hive::go(true, ..)` never returns if the hive fails to start**
   `go` spawns `run(..).await.expect("Failed to run Hive")` and then waits
   on `ready`. If `run` returns an error first (the listen address is
   already in use, say) the spawned task panics and nothing ever notifies
@@ -355,8 +361,9 @@ start by writing one.
   Done when: a test that binds the port first sees `go(true, ..)` come
   back (with an error or a not-connected handler) instead of hanging.
   (Read, not reproduced.)
+  > Done 2026-11-11: new `Hive::try_go` returns a failure before readiness as `Err`; `go(true, ..)` panics with it in the caller. A failure after that, or with `wait` unset, is logged instead of panicking the task. Test: `go_reports_a_hive_that_cannot_start`.
 
-- [ ] **5.8 A test for the event-loop starvation bug**
+- [x] **5.8 A test for the event-loop starvation bug**
   3.7 fixed it but has no regression test: the reproduction stopped the
   process from outside (`kill -STOP`/`-CONT` in 30 ms bursts during a 12M
   update benchmark run). A deterministic version probably needs a
@@ -365,23 +372,26 @@ start by writing one.
   the peer is still attached and gets the last value.
   Done when: the test fails with the `yield_now` in `receive_events`
   removed and passes with it.
+  > Done 2026-11-11, differently than planned: since 5.3 no real sender can build a long enough backlog (Handler and peers wait at 256 KiB), so a backlog-plus-peer test passes even without the yield. `hive::tests::event_loop_yields_between_batches` queues 300k events straight into the channel on a current-thread runtime and requires a 1 ms timer to keep firing while they are handled. Fails with the `yield_now` removed (debug and release), passes with it.
 
-- [ ] **5.9 Steadier benchmark**
+- [x] **5.9 Steadier benchmark**
   50,000 updates now finish in 15-35 ms. The first run in the process
   (plain, 1 receiver) reads 1.9M-2.5M where the same code gives 2.9M-3.5M
   at 500,000 updates, so the table in PERF_NOTES.md is comparing warm-up.
   Add an untimed warm-up pass, or raise the default count, and say so in
   PERF_NOTES.md since earlier rows used 50,000.
+  > Done 2026-11-11: untimed 200k-update warm-up per benchmark, default 500,000 updates, noted in PERF_NOTES.md with a row for the old code measured the new way.
 
-- [ ] **5.10 `websock` and `bluetooth` don't build**
+- [x] **5.10 `websock` and `bluetooth` don't build**
   `cargo check --features websock` fails with 6 errors and
   `--features bluetooth` with 17 on macOS, identically on `master`, so
   not caused by this branch. Both construct `SocketEvent`s, and 1.5 and
   3.7 changed that type without being able to compile them. Either fix
   them (bluetooth on a Linux machine) or remove them; see the websocket
   note below.
+  > Done 2026-11-11, fixed rather than removed: imports, `unbounded_send`, tokio-util codec traits for `websock`; `uuid` 0.8 (bluster 0.2's version), imports and a broken (and recursive) `Display` for `bluetooth`. `cargo check` passes on macOS and for `aarch64-unknown-linux-gnu` with `--features bluetooth,websock,mqtt` (stub pkg-config for dbus, so type-check only: not linked or run). `websock` is still dead code, see the note below.
 
-- [ ] **5.11 Write down the public API changes**
+- [x] **5.11 Write down the public API changes**
   This branch changes what downstream crates see, with no changelog:
   - `hive::LevelFilter` is Hive's own enum, no longer a re-export of
     `log::LevelFilter`; `SimpleLogger` and `LOGGER` are gone.
@@ -394,6 +404,21 @@ start by writing one.
   - Servers reject connections that don't open with `HVEP`.
   Add a CHANGELOG (or a README section) and decide whether `0.2.201` is
   the right version for it.
+  > Done 2026-11-11: CHANGELOG.md, including this phase's changes. Version bumped to 0.3.0.
+
+- [ ] **5.12 Budget MQTT ingest too**
+  `MqttPeer::run` forwards every incoming publish into the event channel
+  with no limit, so a broker flooding a subscribed topic can still grow
+  the queue (5.3 covered TCP peers and `Handler`s). Charge it to an
+  `Inbound` like `Handler` does; rumqttc then stops reading from the
+  broker once its own channel fills.
+
+- [ ] **5.13 A hive with no `listen`/`connect` never handles updates**
+  `Hive::run` only enters `receive_events` when `connected` is set, which
+  only TCP, bluetooth or MQTT setup does. A hive with none of them takes
+  `Handler::set_property` calls into a queue nobody reads: `on_next` never
+  fires. Found while writing the 5.3 tests (they listen on a port to get an
+  event loop). Decide whether a standalone hive should run its loop.
 
 ## Not planned / notes
 

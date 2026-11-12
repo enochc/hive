@@ -9,7 +9,7 @@ use tokio::{
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use base64::{Engine as _, engine::general_purpose};
 use bytes::{Bytes, BytesMut};
-use crate::SinkExt;
+use tokio_util::codec::{Decoder, Encoder};
 use futures::channel::mpsc::UnboundedSender;
 #[allow(unused_imports)]
 use crate::logging::{debug, info, trace};
@@ -68,7 +68,7 @@ impl WebSock {
                 tokio::spawn(async move {
                     read_loop(&sender, reader, &addr).await;
                     debug!("<<< READ DONE, send hangup");
-                    let _ = sender.send(SocketEvent::Hangup { from }).await;
+                    let _ = sender.unbounded_send(SocketEvent::Hangup { from });
                     debug!("<<SENT");
                 });
 
@@ -143,7 +143,7 @@ async fn read_loop(
                                 from: from_string.clone(),
                                 msg: received,
                             };
-                            let _ = sender.send(evnt).await;
+                            let _ = sender.unbounded_send(evnt);
                         }
                         Opcode::Close => {
                             debug!("CLOSE socket");

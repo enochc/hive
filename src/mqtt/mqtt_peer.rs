@@ -25,8 +25,8 @@
 /// For example, with prefix `"hive/home"` and property `"lightValue"`, the
 /// topic would be `"hive/home/lightValue"`.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -86,6 +86,15 @@ pub struct MqttConfig {
     tls: Option<Arc<rumqttc::tokio_rustls::rustls::ClientConfig>>,
 }
 
+/// Every key `[MQTT]` understands; anything else is refused.
+const MQTT_KEYS: [&str; 12] = [
+    "host", "port", "client_id", "topic_prefix", "qos", "keep_alive", "subscribe",
+    "payload", "username", "password", "password_env", "TLS",
+];
+/// Every key `[MQTT.TLS]` understands.
+#[cfg(feature = "tls")]
+const MQTT_TLS_KEYS: [&str; 4] = ["ca", "cert", "key", "prefer_chacha20"];
+
 /// Encoding of MQTT payloads, the `payload` key under `[MQTT]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PayloadFormat {
@@ -129,9 +138,14 @@ impl MqttConfig {
         Self::try_from_toml(table).unwrap_or_else(|e| panic!("[MQTT]: {}", e))
     }
 
-    /// Like `from_toml`, but security misconfiguration is an `Err`.
+    /// Like `from_toml`, but misconfiguration is an `Err`: an unknown key
+    /// (a misspelled `password_env` would otherwise connect without a
+    /// password), a value of the wrong type, or one out of range.
     pub fn try_from_toml(table: &toml::Value) -> std::result::Result<Option<MqttConfig>, String> {
-        let host = match table.get("host").and_then(|v| v.as_str()) {
+        use crate::config::{check_keys, get_bool, get_int, get_str, get_str_list};
+        const T: &str = "[MQTT]";
+        check_keys(table, T, &MQTT_KEYS)?;
+        let host = match get_str(table, T, "host")? {
             Some(h) => h.to_string(),
             None => return Ok(None),
         };
@@ -143,25 +157,27 @@ impl MqttConfig {
         #[cfg(feature = "tls")]
         let tls = match tls_table {
             Some(t) => {
-                let s = |k: &str| t.get(k).and_then(|v| v.as_str());
-                let ca = s("ca").ok_or("[MQTT.TLS] needs `ca`")?;
-                let prefer = t.get("prefer_chacha20").and_then(|v| v.as_bool()).unwrap_or(false);
-                Some(Arc::new(crate::security::tls::client_config(ca, s("cert"), s("key"), prefer)?))
+                const TT: &str = "[MQTT.TLS]";
+                check_keys(t, TT, &MQTT_TLS_KEYS)?;
+                let ca = get_str(t, TT, "ca")?.ok_or("[MQTT.TLS] needs `ca`")?;
+                let prefer = get_bool(t, TT, "prefer_chacha20")?.unwrap_or(false);
+                let (cert, key) = (get_str(t, TT, "cert")?, get_str(t, TT, "key")?);
+                Some(Arc::new(crate::security::tls::client_config(ca, cert, key, prefer)?))
             }
             None => None,
         };
         let default_port = if tls_table.is_some() { 8883 } else { 1883 };
-        let port = table.get("port").and_then(|v| v.as_integer()).unwrap_or(default_port) as u16;
+        let port = get_int(table, T, "port", 1, 65535)?.unwrap_or(default_port);
 
-        let payload = match table.get("payload").and_then(|v| v.as_str()) {
+        let payload = match get_str(table, T, "payload")? {
             None | Some("binary") => PayloadFormat::Binary,
             Some("text") => PayloadFormat::Text,
             Some(other) => return Err(format!("payload = {:?}, expected \"binary\" or \"text\"", other)),
         };
-        let username = table.get("username").and_then(|v| v.as_str()).map(String::from);
-        let password = if let Some(p) = table.get("password").and_then(|v| v.as_str()) {
+        let username = get_str(table, T, "username")?.map(String::from);
+        let password = if let Some(p) = get_str(table, T, "password")? {
             Some(p.to_string())
-        } else if let Some(var) = table.get("password_env").and_then(|v| v.as_str()) {
+        } else if let Some(var) = get_str(table, T, "password_env")? {
             Some(std::env::var(var).map_err(|_| format!("password_env: {} is not set", var))?)
         } else {
             None
@@ -169,36 +185,17 @@ impl MqttConfig {
         if password.is_some() && username.is_none() {
             return Err("`password` needs a `username`".into());
         }
-        let client_id = table
-            .get("client_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("hive-mqtt")
-            .to_string();
-        let topic_prefix = table
-            .get("topic_prefix")
-            .and_then(|v| v.as_str())
-            .unwrap_or("hive")
-            .to_string();
-        let qos_int = table.get("qos").and_then(|v| v.as_integer()).unwrap_or(1);
-        let qos = match qos_int {
+        let client_id = get_str(table, T, "client_id")?.unwrap_or("hive-mqtt").to_string();
+        let topic_prefix = get_str(table, T, "topic_prefix")?.unwrap_or("hive").to_string();
+        let qos = match get_int::<u8>(table, T, "qos", 0, 2)?.unwrap_or(1) {
             0 => QoS::AtMostOnce,
-            2 => QoS::ExactlyOnce,
-            _ => QoS::AtLeastOnce,
+            1 => QoS::AtLeastOnce,
+            _ => QoS::ExactlyOnce,
         };
-        let keep_alive = table
-            .get("keep_alive")
-            .and_then(|v| v.as_integer())
-            .unwrap_or(30) as u64;
+        // Seconds, as MQTT carries it (u16); 0 turns keep-alive off.
+        let keep_alive: u64 = get_int(table, T, "keep_alive", 0, 65535)?.unwrap_or(30);
 
-        let subscriptions = table
-            .get("subscribe")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let subscriptions = get_str_list(table, T, "subscribe")?.unwrap_or_default();
 
         Ok(Some(MqttConfig {
             host,
@@ -499,10 +496,66 @@ pub async fn spawn_mqtt_peer(
         }
     });
 
+    let queue = Arc::new(PublishQueue::default());
+    tokio::spawn(publish_task(client.clone(), config.qos, Arc::downgrade(&queue), queue.wake.clone()));
+
     Ok(MqttPeerHandle {
         client,
         config: config.clone(),
+        queue,
     })
+}
+
+/// Outgoing publishes waiting for the broker, at most one per topic.
+///
+/// The hive's event loop must never wait on the broker: rumqttc's request
+/// channel holds 64 entries and stops draining while the broker link is
+/// down, so awaiting `AsyncClient::publish` there would stall every TCP
+/// peer along with it. `MqttPeerHandle::publish_latest` drops the value
+/// in here instead and returns at once; `publish_task` does the waiting.
+/// A newer value for a topic replaces the queued one, so memory is
+/// bounded by the number of topics however long the broker is away, and
+/// the broker sees the latest state once it is back.
+#[derive(Default)]
+struct PublishQueue {
+    pending: Mutex<Pending>,
+    wake: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Default)]
+struct Pending {
+    /// Topics in the order they first became pending.
+    order: VecDeque<String>,
+    latest: HashMap<String, Vec<u8>>,
+}
+
+impl Drop for PublishQueue {
+    fn drop(&mut self) {
+        // Last handle gone: let `publish_task` see that and exit.
+        self.wake.notify_one();
+    }
+}
+
+async fn publish_task(client: AsyncClient, qos: QoS, queue: Weak<PublishQueue>, wake: Arc<tokio::sync::Notify>) {
+    loop {
+        wake.notified().await;
+        loop {
+            let next = {
+                let Some(q) = queue.upgrade() else { return };
+                let mut p = q.pending.lock().unwrap();
+                p.order.pop_front().map(|topic| {
+                    let payload = p.latest.remove(&topic).unwrap_or_default();
+                    (topic, payload)
+                })
+            };
+            let Some((topic, payload)) = next else { break };
+            if let Err(e) = client.publish(&topic, qos, false, payload).await {
+                // The event loop task is gone; nothing more will be sent.
+                warn!("MQTT publish to {} failed: {:?}", topic, e);
+                return;
+            }
+        }
+    }
 }
 
 /// A lightweight handle for publishing property changes back to the MQTT
@@ -511,11 +564,34 @@ pub async fn spawn_mqtt_peer(
 pub struct MqttPeerHandle {
     client: AsyncClient,
     config: MqttConfig,
+    queue: Arc<PublishQueue>,
 }
 
 impl MqttPeerHandle {
-    /// Publish a property update to the MQTT broker using the Hive
-    /// binary wire format.
+    /// Queue a property update for the broker without waiting. If an
+    /// update for the same topic is still queued it is replaced, so while
+    /// the broker is slow or unreachable only the latest value per
+    /// property is kept. This is what the hive's event loop uses.
+    pub fn publish_latest(&self, property: &Property) {
+        let name = property.get_name();
+        if name.is_empty() {
+            return;
+        }
+        let topic = format!("{}/{}", self.config.topic_prefix, name);
+        let payload = self.config.payload.encode(property).to_vec();
+        {
+            let mut p = self.queue.pending.lock().unwrap();
+            if p.latest.insert(topic.clone(), payload).is_none() {
+                p.order.push_back(topic);
+            }
+        }
+        self.queue.wake.notify_one();
+    }
+
+    /// Publish a property update to the MQTT broker and wait until rumqttc
+    /// has accepted it, which can take as long as the broker is away.
+    /// Bypasses the `publish_latest` queue, so ordering between the two
+    /// isn't guaranteed.
     pub async fn publish(&self, property: &Property) -> Result<()> {
         let name = property.get_name();
         if name.is_empty() {

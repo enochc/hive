@@ -69,6 +69,8 @@ handler.set_property("lightValue", Some(&42.into())).await;
 handler.send_to_peer("Client", "hello there").await;
 ```
 
+`go(true, ..)` waits until the hive is listening, connected or attached to its MQTT broker, and panics if it fails before that (the listen port is taken, say). `try_go` returns that failure as an `Err` instead.
+
 ## Transport Protocols
 
 | Protocol | Feature Flag | Use Case |
@@ -116,7 +118,9 @@ mosquitto_pub -t hive/home/temperature -m 21.5   # Hive receives 21.5
 mosquitto_sub -t 'hive/home/#' -v                # prints e.g. "hive/home/heater true"
 ```
 
-Values are published as plain text: `72`, `21.5` (floats always keep a decimal point), `true`/`false`, or the string itself. Incoming text is read as the property's current type, so a string property stays a string when someone publishes `123`, a float property reads `21` as 21.0, and a boolean property also accepts `on`/`off`, `yes`/`no` and `1`/`0` (case-insensitive). Properties without a value yet are inferred: `true`/`false`, then integer, then float, then string. Every node sharing a topic prefix should use the same `payload` setting.
+Values are published as plain text: `72`, `21.5` (floats always keep a decimal point), `true`/`false`, or the string itself. Incoming text is read as the property's current type, so a string property stays a string when someone publishes `123`, a float property reads `21` as 21.0, and a boolean property also accepts `on`/`off`, `yes`/`no` and `1`/`0` (case-insensitive). Properties without a value yet are inferred: `true`/`false`, then integer, then float, then string. An empty payload (how MQTT clears a retained message) is ignored unless the property is a string, where it sets `""`, so it never turns a number or boolean into a string. Every node sharing a topic prefix should use the same `payload` setting.
+
+Publishing never holds up the rest of the hive. Outgoing updates are queued, with only the latest value kept per topic, and sent by a background task. While the broker is slow or unreachable, TCP peers keep syncing and the broker gets the current values once it is back.
 
 ## Configuration
 
@@ -136,6 +140,8 @@ let hive = Hive::new("config.toml");
 ```
 
 ### Config Reference
+
+Hive checks its config when it is built and panics with a message naming the key if a value has the wrong type or is out of range (`port = "1883"`, a negative timeout, `max_message_size_bytes = 0`). `[TLS]`, `[MQTT]` and `[MQTT.TLS]` also refuse keys they don't know, so a typo such as `password_evn` can't quietly leave a setting off. Ranges: timeouts 1 ms to one day, `max_message_size_bytes` 64 B to 1 GiB, `max_peers` 0 to 1,000,000, `max_pending_handshakes` 1 to 1,000,000, MQTT `port` 1-65535, `keep_alive` 0-65535 s (0 turns it off), `qos` 0-2.
 
 ```toml
 # Identity
@@ -212,7 +218,7 @@ handler.set_property_debounced("motor_speed", 72.0.into(), 50).await;
 
 **Typed values** Properties support bool, string, integers (i8 through i64, auto-sized to the smallest fit), and f64 floats. The binary wire format encodes values with type tags for compact transmission.
 
-**Reactive streams** Every property exposes a `tokio::sync::watch`-backed stream. Multiple consumers can independently observe changes:
+**Reactive streams** Every property exposes a `tokio::sync::watch`-backed stream. Multiple consumers can independently observe changes. Each clone yields the changes made after it was cloned; a property's own `stream` field starts when it is first polled. Updates to a property nobody is streaming skip the channel's wake-ups entirely:
 
 ```rust
 let mut stream = prop.stream.clone();
@@ -248,6 +254,8 @@ max_message_size_bytes = 4194304   # 4 MiB
 ```
 
 **Slow or stuck peers** Each TCP peer has its own writer task and send buffer (256 KiB), so a peer that stops reading can't stall updates to everyone else. A slow peer is waited for; one whose buffer is full and whose socket accepts nothing for 2 seconds is dropped. A malformed message also drops only the peer that sent it, and a new connection gets `handshake_timeout_ms` to complete the handshake without holding up anyone else.
+
+**Backpressure on the way in** Each TCP peer may have 256 KiB that the hive has received but not yet handled. Past that, Hive stops reading from that peer's socket until the hive has worked half of it off, so TCP flow control slows the sender instead of memory growing. A hive's `Handler`s share the same kind of budget: `set_property`, `send_property` and `delete_property` normally return at once, but wait while the event loop is that far behind. Updates arriving from MQTT are not budgeted yet.
 
 **Connection limits (`max_peers`, `max_pending_handshakes`)** A server can cap how many clients it keeps (`max_peers`, unlimited by default) and how many connections may be mid-handshake at once (`max_pending_handshakes`, default 64). Connections over either limit are closed straight after `accept`, before any handshake or TLS work. To keep a server off the LAN entirely, listen on loopback: `listen = "127.0.0.1:3000"`. A bare port such as `listen = "3000"` binds the machine's LAN address.
 

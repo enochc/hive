@@ -333,3 +333,113 @@ async fn a_message_larger_than_the_send_buffer_syncs_both_ways() {
     let n = got.len();
     assert!(n >= 2 && got[n - 2] == down, "large message missing or damaged on the way down");
 }
+
+/// todo.md 5.3: a peer that sends faster than the hive can handle is
+/// slowed down by TCP instead of growing the hive's queue. The server's
+/// `on_next` takes 1 ms per update, so it handles about 17 KB/s of these
+/// frames; the raw client tries to write 64 MiB. With backpressure its
+/// writes block once the hive's inbound budget (256 KiB) and the socket
+/// buffers are full; without it `read_loop` keeps reading and queueing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fast_sender_is_slowed_down_not_buffered() {
+    let port = 34720;
+    let mut h = Hive::new_from_str_unknown(&format!(
+        "listen = \"127.0.0.1:{port}\"\nname = \"Serv\"\n[Properties]\nm = 0"
+    ));
+    let slow = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let s = slow.clone();
+    h.get_mut_property_by_name("m").unwrap().on_next(move |_| {
+        if s.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let cancel = CancellationToken::new();
+    let _srv = h.go(true, cancel.clone()).await;
+
+    let mut conn = raw_client(port).await;
+    let mut chunk = Vec::new();
+    while chunk.len() < 64 * 1024 {
+        chunk.extend(property_frame("m", chunk.len() as i32));
+    }
+    let total = 64 * 1024 * 1024;
+    let written = Arc::new(AtomicUsize::new(0));
+    let w = written.clone();
+    let writer = tokio::spawn(async move {
+        while w.load(Ordering::Relaxed) < total {
+            if conn.write_all(&chunk).await.is_err() {
+                break;
+            }
+            w.fetch_add(chunk.len(), Ordering::Relaxed);
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let after = written.load(Ordering::Relaxed);
+    // Inbound budget + one read chunk + kernel socket buffers on both
+    // ends; loopback buffers are a few MiB at most.
+    assert!(
+        after < 16 * 1024 * 1024,
+        "client wrote {} MiB in 1.5 s to a hive handling ~17 KB/s: nothing pushed back",
+        after / (1024 * 1024)
+    );
+    assert!(after > 0, "client couldn't write at all");
+    slow.store(false, Ordering::Relaxed);
+    writer.abort();
+    cancel.cancel();
+}
+
+/// Same for a local producer: `Handler::set_property` waits once the
+/// hive's handlers have its inbound budget queued, instead of queuing
+/// without limit ahead of a slow event loop.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fast_local_producer_waits_for_the_hive() {
+    // A listen address so the hive has an event loop running at all.
+    let mut h = Hive::new_from_str_unknown("listen = \"127.0.0.1:34721\"\nname = \"Local\"\n[Properties]\nm = 0");
+    let slow = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let s = slow.clone();
+    h.get_mut_property_by_name("m").unwrap().on_next(move |_| {
+        if s.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let cancel = CancellationToken::new();
+    let mut handler = h.go(false, cancel.clone()).await;
+    let sent = Arc::new(AtomicUsize::new(0));
+    let n = sent.clone();
+    let producer = tokio::spawn(async move {
+        for v in 0..1_000_000i64 {
+            handler.set_property("m", Some(&v.into())).await;
+            n.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    // 256 KiB of ~22 byte updates is ~12k queued, plus ~1k handled.
+    let after = sent.load(Ordering::Relaxed);
+    assert!(after < 50_000, "{after} updates queued ahead of a hive handling ~1k/s");
+    slow.store(false, Ordering::Relaxed);
+    producer.abort();
+    cancel.cancel();
+}
+
+/// todo.md 5.7: a hive that can't start used to leave `go(true, ..)`
+/// waiting forever (the run task panicked, nothing woke the caller).
+#[tokio::test(flavor = "multi_thread")]
+async fn go_reports_a_hive_that_cannot_start() {
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = taken.local_addr().unwrap().port();
+    let config = format!("listen = \"127.0.0.1:{port}\"\nname = \"Busy\"");
+
+    let r = tokio::time::timeout(
+        Duration::from_secs(5),
+        Hive::new_from_str_unknown(&config).try_go(true, CancellationToken::new()),
+    )
+    .await
+    .expect("try_go(true) hung on a port that is already in use");
+    let err = r.err().expect("binding a taken port succeeded");
+    assert!(err.to_string().to_lowercase().contains("address"), "unexpected error: {err}");
+
+    // `go` turns the same failure into a panic in the caller.
+    let go = tokio::spawn(async move { Hive::new_from_str_unknown(&config).go(true, CancellationToken::new()).await });
+    let joined = tokio::time::timeout(Duration::from_secs(5), go).await.expect("go(true) hung");
+    assert!(matches!(joined, Err(e) if e.is_panic()), "go(true) returned instead of panicking");
+    drop(taken);
+}

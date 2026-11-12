@@ -148,9 +148,15 @@ fn need(bytes: &Bytes, n: usize, what: &str) -> std::result::Result<(), DecodeEr
 ///
 /// The watch channel also serves as the canonical storage for the property's
 /// current value, eliminating the need for a separate `Arc<RwLock<...>>`.
+///
+/// The `PropertyStream` inside a `Property` holds no receiver until it is
+/// first polled; only clones (and polled originals) subscribe. While nobody
+/// is subscribed `Property::set_value` stores the value without waking
+/// anyone, which skips the watch channel's notify (eight mutexes) on every
+/// update, the largest per-message cost before (todo.md 5.6).
 pub struct PropertyStream {
     sender: Arc<watch::Sender<Option<PropertyValue>>>,
-    stream: WatchStream<Option<PropertyValue>>,
+    stream: Option<WatchStream<Option<PropertyValue>>>,
 }
 
 impl Clone for PropertyStream {
@@ -160,27 +166,22 @@ impl Clone for PropertyStream {
         // matching the semantics of the previous broadcast-based implementation.
         PropertyStream {
             sender: self.sender.clone(),
-            stream: WatchStream::from_changes(self.sender.subscribe()),
+            stream: Some(WatchStream::from_changes(self.sender.subscribe())),
         }
     }
 }
 
 impl Default for PropertyStream {
     fn default() -> Self {
-        let (sender, rx) = watch::channel(None);
-        PropertyStream {
-            sender: Arc::new(sender),
-            stream: WatchStream::from_changes(rx),
-        }
+        Self::new(None)
     }
 }
 
 impl PropertyStream {
     fn new(initial: Option<PropertyValue>) -> Self {
-        let (sender, rx) = watch::channel(initial);
         PropertyStream {
-            sender: Arc::new(sender),
-            stream: WatchStream::from_changes(rx),
+            sender: Arc::new(watch::channel(initial).0),
+            stream: None,
         }
     }
 }
@@ -192,8 +193,14 @@ impl Stream for PropertyStream {
         // WatchStream yields Option<PropertyValue>.
         // We filter out None (property cleared/deleted) and only surface real values.
         // When the watch sender is dropped, the stream closes naturally.
+        // A `Property`'s own stream subscribes when first polled, so it
+        // yields changes from then on.
+        let this = &mut *self;
+        let stream = this
+            .stream
+            .get_or_insert_with(|| WatchStream::from_changes(this.sender.subscribe()));
         loop {
-            match Pin::new(&mut self.stream).poll_next(cx) {
+            match Pin::new(&mut *stream).poll_next(cx) {
                 Poll::Ready(Some(Some(val))) => return Poll::Ready(Some(val)),
                 Poll::Ready(Some(None)) => continue, // Value cleared, keep waiting
                 Poll::Ready(None) => return Poll::Ready(None), // Sender dropped, stream ends
@@ -483,13 +490,20 @@ impl Property {
     {
         // Compare and store under one lock. The watch channel is updated
         // straight away so get_value() and stream subscribers reflect the
-        // latest state; an unchanged value notifies nobody.
-        let changed = self.stream.sender.send_if_modified(|current| {
+        // latest state; an unchanged value notifies nobody. With no stream
+        // subscribed the closure stores the value but reports "unchanged",
+        // so the channel skips waking receivers that don't exist. A stream
+        // cloned at the same moment as this update may not see it as new,
+        // the same either-way outcome as cloning just after it.
+        let mut changed = false;
+        let sender = &self.stream.sender;
+        sender.send_if_modified(|current| {
             if current.as_ref() == Some(&new_prop) {
                 false
             } else {
                 *current = Some(new_prop.clone());
-                true
+                changed = true;
+                sender.receiver_count() > 0
             }
         });
 
@@ -744,7 +758,8 @@ pub fn try_bytes_to_property_value(
 /// Plain-text form of a value, for MQTT `payload = "text"`: `72`, `1.5`,
 /// `true`, or the string itself. Floats always keep a decimal point (`2.0`,
 /// not `2`) so a receiver inferring types reads them back as floats.
-/// `None` is an empty payload.
+/// `None` is an empty payload, which a receiving hive ignores unless the
+/// property is a string (see `text_to_value`).
 pub fn value_to_text(value: Option<&Value>) -> Bytes {
     match value {
         None => Bytes::new(),
@@ -763,9 +778,24 @@ pub fn value_to_text(value: Option<&Value>) -> Bytes {
 /// float, then string. Booleans also accept on/off, yes/no and 1/0 when
 /// the property is already a bool (Home Assistant style). Surrounding
 /// whitespace is ignored for everything but strings. Non-UTF-8 is an error.
-pub fn text_to_value(text: &[u8], hint: Option<&Value>) -> std::result::Result<Value, DecodeError> {
+///
+/// An empty (or all-whitespace) payload is `Ok(None)`, meaning "ignore it",
+/// unless the property is a string, where it is the empty string. Empty
+/// payloads are routine in MQTT (clearing a retained message), and reading
+/// one as `""` would turn a number or bool property into a string.
+pub fn text_to_value(text: &[u8], hint: Option<&Value>) -> std::result::Result<Option<Value>, DecodeError> {
     let raw = std::str::from_utf8(text).map_err(|e| DecodeError(format!("text payload not UTF-8: {}", e)))?;
     let t = raw.trim();
+    if let Some(Value::String(_)) = hint {
+        return Ok(Some(Value::String(raw.to_string())));
+    }
+    if t.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(infer_text(raw, t, hint)))
+}
+
+fn infer_text(raw: &str, t: &str, hint: Option<&Value>) -> Value {
     let as_bool = |loose: bool| -> Option<bool> {
         match t.to_ascii_lowercase().as_str() {
             "true" => Some(true),
@@ -780,34 +810,33 @@ pub fn text_to_value(text: &[u8], hint: Option<&Value>) -> std::result::Result<V
     let as_float = || t.bytes().any(|b| b.is_ascii_digit()).then(|| t.parse::<f64>().ok()).flatten();
 
     match hint {
-        Some(Value::String(_)) => return Ok(Value::String(raw.to_string())),
         Some(Value::Float(_)) => {
             if let Some(f) = as_float() {
-                return Ok(Value::Float(f));
+                return Value::Float(f);
             }
         }
         Some(Value::Integer(_)) => {
             if let Ok(i) = t.parse::<i64>() {
-                return Ok(Value::Integer(i));
+                return Value::Integer(i);
             }
         }
         Some(Value::Boolean(_)) => {
             if let Some(b) = as_bool(true) {
-                return Ok(Value::Boolean(b));
+                return Value::Boolean(b);
             }
         }
         _ => {}
     }
     if let Some(b) = as_bool(false) {
-        return Ok(Value::Boolean(b));
+        return Value::Boolean(b);
     }
     if let Ok(i) = t.parse::<i64>() {
-        return Ok(Value::Integer(i));
+        return Value::Integer(i);
     }
     if let Some(f) = as_float() {
-        return Ok(Value::Float(f));
+        return Value::Float(f);
     }
-    Ok(Value::String(raw.to_string()))
+    Value::String(raw.to_string())
 }
 
 #[cfg(test)]
@@ -819,7 +848,7 @@ mod tests {
         for v in [Value::Integer(72), Value::Integer(-5), Value::Float(2.0), Value::Float(1.5),
                   Value::Boolean(true), Value::String("hello world".into())] {
             let text = value_to_text(Some(&v));
-            assert_eq!(text_to_value(&text, None).unwrap(), v, "{:?} via {:?}", v, text);
+            assert_eq!(text_to_value(&text, None).unwrap(), Some(v.clone()), "{:?} via {:?}", v, text);
         }
         assert_eq!(&value_to_text(Some(&Value::Float(2.0)))[..], b"2.0");
     }
@@ -827,25 +856,56 @@ mod tests {
     #[test]
     fn text_parsing_follows_the_existing_type() {
         let s = Value::String("x".into());
-        assert_eq!(text_to_value(b"72", Some(&s)).unwrap(), Value::String("72".into()));
-        assert_eq!(text_to_value(b" padded ", Some(&s)).unwrap(), Value::String(" padded ".into()));
-        assert_eq!(text_to_value(b"72", Some(&Value::Float(0.0))).unwrap(), Value::Float(72.0));
-        assert_eq!(text_to_value(b"ON", Some(&Value::Boolean(false))).unwrap(), Value::Boolean(true));
-        assert_eq!(text_to_value(b"0", Some(&Value::Boolean(true))).unwrap(), Value::Boolean(false));
+        assert_eq!(text_to_value(b"72", Some(&s)).unwrap(), Some(Value::String("72".into())));
+        assert_eq!(text_to_value(b" padded ", Some(&s)).unwrap(), Some(Value::String(" padded ".into())));
+        assert_eq!(text_to_value(b"72", Some(&Value::Float(0.0))).unwrap(), Some(Value::Float(72.0)));
+        assert_eq!(text_to_value(b"ON", Some(&Value::Boolean(false))).unwrap(), Some(Value::Boolean(true)));
+        assert_eq!(text_to_value(b"0", Some(&Value::Boolean(true))).unwrap(), Some(Value::Boolean(false)));
         // Doesn't fit the hint: fall back to inference rather than drop it.
-        assert_eq!(text_to_value(b"1.5", Some(&Value::Integer(0))).unwrap(), Value::Float(1.5));
-        assert_eq!(text_to_value(b"72\n", None).unwrap(), Value::Integer(72));
+        assert_eq!(text_to_value(b"1.5", Some(&Value::Integer(0))).unwrap(), Some(Value::Float(1.5)));
+        assert_eq!(text_to_value(b"72\n", None).unwrap(), Some(Value::Integer(72)));
     }
 
     #[test]
     fn text_inference_edge_cases() {
-        assert_eq!(text_to_value(b"nan", None).unwrap(), Value::String("nan".into()));
-        assert_eq!(text_to_value(b"info", None).unwrap(), Value::String("info".into()));
-        assert_eq!(text_to_value(b"1e3", None).unwrap(), Value::Float(1000.0));
-        assert_eq!(text_to_value(b"", None).unwrap(), Value::String("".into()));
+        assert_eq!(text_to_value(b"nan", None).unwrap(), Some(Value::String("nan".into())));
+        assert_eq!(text_to_value(b"info", None).unwrap(), Some(Value::String("info".into())));
+        assert_eq!(text_to_value(b"1e3", None).unwrap(), Some(Value::Float(1000.0)));
+        assert_eq!(text_to_value(b"", None).unwrap(), None);
         // on/off only count as bools for a property that is already a bool.
-        assert_eq!(text_to_value(b"on", None).unwrap(), Value::String("on".into()));
+        assert_eq!(text_to_value(b"on", None).unwrap(), Some(Value::String("on".into())));
         assert!(text_to_value(&[0xff, 0xfe], None).is_err());
+    }
+
+    #[test]
+    fn empty_text_never_changes_a_non_string_type() {
+        for hint in [Value::Integer(5), Value::Float(1.5), Value::Boolean(true)] {
+            assert_eq!(text_to_value(b"", Some(&hint)).unwrap(), None, "{:?}", hint);
+            assert_eq!(text_to_value(b" \n", Some(&hint)).unwrap(), None, "{:?}", hint);
+        }
+        let s = Value::String("x".into());
+        assert_eq!(text_to_value(b"", Some(&s)).unwrap(), Some(Value::String("".into())));
+    }
+
+    #[tokio::test]
+    async fn streams_subscribe_lazily_and_see_later_changes() {
+        use futures::StreamExt;
+        let mut p = Property::from_name("x", Some(1.into()));
+        // Nobody subscribed: the value is still stored.
+        assert!(p.set_value(2.into()));
+        assert_eq!(p.get_value(), Some(Value::Integer(2)));
+        assert!(!p.set_value(2.into()), "unchanged value reported as a change");
+
+        let mut clone = p.stream.clone();
+        assert!(p.set_value(3.into()));
+        assert_eq!(clone.next().await, Some(PropertyValue::from(3)));
+
+        // The property's own stream yields what changes after its first poll.
+        let first = tokio::time::timeout(std::time::Duration::from_millis(20), p.stream.next()).await;
+        assert!(first.is_err(), "nothing changed yet, got {:?}", first);
+        assert!(p.set_value(4.into()));
+        assert_eq!(p.stream.next().await, Some(PropertyValue::from(4)));
+        assert_eq!(clone.next().await, Some(PropertyValue::from(4)));
     }
 
     fn round_trip(v: PropertyValue) -> Option<PropertyValue> {

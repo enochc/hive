@@ -56,12 +56,16 @@ async fn plain_text_mqtt_clients_interoperate() {
     // A TCP peer of that hive, recording the typed values it receives.
     let mut tcp = Hive::new_from_str_unknown("connect = \"127.0.0.1:34950\"\nname = \"tcp\"");
     let seen: Arc<Mutex<HashMap<String, String>>> = Default::default();
+    let history: Arc<Mutex<Vec<String>>> = Default::default();
     for name in ["count", "temp", "power", "label"] {
         let s = seen.clone();
+        let h = history.clone();
         tcp.get_mut_property_by_name(name)
             .unwrap()
             .on_next(move |v| {
-                s.lock().unwrap().insert(name.to_string(), format!("{:?}", v.val));
+                let v = format!("{:?}", v.val);
+                h.lock().unwrap().push(format!("{name}={v}"));
+                s.lock().unwrap().insert(name.to_string(), v);
             });
     }
     let _tcp = tcp.go(false, CancellationToken::new()).await;
@@ -110,6 +114,27 @@ async fn plain_text_mqtt_clients_interoperate() {
     )
     .await;
     assert!(ok, "TCP peer saw {:?}", seen.lock().unwrap());
+
+    // An empty payload (how MQTT clears a retained message) is ignored
+    // for a non-string property instead of turning it into "".
+    for (topic, text) in [("count", ""), ("power", ""), ("count", "73")] {
+        client
+            .publish(format!("hive/text_test/{topic}"), rumqttc::QoS::AtLeastOnce, false, text)
+            .await
+            .unwrap();
+    }
+    let ok = wait_for(
+        || seen.lock().unwrap().get("count").map(|v| v == "Integer(73)").unwrap_or(false),
+        Duration::from_secs(3),
+    )
+    .await;
+    assert!(ok, "TCP peer saw {:?}", seen.lock().unwrap());
+    let h = history.lock().unwrap().clone();
+    assert!(
+        !h.iter().any(|e| e.contains("String") && !e.starts_with("label=")),
+        "a non-string property became a string: {h:?}"
+    );
+    assert_eq!(seen.lock().unwrap().get("power").map(String::as_str), Some("Boolean(true)"));
 
     // Text out: a change from the Hive side reaches MQTT as readable text.
     srv.set_property("label", Some(&"hello world".into())).await;

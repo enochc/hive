@@ -5,7 +5,7 @@ use crate::futures::SinkExt;
 #[allow(unused_imports)]
 use crate::logging::{debug, error, info};
 use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
-use crate::peer::SocketEvent;
+use crate::peer::{Charged, Inbound, SocketEvent};
 use crate::property::{encode_property, Property, property_to_bytes, PropertyValue, PropertyType};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -30,6 +30,9 @@ pub struct Handler {
     pub (crate) connected: Arc<AtomicBool>,
     pub (crate) peer_count: Arc<AtomicUsize>,
     pub (crate) debounce: DebounceMap,
+    /// Shared by every clone: what they have queued for the event loop
+    /// and it hasn't handled yet, see `peer::INBOUND_LIMIT`.
+    pub (crate) inbound: Arc<Inbound>,
 }
 
 impl Handler {
@@ -68,15 +71,21 @@ impl Handler {
         // Encode straight from the borrowed value: no clone of it and no
         // throwaway Property (watch channel, Arcs) per call.
         let msg = encode_property(Property::hash_id(prop_name), prop_value.map(|v| &v.val), true);
-        self.send_message(msg);
+        self.send_message(msg).await;
     }
 
-    /// Hand an encoded message to the hive's event loop. The channel is
-    /// unbounded, so this never waits; it only fails once the hive has
-    /// stopped, which isn't worth panicking a caller over.
-    fn send_message(&self, msg: bytes::Bytes) {
-        let ev = SocketEvent::Message { from: String::new(), msg };
+    /// Hand an encoded message to the hive's event loop. Returns at once
+    /// unless this hive's handlers already have `peer::INBOUND_LIMIT`
+    /// bytes queued that the event loop hasn't got to, in which case it
+    /// waits for room, so a producer can't outrun the hive without bound.
+    /// Only fails once the hive has stopped, which isn't worth panicking a
+    /// caller over.
+    async fn send_message(&self, msg: bytes::Bytes) {
+        let n = msg.len();
+        self.inbound.charge(n).await;
+        let ev = SocketEvent::Local { msg, charged: Charged(()) };
         if self.sender.unbounded_send(ev).is_err() {
+            self.inbound.release(n);
             debug!("hive {} is stopped, dropping update", self.from_name);
         }
     }
@@ -129,12 +138,12 @@ impl Handler {
 
     pub async fn send_property(&mut self, property:Property){
 
-        self.send_message(property_to_bytes(&property, true));
+        self.send_message(property_to_bytes(&property, true)).await;
 
     }
 
     pub async fn delete_property(&mut self, name: &str){
-        self.send_message(encode_property(Property::hash_id(name), None, true));
+        self.send_message(encode_property(Property::hash_id(name), None, true)).await;
     }
 
     pub async fn send_to_peer(&mut self, peer_name:&str, msg:&str) -> Result<(), SendError>{

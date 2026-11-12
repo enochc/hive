@@ -20,7 +20,7 @@ use bluster::SdpShortUuid;
 use bytes::{BufMut, BytesMut, Bytes};
 use futures::channel::mpsc::{ UnboundedSender};
 use futures::channel::mpsc;
-use crate::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 #[allow(unused_imports)]
 use crate::logging::{debug, info, trace};
 use regex::Regex;

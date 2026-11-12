@@ -274,32 +274,17 @@ pub(crate) mod tls {
     const KEYS: [&str; 6] = ["cert", "key", "ca", "server_name", "prefer_chacha20", "require_client_cert"];
 
     fn check_keys(t: &toml::Value) -> Result<(), String> {
-        let table = t.as_table().ok_or("[TLS] must be a table")?;
-        match table.keys().find(|k| !KEYS.contains(&k.as_str())) {
-            Some(unknown) => Err(format!(
-                "[TLS] has an unknown key `{}` (expected one of: {})",
-                unknown,
-                KEYS.join(", ")
-            )),
-            None => Ok(()),
-        }
+        crate::config::check_keys(t, "[TLS]", &KEYS)
     }
 
     /// A string option; present with any other type is an error, not "unset".
     fn get_str<'a>(t: &'a toml::Value, k: &str) -> Result<Option<&'a str>, String> {
-        match t.get(k) {
-            None => Ok(None),
-            Some(v) => v.as_str().map(Some).ok_or_else(|| format!("[TLS] `{}` must be a string", k)),
-        }
+        crate::config::get_str(t, "[TLS]", k)
     }
 
-    /// A true/false option, off when absent. `"true"` in quotes is an error
-    /// rather than a quiet false.
+    /// A true/false option, off when absent.
     fn get_bool(t: &toml::Value, k: &str) -> Result<bool, String> {
-        match t.get(k) {
-            None => Ok(false),
-            Some(v) => v.as_bool().ok_or_else(|| format!("[TLS] `{}` must be true or false", k)),
-        }
+        Ok(crate::config::get_bool(t, "[TLS]", k)?.unwrap_or(false))
     }
 
     impl TlsSettings {

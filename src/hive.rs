@@ -67,6 +67,11 @@ pub struct Hive {
     /// state for a given property name is consistent no matter which
     /// clone sends it. See `Handler::set_property_debounced`.
     debounce: crate::handler::DebounceMap,
+    /// Inbound budget shared by this hive's `Handler`s.
+    local_inbound: Arc<crate::peer::Inbound>,
+    /// Bytes of `Local` events handled in the current batch, released to
+    /// `local_inbound` at its end.
+    local_done: usize,
     peers: Vec<Peer>,
     /// Index of the peer the last message came from. Messages arrive in
     /// runs from one peer, so `peer_index` checks here before scanning.
@@ -176,6 +181,15 @@ struct AcceptLimits {
     security: Arc<crate::security::Security>,
 }
 
+impl Drop for Hive {
+    fn drop(&mut self) {
+        // Nothing will handle (and give back) what Handlers still have
+        // queued, so stop them waiting for room that never comes.
+        self.local_inbound.close();
+    }
+}
+
+
 impl Hive {
     pub fn is_server(&self) -> bool {
         self.listen_port.is_some() || self.bt_listen.is_some()
@@ -185,8 +199,24 @@ impl Hive {
         return self.connected.load(Ordering::Relaxed);
     }
 
-    pub async fn go(mut self, wait: bool, cancellation_token: CancellationToken) -> Handler {
-        //This consumes the Hive and returns a handler and spawns it's run thread in a task
+    /// Consume the Hive, run it in its own task and return a `Handler`.
+    /// With `wait`, first wait until it is listening, connected or
+    /// attached to its MQTT broker.
+    ///
+    /// Panics if the hive fails before it is ready (the listen address is
+    /// already in use, say) while `wait` is set; use `try_go` to get that
+    /// as an error instead. Without `wait` such a failure is only logged.
+    pub async fn go(self, wait: bool, cancellation_token: CancellationToken) -> Handler {
+        let name = self.name.clone();
+        self.try_go(wait, cancellation_token)
+            .await
+            .unwrap_or_else(|e| panic!("Hive {:?} failed to start: {}", name, e))
+    }
+
+    /// Like `go`, but a failure before the hive is ready comes back as an
+    /// `Err` when `wait` is set, rather than a panic. Errors after that
+    /// point, or with `wait` unset, can only be logged.
+    pub async fn try_go(mut self, wait: bool, cancellation_token: CancellationToken) -> Result<Handler> {
         let notify = if wait {
             let n = Arc::new(tokio::sync::Notify::new());
             self.ready = Some(n.clone());
@@ -196,16 +226,28 @@ impl Hive {
         };
 
         let handler = self.get_handler();
+        let (failed_tx, failed_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            self.run(cancellation_token).await.expect("Failed to run Hive");
+            let name = self.name.clone();
+            if let Err(e) = self.run(cancellation_token).await {
+                error!("Hive {:?} stopped: {}", name, e);
+                let _ = failed_tx.send(e);
+            }
         });
 
         if let Some(n) = notify {
             info!("Waiting for Hive connection");
-            n.notified().await;
-            info!("Hive connection ready");
+            tokio::select! {
+                _ = n.notified() => info!("Hive connection ready"),
+                failed = failed_rx => match failed {
+                    Ok(e) => return Err(e),
+                    // `run` ended without an error before it was ready:
+                    // cancelled. Nothing to wait for any more.
+                    Err(_) => info!("Hive stopped before it was ready"),
+                },
+            }
         }
-        handler
+        Ok(handler)
     }
     fn broadcast_ready(&self) {
         if let Some(notify) = &self.ready {
@@ -219,13 +261,18 @@ impl Hive {
 
     pub fn new_from_str(name: &str, properties: &str) -> Hive {
         let config: Value = toml::from_str(properties).unwrap();
-        let prop = |p: &str| {
-            return match config.get(p) {
-                Some(v) => Some(String::from(v.as_str().unwrap())),
-                _ => None,
-            };
+        // A wrong type or out-of-range value is fatal, naming the key: a
+        // negative timeout or a quoted number must not quietly turn into
+        // something else (see config.rs).
+        let given_name = name;
+        let fail = |e: String| -> ! { panic!("Hive {:?}: {}", given_name, e) };
+        let prop = |p: &str| crate::config::get_str(&config, "", p).unwrap_or_else(|e| fail(e)).map(String::from);
+        let int = |k: &str, min: i64, max: i64| -> Option<i64> {
+            crate::config::get_int(&config, "", k, min, max).unwrap_or_else(|e| fail(e))
         };
-        let name = prop("name").or_else(|| Some(name.to_string())).unwrap();
+        // Timeouts: 1 ms to one day.
+        const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+        let name = prop("name").unwrap_or_else(|| name.to_string());
 
         let connect_to = prop("connect");
         let listen_port = prop("listen");
@@ -233,31 +280,21 @@ impl Hive {
         let bt_connect_to = prop("bt_connect");
         // Presence of this key both enables the liveness check and sets its
         // timeout, e.g. `wave_timeout_ms = 800`. Absent means off.
-        let wave_timeout = config
-            .get("wave_timeout_ms")
-            .and_then(|v| v.as_integer())
-            .map(|ms| Duration::from_millis(ms as u64));
+        let wave_timeout = int("wave_timeout_ms", 1, DAY_MS).map(|ms| Duration::from_millis(ms as u64));
 
-        let max_message_size = config
-            .get("max_message_size_bytes")
-            .and_then(|v| v.as_integer())
-            .map(|bytes| bytes as u32)
+        // At least room for a property update; at most 1 GiB, since a frame
+        // that size is buffered whole.
+        let max_message_size = int("max_message_size_bytes", 64, 1 << 30)
+            .map(|b| b as u32)
             .unwrap_or(DEFAULT_MAX_MESSAGE_SIZE);
 
-        let handshake_timeout = config
-            .get("handshake_timeout_ms")
-            .and_then(|v| v.as_integer())
+        let handshake_timeout = int("handshake_timeout_ms", 1, DAY_MS)
             .map(|ms| Duration::from_millis(ms as u64))
             .unwrap_or(DEFAULT_HANDSHAKE_TIMEOUT);
 
-        let max_peers = config
-            .get("max_peers")
-            .and_then(|v| v.as_integer())
-            .map(|n| n.max(0) as usize);
-        let max_pending_handshakes = config
-            .get("max_pending_handshakes")
-            .and_then(|v| v.as_integer())
-            .map(|n| n.max(1) as usize)
+        let max_peers = int("max_peers", 0, 1_000_000).map(|n| n as usize);
+        let max_pending_handshakes = int("max_pending_handshakes", 1, 1_000_000)
+            .map(|n| n as usize)
             .unwrap_or(DEFAULT_MAX_PENDING_HANDSHAKES);
 
         // Bad security config is fatal: carrying on would mean silently
@@ -293,6 +330,8 @@ impl Hive {
             max_pending_handshakes,
             security: Arc::new(security),
             debounce: Arc::new(Mutex::new(HashMap::new())),
+            local_inbound: crate::peer::Inbound::new(crate::peer::INBOUND_LIMIT),
+            local_done: 0,
             peers: Vec::new(),
             last_from: 0,
             message_received: Default::default(),
@@ -360,6 +399,7 @@ impl Hive {
             connected: self.connected.clone(),
             peer_count: self.peer_count.clone(),
             debounce: self.debounce.clone(),
+            inbound: self.local_inbound.clone(),
         };
     }
 
@@ -713,6 +753,9 @@ impl Hive {
                 };
             }
             self.flush_peers();
+            if self.local_done > 0 {
+                self.local_inbound.release(std::mem::take(&mut self.local_done));
+            }
             if handled >= EVENT_BATCH {
                 // More is probably queued. Nothing above waits while there
                 // is work, so step aside for the writers just woken and
@@ -863,7 +906,12 @@ impl Hive {
                 self.ack_peer(&from);
                 self.on_message(&from, msg).await;
             }
-            SocketEvent::Frames { from, mut data } => {
+            SocketEvent::Local { msg, charged: _ } => {
+                // Given back to the Handlers' budget after this batch.
+                self.local_done += msg.len();
+                self.on_message("", msg).await;
+            }
+            SocketEvent::Frames { from, mut data, credit: _credit } => {
                 self.ack_peer(&from);
                 let mut count = 0;
                 // `read_loop` only sends whole frames, each within the
@@ -885,7 +933,8 @@ impl Hive {
             SocketEvent::MqttText { id, text } => {
                 let hint = self.properties.get(&id).and_then(|p| p.get_value());
                 match crate::property::text_to_value(&text, hint.as_ref()) {
-                    Ok(v) => {
+                    Ok(None) => debug!("{} ignoring empty MQTT text payload for {}", self.name, id),
+                    Ok(Some(v)) => {
                         // From here on it's an ordinary property update:
                         // applied locally, broadcast to TCP peers, and
                         // not echoed back to MQTT.
@@ -1156,14 +1205,11 @@ impl Hive {
                             #[cfg(feature = "mqtt")]
                             if from != "mqtt" {
                                 if let Some(ref handle) = self.mqtt_handle {
-                                    // The publish can wait on the broker
-                                    // link; don't hold the peers' share of
-                                    // this update behind it.
-                                    self.flush_peers();
+                                    // Queued, never awaited: a slow or
+                                    // missing broker must not stall the
+                                    // TCP peers (see `PublishQueue`).
                                     if let Some(named_prop) = self.properties.get(&prop_id) {
-                                        if let Err(e) = handle.publish(named_prop).await {
-                                            warn!("MQTT publish failed: {:?}", e);
-                                        }
+                                        handle.publish_latest(named_prop);
                                     }
                                 }
                             }
@@ -1233,4 +1279,73 @@ impl Hive {
     //     }
     //     return None
     // }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::peer::Charged;
+    use std::sync::atomic::AtomicI64;
+    use std::time::Instant;
+
+    /// todo.md 5.8: the event loop must yield between batches. It never
+    /// waits while events are queued (`futures` channels and the outbox are
+    /// outside tokio's cooperative budget), so without the `yield_now` in
+    /// `receive_events` a long backlog kept every other task on its worker
+    /// thread from running; in 3.7 that starved a peer's writer until the
+    /// peer was dropped as "not reading". The inbound budgets (5.3) now
+    /// stop real senders from building such a backlog, so it is queued
+    /// here directly, and a timer on the same single thread stands in for
+    /// the writer.
+    #[tokio::test(flavor = "current_thread")]
+    async fn event_loop_yields_between_batches() {
+        let mut hive = Hive::new_from_str_unknown("listen = \"127.0.0.1:0\"\nname = \"Backlog\"\n[Properties]\nm = 0");
+        let last = Arc::new(AtomicI64::new(-1));
+        let l = last.clone();
+        hive.get_mut_property_by_name("m").unwrap().on_next(move |v| {
+            l.store(v.val.as_integer().unwrap(), Ordering::Relaxed);
+        });
+        let events = 300_000i64;
+        let id = Property::hash_id("m");
+        for v in 1..=events {
+            // Charged like a Handler would, without waiting.
+            let msg = crate::property::encode_property(id, Some(&Value::Integer(v)), true);
+            hive.local_inbound.queued.fetch_add(msg.len(), Ordering::Relaxed);
+            hive.sender.unbounded_send(SocketEvent::Local { msg, charged: Charged(()) }).unwrap();
+        }
+
+        // Fired while the backlog is being worked through, and the
+        // longest it waited. A starved timer doesn't fire at all.
+        let (ticks, worst) = (Arc::new(AtomicI64::new(0)), Arc::new(AtomicI64::new(0)));
+        let (t, w, l) = (ticks.clone(), worst.clone(), last.clone());
+        let ticker = tokio::spawn(async move {
+            loop {
+                let at = Instant::now();
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                if l.load(Ordering::Relaxed) > 0 && l.load(Ordering::Relaxed) < events {
+                    t.fetch_add(1, Ordering::Relaxed);
+                    w.fetch_max(at.elapsed().as_millis() as i64, Ordering::Relaxed);
+                }
+            }
+        });
+        tokio::task::yield_now().await; // let the ticker arm its first sleep
+
+        let started = Instant::now();
+        let cancel = CancellationToken::new();
+        let _handler = hive.go(true, cancel.clone()).await;
+        while last.load(Ordering::Relaxed) != events && started.elapsed() < Duration::from_secs(60) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let took = started.elapsed();
+        ticker.abort();
+        assert_eq!(last.load(Ordering::Relaxed), events);
+        let (ticks, worst) = (ticks.load(Ordering::Relaxed), worst.load(Ordering::Relaxed));
+        // One batch is ~1k events, well under a millisecond in release and
+        // a few in debug, against tens of ms (release) for the backlog.
+        assert!(
+            ticks >= 5 && worst < 50,
+            "a 1 ms timer fired {ticks} times (worst wait {worst} ms) during a {took:?} backlog: the event loop didn't yield"
+        );
+        cancel.cancel();
+    }
 }

@@ -75,6 +75,19 @@ async fn net(port: u16, n_receivers: usize, sec: &Sec) -> Net {
     Net { server, sender, receivers, _cancel: cancel }
 }
 
+/// Untimed run before the measured ones: the first pass in a process
+/// (thread pools, allocator, page faults, CPU clock ramp) used to read
+/// 25-40% low, and with it the first table row.
+async fn warm_up(port: u16, sec: &Sec) {
+    let mut n = net(port, 1, sec).await;
+    let updates = 200_000;
+    for v in 1..=updates {
+        n.sender.set_property("m", Some(&v.into())).await;
+    }
+    let r = n.receivers[0].clone();
+    assert!(wait_for(|| r.load(Ordering::Relaxed) == updates, Duration::from_secs(60)).await);
+}
+
 async fn throughput(label: &str, port: u16, n_receivers: usize, updates: i64, sec: &Sec) {
     let mut n = net(port, n_receivers, sec).await;
     let start = Instant::now();
@@ -121,10 +134,11 @@ async fn latency(label: &str, port: u16, n_receivers: usize, rounds: i64, sec: &
     );
 }
 
-/// Updates per throughput run. 50,000 finishes in tens of milliseconds;
-/// set `HIVE_BENCH_UPDATES` higher for a steadier number or to profile.
+/// Updates per throughput run. 500,000 takes well under a second; rows in
+/// PERF_NOTES.md before 2026-11-11's 5.9 used 50,000 without a warm-up.
+/// Set `HIVE_BENCH_UPDATES` to change it, e.g. higher to profile.
 fn updates() -> i64 {
-    std::env::var("HIVE_BENCH_UPDATES").ok().and_then(|v| v.parse().ok()).unwrap_or(50_000)
+    std::env::var("HIVE_BENCH_UPDATES").ok().and_then(|v| v.parse().ok()).unwrap_or(500_000)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -136,6 +150,7 @@ async fn bench_property_updates() {
         hive::init_logging(Some(hive::LevelFilter::Warn));
     }
     let plain = Sec::default();
+    warm_up(34800, &plain).await;
     throughput("plain", 34801, 1, updates(), &plain).await;
     throughput("plain", 34802, 8, updates(), &plain).await;
     latency("plain", 34803, 1, 2_000, &plain).await;
@@ -170,6 +185,7 @@ async fn bench_property_updates_tls() {
         server: format!("[TLS]\ncert = \"{}\"\nkey = \"{}\"", cert_p.display(), key_p.display()),
         client: format!("[TLS]\nca = \"{}\"", ca_p.display()),
     };
+    warm_up(34810, &tls).await;
     throughput("tls", 34811, 1, updates(), &tls).await;
     throughput("tls", 34812, 8, updates(), &tls).await;
     latency("tls", 34813, 1, 2_000, &tls).await;

@@ -59,6 +59,16 @@ pub enum SocketEvent {
     Frames {
         from: Arc<str>,
         data: Bytes,
+        /// Returns `data.len()` to the peer's inbound budget when dropped,
+        /// i.e. once the hive has handled (or discarded) these frames.
+        credit: Credit,
+    },
+    /// An encoded message from a local `Handler`, budgeted like `Frames`
+    /// but given back by the event loop once per batch rather than per
+    /// message (see `Charged`).
+    Local {
+        msg: Bytes,
+        charged: Charged,
     },
     SendBtProps {
         sender: futures::channel::oneshot::Sender<Response>,
@@ -72,6 +82,117 @@ pub enum SocketEvent {
         id: u64,
         text: Bytes,
     },
+}
+
+/// How many bytes one sender (a TCP peer's `read_loop`, or all of a hive's
+/// `Handler`s together) may have queued for the hive's event loop and not
+/// yet handled. Past this the sender waits: a peer's `read_loop` stops
+/// reading, so TCP flow control pushes back on the far end, and
+/// `Handler::set_property` waits before queuing more. Without it a sender
+/// that outruns the event loop grows the queue without limit.
+pub(crate) const INBOUND_LIMIT: usize = 256 * 1024;
+
+/// One sender's share of the event loop's queue, see `INBOUND_LIMIT`.
+#[derive(Debug)]
+pub(crate) struct Inbound {
+    pub(crate) queued: std::sync::atomic::AtomicUsize,
+    room: Notify,
+    limit: usize,
+    /// Set once nobody will release anything any more (the hive stopped):
+    /// waiting would then be forever.
+    closed: AtomicBool,
+}
+
+impl Inbound {
+    pub(crate) fn new(limit: usize) -> Arc<Inbound> {
+        Arc::new(Inbound { queued: Default::default(), room: Notify::new(), limit, closed: AtomicBool::new(false) })
+    }
+
+    /// Stop making anyone wait, for good.
+    pub(crate) fn close(&self) {
+        self.closed.store(true, std::sync::atomic::Ordering::Release);
+        self.room.notify_waiters();
+    }
+
+    /// Give `n` charged bytes back, waking waiting senders once the queue
+    /// has drained to half the limit.
+    pub(crate) fn release(&self, n: usize) {
+        let before = self.queued.fetch_sub(n, std::sync::atomic::Ordering::AcqRel);
+        let low = self.resume_below();
+        if before >= low && before - n < low {
+            self.room.notify_waiters();
+        }
+    }
+
+    /// Bytes queued and not yet handled.
+    pub(crate) fn queued(&self) -> usize {
+        self.queued.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Below this a waiting sender resumes. Waiting for the queue to drain
+    /// by half, not just to dip under the limit, means one wake-up per
+    /// half a budget instead of one per message handled: resuming at the
+    /// limit itself halved benchmark throughput.
+    fn resume_below(&self) -> usize {
+        self.limit / 2
+    }
+
+    /// Charge this sender `n` bytes, first waiting for the queue to drain
+    /// to half its limit if it is at or over the limit. Checked before
+    /// charging, so a single message bigger than the limit still goes
+    /// through once the queue has drained. Several `Handler` clones can
+    /// overshoot by one message each, which is fine.
+    pub(crate) async fn reserve(self: &Arc<Self>, n: usize) -> Credit {
+        self.charge(n).await;
+        Credit(Some((self.clone(), n)))
+    }
+
+    /// `reserve` without the guard: the caller owes a `release(n)`.
+    pub(crate) async fn charge(&self, n: usize) {
+        if self.queued() >= self.limit {
+            loop {
+                let room = self.room.notified();
+                tokio::pin!(room);
+                // Registered before the re-check, so a release in between
+                // can't be missed.
+                room.as_mut().enable();
+                if self.queued() < self.resume_below() || self.closed.load(std::sync::atomic::Ordering::Acquire) {
+                    break;
+                }
+                room.await;
+            }
+        }
+        self.queued.fetch_add(n, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// Marks a `SocketEvent::Local` as charged to its hive's `Handler` budget,
+/// which the event loop gives back in bulk after each batch: a guard per
+/// message (an `Arc` clone and a separate atomic subtraction each, on cache
+/// lines shared with the producer's thread) cost about 20% of local update
+/// throughput. Only Hive can make one, so the budget always balances.
+#[derive(Debug)]
+pub struct Charged(pub(crate) ());
+
+/// Bytes charged to an `Inbound` budget, given back when dropped. Travels
+/// inside the `SocketEvent` it pays for, so they come back however the
+/// event ends: handled, or dropped with the queue when the hive stops.
+#[derive(Debug, Default)]
+pub struct Credit(Option<(Arc<Inbound>, usize)>);
+
+impl Credit {
+    /// A credit that pays for nothing, for events built outside a budget.
+    pub fn none() -> Credit {
+        Credit(None)
+    }
+}
+
+impl Drop for Credit {
+    fn drop(&mut self) {
+        if let Some((inbound, n)) = self.0.take() {
+            inbound.release(n);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -709,6 +830,7 @@ async fn read_loop(
     shutdown: CancellationToken,
 ) {
     let from_shared: Arc<str> = Arc::from(from.as_str());
+    let inbound = Inbound::new(INBOUND_LIMIT);
     let mut buf = BytesMut::with_capacity(READ_CHUNK);
     // The handshake read through a BufReader; keep anything it read ahead.
     buf.extend_from_slice(reader.buffer());
@@ -721,10 +843,20 @@ async fn read_loop(
         if complete > 0 {
             let data = buf.split_to(complete).freeze();
             trace!("{:?} read {} bytes of frames", peer_id_string, data.len());
+            // Over budget: stop reading until the hive catches up. The
+            // socket's receive buffer fills and TCP slows the sender down.
+            let credit = tokio::select! {
+                biased;
+                _ = &mut cancelled => {
+                    debug!("{:?} read loop shutting down, peer dropped", peer_id_string);
+                    return;
+                }
+                c = inbound.reserve(data.len()) => c,
+            };
             // unbounded_send only fails once the hive has stopped
             // receiving, at which point there is nobody left to tell.
             if sender
-                .unbounded_send(SocketEvent::Frames { from: from_shared.clone(), data })
+                .unbounded_send(SocketEvent::Frames { from: from_shared.clone(), data, credit })
                 .is_err()
             {
                 return;
@@ -873,7 +1005,7 @@ mod tests {
         let mut got = Vec::new();
         while let Some(event) = events.next().await {
             match event {
-                SocketEvent::Frames { from, mut data } => {
+                SocketEvent::Frames { from, mut data, .. } => {
                     assert_eq!(&*from, "pipe:1");
                     while !data.is_empty() {
                         let len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
