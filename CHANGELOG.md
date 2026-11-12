@@ -112,6 +112,9 @@ Behaviour:
   - `Hive::get_mut_property_by_name` now gives the property it creates its
     name. With `[MQTT]` configured such a property is published, where
     before it was skipped as unnamed.
+- On Android `init_logging` logs to logcat (tag `hive`) instead of
+  standard output, which Android discards, and logs panic messages there
+  as well. `NativeHive.initLogging` calls it from Kotlin.
 - A client's `Handler::send_to_peer` to a hive it isn't connected to goes
   to its server, which routes it to the client of that name. Before, it
   failed with "No peer".

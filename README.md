@@ -459,6 +459,18 @@ hive.close()
 
 Listener methods run on the hive's events thread, so hand off to the main thread before touching UI.
 
+**Logging on Android.** An Android app's standard output is discarded, so there `init_logging` writes to logcat instead, under the tag `hive` and at each message's own priority, and logs panic messages too. From Kotlin:
+
+```kotlin
+NativeHive.initLogging(HiveLogLevel.INFO)   // once, early; the first call wins
+```
+
+```bash
+adb logcat -s hive
+```
+
+It works with either logging backend and needs no extra crate. An app with its own tracing subscriber or `log` logger can install that instead and not call `init_logging`.
+
 ## Architecture
 
 ```

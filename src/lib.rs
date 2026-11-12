@@ -16,6 +16,8 @@ use crate::hive::Hive;
 pub mod hive_gui;
 mod hive_macros;
 mod logging;
+#[cfg(target_os = "android")]
+mod logcat;
 mod security;
 mod config;
 pub mod property;
@@ -90,11 +92,13 @@ impl From<LevelFilter> for log::LevelFilter {
 
 /// Minute, second and microsecond.
 #[cfg(any(feature = "tracing", feature = "log"))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn short_time() -> impl std::fmt::Display {
     Local::now().format("%M:%S.%6f")
 }
 
 #[cfg(all(feature = "tracing", not(feature = "log")))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 struct ShortTime;
 
 #[cfg(all(feature = "tracing", not(feature = "log")))]
@@ -115,6 +119,19 @@ impl log::Log for StdoutLogger {
     }
 
     fn log(&self, record: &log::Record<'_>) {
+        #[cfg(target_os = "android")]
+        if self.enabled(record.metadata()) {
+            let priority = match record.level() {
+                log::Level::Error => logcat::ERROR,
+                log::Level::Warn => logcat::WARN,
+                log::Level::Info => logcat::INFO,
+                log::Level::Debug => logcat::DEBUG,
+                log::Level::Trace => logcat::VERBOSE,
+            };
+            let line = format!("{}:{}: {}", record.file().unwrap_or("?"), record.line().unwrap_or(0), record.args());
+            logcat::write(priority, &line);
+        }
+        #[cfg(not(target_os = "android"))]
         if self.enabled(record.metadata()) {
             println!(
                 "{} {:>5} {}:{}: {}",
@@ -135,6 +152,10 @@ impl log::Log for StdoutLogger {
 /// first call takes effect. Apps that set up their own logger or
 /// subscriber shouldn't call this at all, Hive's output goes to theirs.
 ///
+/// On Android, where standard output is discarded, it logs to logcat
+/// instead, under the tag `hive` and at each message's own priority, and
+/// sends panic messages there as well.
+///
 /// - `tracing` (default): installs a tracing-subscriber fmt subscriber.
 ///   With `mqtt` or `gui`, dependencies that log through `log` are bridged
 ///   into it.
@@ -146,16 +167,25 @@ pub fn init_logging(level: Option<LevelFilter>) {
     #[allow(unused_variables)]
     let level = level.unwrap_or(LevelFilter::Info);
 
+    #[cfg(target_os = "android")]
+    {
+        static PANICS: std::sync::Once = std::sync::Once::new();
+        PANICS.call_once(logcat::log_panics);
+    }
+
     #[cfg(all(feature = "tracing", not(feature = "log")))]
     {
-        let _ = tracing_subscriber::fmt()
+        let builder = tracing_subscriber::fmt()
             .with_max_level(tracing::level_filters::LevelFilter::from(level))
-            .with_timer(ShortTime)
             .with_target(false)
             .with_file(true)
             .with_line_number(true)
-            .with_ansi(false)
-            .try_init();
+            .with_ansi(false);
+        // logcat stamps every line with the time and priority itself.
+        #[cfg(target_os = "android")]
+        let _ = builder.without_time().with_level(false).with_writer(logcat::Logcat).try_init();
+        #[cfg(not(target_os = "android"))]
+        let _ = builder.with_timer(ShortTime).try_init();
     }
 
     #[cfg(feature = "log")]

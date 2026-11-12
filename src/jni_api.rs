@@ -380,6 +380,27 @@ pub extern "system" fn Java_com_enochc_hive_NativeHive_nativePeerCount(
     guarded(&mut env, 0, |_| hive(handle).map_or(0, |hive| hive.peer_count() as jint))
 }
 
+/// Turn Hive's own logging on, see `crate::init_logging`. `level` counts
+/// up from 0 = off through error, warn, info and debug to 5 = trace.
+#[no_mangle]
+pub extern "system" fn Java_com_enochc_hive_NativeHive_nativeInitLogging(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    level: jint,
+) {
+    use crate::LevelFilter;
+    guarded(&mut env, (), |_| {
+        crate::init_logging(Some(match level {
+            i32::MIN..=0 => LevelFilter::Off,
+            1 => LevelFilter::Error,
+            2 => LevelFilter::Warn,
+            3 => LevelFilter::Info,
+            4 => LevelFilter::Debug,
+            _ => LevelFilter::Trace,
+        }))
+    })
+}
+
 /// The id a property name has on the wire, as a (possibly negative) long.
 #[no_mangle]
 pub extern "system" fn Java_com_enochc_hive_NativeHive_nativePropertyId<'local>(

@@ -2,6 +2,9 @@ package com.enochc.hive
 
 import java.util.concurrent.atomic.AtomicLong
 
+/** How much of Hive's own logging to show, see [NativeHive.initLogging]. */
+enum class HiveLogLevel { OFF, ERROR, WARN, INFO, DEBUG, TRACE }
+
 /** One entry of a server's peer list. */
 data class Peer(val name: String, val address: String)
 
@@ -147,6 +150,21 @@ class NativeHive(config: String, listener: HiveListener) : AutoCloseable {
             System.loadLibrary("hive")
         }
 
+        /**
+         * Turn on the native library's own logging: what Hive itself
+         * reports about connections, handshakes and messages, and any
+         * panic. On Android it goes to logcat under the tag `hive`,
+         * elsewhere to standard output. Without this call Hive logs
+         * nothing.
+         *
+         * It applies to every hive in the process. Only the first call
+         * takes effect, so call it once, early. [HiveLogLevel.DEBUG] and
+         * [HiveLogLevel.TRACE] write several lines for every property
+         * update.
+         */
+        @JvmStatic
+        fun initLogging(level: HiveLogLevel = HiveLogLevel.INFO) = nativeInitLogging(level.ordinal)
+
         /** The id [name] has on the wire. Ids use all 64 bits, so may be negative. */
         @JvmStatic
         fun propertyId(name: String): Long = nativePropertyId(name)
@@ -165,5 +183,6 @@ class NativeHive(config: String, listener: HiveListener) : AutoCloseable {
         @JvmStatic private external fun nativeIsConnected(handle: Long): Boolean
         @JvmStatic private external fun nativePeerCount(handle: Long): Int
         @JvmStatic private external fun nativePropertyId(name: String): Long
+        @JvmStatic private external fun nativeInitLogging(level: Int)
     }
 }
