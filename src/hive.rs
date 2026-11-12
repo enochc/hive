@@ -19,7 +19,7 @@ use crate::handler::Handler;
 #[cfg(feature = "mqtt")]
 use crate::mqtt::mqtt_peer::{MqttConfig, MqttPeerHandle, spawn_mqtt_peer};
 use crate::peer::{handshake, Peer, PeerType, SocketEvent, DEFAULT_HANDSHAKE_TIMEOUT, DEFAULT_MAX_MESSAGE_SIZE};
-use crate::property::{decode_property, properties_to_bytes, DecodeError, Property, PropertyMap};
+use crate::property::{decode_names, decode_property, encode_names, properties_to_bytes, DecodeError, IdHasher, Property, PropertyMap, NAME};
 use crate::signal::Signal;
 use ctrlc::Error;
 use std::fmt::{Debug, Formatter};
@@ -92,6 +92,13 @@ pub struct Hive {
     /// A local `Handler::request_peers` asked for the peer list. Kept so a
     /// server we connect to later is asked as well.
     want_peers: bool,
+    /// What properties are called, by id. Only ids travel with values, so
+    /// a name is known here if this hive declared it or was told it, by a
+    /// `Handler` or by a peer (see `NAMES`).
+    names: HashMap<u64, String, std::hash::BuildHasherDefault<IdHasher>>,
+    /// A local `Handler::request_names` asked peers for their names. Kept
+    /// so peers that attach later are asked as well.
+    want_names: bool,
     #[cfg(feature = "mqtt")]
     mqtt_config: Option<MqttConfig>,
     #[cfg(feature = "mqtt")]
@@ -114,6 +121,10 @@ pub enum HiveEvent {
     /// the name; the name itself is only known to hives that declared it.
     PropertyChanged { id: u64, value: Value },
     PropertyDeleted { id: u64 },
+    /// This hive learned what a property is called, from one of its own
+    /// `Handler`s or from a peer (see `Handler::request_names`). It can
+    /// come before or after the property's first value.
+    PropertyNamed { id: u64, name: String },
     /// The peer list of a server this hive is connected to, sent after
     /// `Handler::request_peers` and again whenever it changes. The first
     /// entry is the server itself.
@@ -129,6 +140,18 @@ pub struct PeerInfo {
     /// The peer's socket address as the server sees it. For the server's
     /// own entry, what it listens on.
     pub address: String,
+}
+
+/// A new property for `id`, under its name if this hive knows it.
+fn new_property(
+    names: &HashMap<u64, String, std::hash::BuildHasherDefault<IdHasher>>,
+    id: u64,
+    value: Option<crate::property::PropertyValue>,
+) -> Property {
+    match names.get(&id) {
+        Some(name) => Property::from_name(name, value),
+        None => Property::from_id(&id, value),
+    }
 }
 
 /// Parse the body of a PEER_RESPONSE, `name|address,name|address`.
@@ -155,6 +178,12 @@ pub(crate) const PING: u8 = 0x63;
 // pub(crate) const NEW_PEER:u8 = 0x64;
 pub(crate) const PEER_REQUESTS: u8 = 0x65;
 pub(crate) const PEER_RESPONSE: u8 = 0x66;
+/// "Tell me what your properties are called", answered with `NAMES`.
+pub(crate) const NAME_REQUESTS: u8 = 0x67;
+/// Property names by id, see `property::encode_names`. Only sent to peers
+/// that take part in exchanging names: older versions of Hive stop on a
+/// message type they don't know.
+pub(crate) const NAMES: u8 = 0x68;
 pub(crate) const HEADER_NAME: u8 = 0x78;
 pub(crate) const HIVE_PROTOCOL: &str = "HVEP";
 
@@ -385,6 +414,8 @@ impl Hive {
             ready: None,
             observer: None,
             want_peers: false,
+            names: Default::default(),
+            want_names: false,
             #[cfg(feature = "mqtt")]
             mqtt_config,
             #[cfg(feature = "mqtt")]
@@ -474,6 +505,7 @@ impl Hive {
             peer_count: self.peer_count.clone(),
             debounce: self.debounce.clone(),
             inbound: self.local_inbound.clone(),
+            named: Default::default(),
         };
     }
 
@@ -483,7 +515,8 @@ impl Hive {
     }
 
     pub fn get_mut_property(&mut self, key: &u64) -> Option<&mut Property> {
-        Some(self.properties.entry(*key).or_insert_with(|| Property::from_id(key, None)))
+        let names = &self.names;
+        Some(self.properties.entry(*key).or_insert_with(|| new_property(names, *key, None)))
     }
     // pub fn get_mut_property_by_name(&mut self, name: &str) -> Option<&mut Property> {
     //     let key = &Property::hash_id(name);
@@ -496,7 +529,56 @@ impl Hive {
     //     return op;
     // }
     pub fn get_mut_property_by_name(&mut self, name: &str) -> Option<&mut Property> {
-        self.get_mut_property(&Property::hash_id(name))
+        let id = Property::hash_id(name);
+        self.learn_name(id, name);
+        self.get_mut_property(&id)
+    }
+
+    /// Record what property `id` is called. True if that was news.
+    fn learn_name(&mut self, id: u64, name: &str) -> bool {
+        if self.names.contains_key(&id) {
+            return false;
+        }
+        self.names.insert(id, name.to_string());
+        if let Some(property) = self.properties.get_mut(&id) {
+            if property.get_name().is_empty() {
+                property.name = NAME::from(name);
+            }
+        }
+        true
+    }
+
+    /// Every name this hive knows, as a NAMES message.
+    fn known_names(&self) -> Bytes {
+        // `properties` is public, so it can hold named properties that
+        // never passed through `learn_name`.
+        let direct = self
+            .properties
+            .values()
+            .filter(|p| !p.get_name().is_empty() && !self.names.contains_key(&p.id))
+            .map(|p| (p.id, p.get_name()));
+        encode_names(self.names.iter().map(|(id, name)| (*id, name.as_str())).chain(direct))
+    }
+
+    /// Pass names this hive has just learned to the observer and to every
+    /// peer that exchanges names, except the one they came from.
+    async fn share_names(&mut self, learned: Vec<(u64, String)>, from: Option<usize>) {
+        if learned.is_empty() {
+            return;
+        }
+        let news = encode_names(learned.iter().map(|(id, name)| (*id, name.as_str())));
+        for (i, p) in self.peers.iter().enumerate() {
+            if Some(i) != from && p.update_names {
+                if let Err(e) = self.send_peer(p, &news).await {
+                    debug!("names update to {:?} failed: {:?}", p.address, e);
+                }
+            }
+        }
+        if let Some(observer) = &self.observer {
+            for (id, name) in learned {
+                observer(HiveEvent::PropertyNamed { id, name });
+            }
+        }
     }
 
     pub fn get_property(&self, key: &u64) -> Option<&Property> {
@@ -506,6 +588,9 @@ impl Hive {
 
     fn set_property(&mut self, property: Property) {
         debug!("{:?} SET PROPERTY: {:?}", property.get_name(), property);
+        if !property.get_name().is_empty() {
+            self.names.entry(property.id).or_insert_with(|| property.get_name().to_string());
+        }
         use std::collections::hash_map::Entry;
         match self.properties.entry(property.id) {
             // set_from_prop emits on_next on the existing property
@@ -535,7 +620,7 @@ impl Hive {
                 }
                 None => {
                     let seen = self.observer.as_ref().map(|_| v.val.clone());
-                    self.properties.insert(id, Property::from_id(&id, Some(v)));
+                    self.properties.insert(id, new_property(&self.names, id, Some(v)));
                     seen
                 }
             };
@@ -977,6 +1062,14 @@ impl Hive {
                                 }
                             }
                         }
+                        if self.want_names {
+                            let ask = Bytes::from_static(&[NAME_REQUESTS]);
+                            if let Some(peer) = self.peers.last() {
+                                if let Err(e) = self.send_peer(peer, &ask).await {
+                                    debug!("names request to {:?} failed: {:?}", peer.address, e);
+                                }
+                            }
+                        }
 
                         if !is_tcp_client {
                             // I'm a server and another tcp hive client connected
@@ -1378,6 +1471,45 @@ impl Hive {
                             self.send_peer(p, &raw).await?;
                         }
                     }
+                }
+                NAME_REQUESTS => {
+                    if let Some(idx) = peer_idx {
+                        self.peers[idx].update_names = true;
+                        let ours = self.known_names();
+                        self.send_peer(&self.peers[idx], &ours).await?;
+                    } else if from.is_empty() {
+                        // `Handler::request_names`: ask everyone attached,
+                        // and (see NewPeer) everyone who attaches later.
+                        self.want_names = true;
+                        for p in &self.peers {
+                            if let Err(e) = self.send_peer(p, &raw).await {
+                                debug!("names request to {:?} failed: {:?}", p.address, e);
+                            }
+                        }
+                    }
+                }
+                NAMES => {
+                    let names = decode_names(&mut msg)?;
+                    // A peer sending names can take them too. The first
+                    // time one does, it gets what this hive knew before.
+                    let introduce = match peer_idx {
+                        Some(idx) if !self.peers[idx].update_names => Some((idx, self.known_names())),
+                        _ => None,
+                    };
+                    let mut learned = Vec::new();
+                    for (id, name) in names {
+                        if self.learn_name(id, &name) {
+                            learned.push((id, name));
+                        }
+                    }
+                    if let Some((idx, ours)) = introduce {
+                        self.peers[idx].update_names = true;
+                        // More than the type byte: there is something to tell.
+                        if ours.len() > 1 {
+                            self.send_peer(&self.peers[idx], &ours).await?;
+                        }
+                    }
+                    self.share_names(learned, peer_idx).await;
                 }
                 PEER_RESPONSE => {
                     if let Some(observer) = &self.observer {

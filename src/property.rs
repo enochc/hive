@@ -1,5 +1,5 @@
 
-use crate::hive::{PROPERTIES, PROPERTY};
+use crate::hive::{NAMES, PROPERTIES, PROPERTY};
 
 use std::collections::HashMap;
 use std::fmt;
@@ -682,6 +682,42 @@ fn put_value(bytes: &mut BytesMut, value: Option<&Value>) {
     }
 }
 
+/// Encode a NAMES message, `[NAMES]` then `[u64 id][u16 length][name]` for
+/// each pair: what the properties with those ids are called. A name too
+/// long for the length field is left out.
+pub(crate) fn encode_names<'a>(names: impl IntoIterator<Item = (u64, &'a str)>) -> Bytes {
+    let mut bytes = BytesMut::new();
+    bytes.put_u8(NAMES);
+    for (id, name) in names {
+        if let Ok(len) = u16::try_from(name.len()) {
+            bytes.put_u64(id);
+            bytes.put_u16(len);
+            bytes.put_slice(name.as_bytes());
+        }
+    }
+    bytes.freeze()
+}
+
+/// Decode the body of a NAMES message. An id is the hash of its name, so a
+/// pair that doesn't match is refused: a peer can't give a property a name
+/// that isn't its own.
+pub(crate) fn decode_names(bytes: &mut Bytes) -> std::result::Result<Vec<(u64, String)>, DecodeError> {
+    let mut names = Vec::new();
+    while bytes.has_remaining() {
+        need(bytes, 10, "name id and length")?;
+        let id = bytes.get_u64();
+        let len = bytes.get_u16() as usize;
+        need(bytes, len, "name")?;
+        let raw = bytes.split_to(len);
+        let name = std::str::from_utf8(&raw).map_err(|e| DecodeError(format!("property name not UTF-8: {}", e)))?;
+        if Property::hash_id(name) != id {
+            return Err(DecodeError(format!("{:?} is not the name of property {:#x}", name, id)));
+        }
+        names.push((id, name.to_string()));
+    }
+    Ok(names)
+}
+
 /// Decode `[u64 id][type_tag][value]` without building a `Property`.
 pub(crate) fn decode_property(
     bytes: &mut Bytes,
@@ -939,6 +975,30 @@ mod tests {
         }
         assert_eq!(round_trip(PropertyValue::from(1.5f64)), Some(PropertyValue::from(1.5f64)));
         assert_eq!(round_trip(PropertyValue::from(true)), Some(PropertyValue::from(true)));
+    }
+
+    #[test]
+    fn names_round_trip_and_are_checked() {
+        let long = "n".repeat(300);
+        let pairs = [("light", Property::hash_id("light")), ("", Property::hash_id("")), (long.as_str(), Property::hash_id(&long))];
+        let mut message = encode_names(pairs.iter().map(|(name, id)| (*id, *name)));
+        assert_eq!(message.get_u8(), NAMES);
+        let decoded = decode_names(&mut message).unwrap();
+        assert_eq!(decoded.len(), 3);
+        for ((name, id), (got_id, got_name)) in pairs.iter().zip(&decoded) {
+            assert_eq!((id, *name), (got_id, got_name.as_str()));
+        }
+
+        // A name under another property's id, and input cut short.
+        let mut wrong = encode_names([(Property::hash_id("door"), "light")]).slice(1..);
+        assert!(decode_names(&mut wrong).is_err());
+        let whole = encode_names([(Property::hash_id("light"), "light")]);
+        for cut in 2..whole.len() {
+            assert!(decode_names(&mut whole.slice(1..cut)).is_err(), "cut at {}", cut);
+        }
+        // One too long for its length field is left out, not truncated.
+        let huge = "x".repeat(70_000);
+        assert_eq!(encode_names([(Property::hash_id(&huge), huge.as_str())]).len(), 1);
     }
 
     #[test]

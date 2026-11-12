@@ -104,6 +104,15 @@ impl Callbacks {
                     &[JValue::Long(*id as jlong), JValue::Object(&name), JValue::Object(&value)],
                 )?;
             }
+            Event::PropertyNamed { id, name } => {
+                let name = env.new_string(name)?;
+                env.call_method(
+                    &self.target,
+                    "onPropertyName",
+                    "(JLjava/lang/String;)V",
+                    &[JValue::Long(*id as jlong), JValue::Object(&name)],
+                )?;
+            }
             Event::Peers(peers) => {
                 let names = env.new_object_array(peers.len() as i32, "java/lang/String", JObject::null())?;
                 let addresses = env.new_object_array(peers.len() as i32, "java/lang/String", JObject::null())?;
@@ -333,6 +342,19 @@ pub extern "system" fn Java_com_enochc_hive_NativeHive_nativeRequestPeers(
     guarded(&mut env, (), |_| {
         if let Some(hive) = hive(handle) {
             hive.request_peers();
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_enochc_hive_NativeHive_nativeRequestNames(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) {
+    guarded(&mut env, (), |_| {
+        if let Some(hive) = hive(handle) {
+            hive.request_names();
         }
     })
 }

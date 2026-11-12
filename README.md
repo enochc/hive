@@ -210,6 +210,16 @@ This only rate-limits the local callback. It does not reduce outgoing network tr
 handler.set_property_debounced("motor_speed", 72.0.into(), 50).await;
 ```
 
+**Property names** A value travels with its property's id, a hash of the name, never the name itself, so an update costs the same however long the name is. A hive knows the names of the properties in its own config and of those set through its `Handler`s. To learn the rest, ask:
+
+```rust
+handler.request_names().await;
+```
+
+Every hive it is connected to, now or later, answers with the names it knows and keeps it up to date, and gets this hive's names in return. So a client that asks receives its server's names, and a property one client creates by name reaches the other clients that asked with its name. Each name is sent once per connection, and a name that doesn't hash to its id is refused. Names learned this way show up as `HiveEvent::PropertyNamed` (see `Hive::on_event`) and on the `Property` itself.
+
+Only hives that take part are ever sent names, because Hive before 0.3.0 stops on a message type it doesn't know. For the same reason, only call `request_names` where every peer is 0.3.0 or newer.
+
 **Typed values** Properties support bool, string, integers (i8 through i64, auto-sized to the smallest fit), and f64 floats. The binary wire format encodes values with type tags for compact transmission.
 
 **Reactive streams** Every property exposes a `tokio::sync::watch`-backed stream. Multiple consumers can independently observe changes. Each clone yields the changes made after it was cloned; a property's own `stream` field starts when it is first polled. Updates to a property nobody is streaming skip the channel's wake-ups entirely:
@@ -380,8 +390,9 @@ cargo test --release --features tls --test bench -- --ignored --nocapture --test
 # Basic property usage
 cargo run --example properties
 
-# Run a Hive server from a TOML file
-cargo run --example just_run -- examples/listen_3000.toml
+# Run a Hive server from a TOML file. Prints every change, and takes
+# commands on stdin: `name = value`, `-name`, `@peer message`
+cargo run --example serve -- examples/listen_3000.toml
 
 # Hive with MQTT
 cargo run --example mqtt_example --features mqtt
@@ -409,20 +420,22 @@ let hive = EmbeddedHive::start(
     "name = \"Phone\"\nconnect = \"192.168.1.10:3000\"",
     |event| match event {
         Event::Property { id, name, value } => { /* value: None = deleted */ }
+        Event::PropertyNamed { id, name } => {}
         Event::Peers(peers) => {}
         Event::PeerMessage(text) => {}
         Event::Connection { connected, peers } => {}
     },
 )?;
 hive.request_peers();
+hive.request_names();
 hive.set_property("lightValue", 42);
 hive.send_to_peer("Server", "hello");
 hive.stop();
 ```
 
-Hives exchange property ids (a hash of the name), never names. An embedded hive therefore reports a property it wasn't told about with `name: None`; it learns names from the `[Properties]` table of its config, from `set_property` and from `register_name`.
+A property the hive doesn't know the name of is reported with `name: None`. After `request_names` (see "Property names" above) that only lasts until the server has answered: an `Event::PropertyNamed` follows, and the property's later events carry the name. Without it, names come from the `[Properties]` table of the config, from `set_property` and from `register_name`.
 
-Underneath are two hooks any Rust application can use: `Hive::on_event` (every property change and delete, peer list and connection change, as a `HiveEvent`) and `Handler::request_peers`.
+Underneath are hooks any Rust application can use: `Hive::on_event` (every property change, delete and name, peer list and connection change, as a `HiveEvent`), `Handler::request_peers` and `Handler::request_names`.
 
 **Kotlin / Java.** `src/jni_api.rs` exposes `EmbeddedHive` over JNI and `bindings/kotlin/com/enochc/hive/NativeHive.kt` is the class that goes with it; copy that file into the app (or add `bindings/kotlin` as a source directory). The bindings are always part of an Android build:
 

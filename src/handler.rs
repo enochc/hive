@@ -4,10 +4,10 @@ use futures::channel::mpsc::{SendError, UnboundedSender};
 use crate::futures::SinkExt;
 #[allow(unused_imports)]
 use crate::logging::{debug, error, info};
-use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV, PEER_REQUESTS};
+use crate::hive::{NAME_REQUESTS, PEER_MESSAGE, PEER_MESSAGE_DIV, PEER_REQUESTS};
 use crate::peer::{Charged, Inbound, SocketEvent};
-use crate::property::{encode_property, Property, property_to_bytes, PropertyValue, PropertyType};
-use std::collections::HashMap;
+use crate::property::{encode_names, encode_property, IdHasher, Property, property_to_bytes, PropertyValue, PropertyType};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -33,6 +33,9 @@ pub struct Handler {
     /// Shared by every clone: what they have queued for the event loop
     /// and it hasn't handled yet, see `peer::INBOUND_LIMIT`.
     pub (crate) inbound: Arc<Inbound>,
+    /// Ids of the properties this handler has told its hive the name of,
+    /// so each is announced once and not with every update.
+    pub (crate) named: HashSet<u64, std::hash::BuildHasherDefault<IdHasher>>,
 }
 
 impl Handler {
@@ -68,7 +71,31 @@ impl Handler {
     ///
     /// `None` clears the property (same as `delete_property`).
     pub async fn set_property(&mut self, prop_name:&str, prop_value:Option<&PropertyValue>){
-        self.set_property_by_id(Property::hash_id(prop_name), prop_value).await;
+        let id = self.register_name(prop_name).await;
+        self.set_property_by_id(id, prop_value).await;
+    }
+
+    /// Tell the hive what a property is called, and get its id. Only ids
+    /// travel with values, so this is how a name reaches the hive, and
+    /// through it the peers that exchange names (see `request_names`).
+    /// `set_property` does it for you.
+    pub async fn register_name(&mut self, prop_name: &str) -> u64 {
+        let id = Property::hash_id(prop_name);
+        if self.named.insert(id) {
+            self.send_message(encode_names([(id, prop_name)])).await;
+        }
+        id
+    }
+
+    /// Ask every hive this one is connected to, now or later, what its
+    /// properties are called, and tell them what ours are. Names learned
+    /// this way arrive as `HiveEvent::PropertyNamed` and are passed on to
+    /// the other hives that asked.
+    ///
+    /// Hive versions before 0.3.0 stop on a message they don't know, this
+    /// request included, so only use it where every peer is 0.3.0 or newer.
+    pub async fn request_names(&mut self) {
+        self.send_message(bytes::Bytes::from_static(&[NAME_REQUESTS])).await;
     }
 
     /// `set_property` for a property known only by its id, as one that
@@ -150,7 +177,9 @@ impl Handler {
     }
 
     pub async fn send_property(&mut self, property:Property){
-
+        if !property.get_name().is_empty() {
+            self.register_name(property.get_name()).await;
+        }
         self.send_message(property_to_bytes(&property, true)).await;
 
     }

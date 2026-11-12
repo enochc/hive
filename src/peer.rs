@@ -213,6 +213,9 @@ pub struct Peer {
     /// woken for it yet, see `flush`.
     unflushed: AtomicBool,
     pub update_peers: bool,
+    /// This peer exchanges property names: it asked for ours or sent its
+    /// own, so it is sent the ones this hive learns. See `NAMES`.
+    pub(crate) update_names: bool,
     pub peripheral: Option<Sender<Bytes>>,
     central: Option<Central>,
     pub address: String,
@@ -305,6 +308,7 @@ impl Peer {
                 out: None,
                 unflushed: AtomicBool::new(false),
                 update_peers: false,
+                update_names: false,
                 peripheral,
                 central,
                 address: address.clone(),
@@ -333,6 +337,7 @@ impl Peer {
                 out: None,
                 unflushed: AtomicBool::new(false),
                 update_peers: false,
+                update_names: false,
                 peripheral,
                 central,
                 address,

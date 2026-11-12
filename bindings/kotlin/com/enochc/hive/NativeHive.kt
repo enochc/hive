@@ -16,12 +16,20 @@ interface HiveListener {
      * A property has a new value, or was deleted when [value] is null.
      * [value] is a [String], [Boolean], [Long] or [Double].
      *
-     * Hives exchange property ids, not names, so [name] is null for a
-     * property this hive hasn't been told the name of. Names come from the
-     * `[Properties]` table of the config, from [NativeHive.set] and from
-     * [NativeHive.registerName].
+     * Only ids travel with values, so [name] is null for a property this
+     * hive hasn't been told the name of. A name can come from the
+     * `[Properties]` table of the config, from [NativeHive.set] or
+     * [NativeHive.registerName], or from a peer after
+     * [NativeHive.requestNames], in which case [onPropertyName] follows.
      */
     fun onProperty(id: Long, name: String?, value: Any?) {}
+
+    /**
+     * The hive learned what a property is called. [onProperty] carries the
+     * name from here on; a property reported earlier without it is the
+     * same one.
+     */
+    fun onPropertyName(id: Long, name: String) {}
 
     /**
      * The peer list of the server this hive is connected to, after
@@ -84,9 +92,20 @@ class NativeHive(config: String, listener: HiveListener) : AutoCloseable {
 
     /**
      * Tell the hive what a property is called, so its events carry the
-     * name. Returns the property's id.
+     * name and hives exchanging names with it learn it too. Returns the
+     * property's id.
      */
     fun registerName(name: String): Long = nativeRegisterName(handle.get(), name)
+
+    /**
+     * Ask the hives this one is connected to, now or later, what their
+     * properties are called, and tell them what ours are. Each name arrives
+     * through [HiveListener.onPropertyName].
+     *
+     * Only for peers running Hive 0.3.0 or newer: older versions stop on a
+     * message they don't know.
+     */
+    fun requestNames() = nativeRequestNames(handle.get())
 
     /**
      * Send [message] to the hive called [peer]: the server, or another of
@@ -112,6 +131,8 @@ class NativeHive(config: String, listener: HiveListener) : AutoCloseable {
     /** What the native side calls. Not for use from Kotlin. */
     private class Callbacks(private val listener: HiveListener) {
         fun onProperty(id: Long, name: String?, value: Any?) = listener.onProperty(id, name, value)
+
+        fun onPropertyName(id: Long, name: String) = listener.onPropertyName(id, name)
 
         fun onPeers(names: Array<String>, addresses: Array<String>) =
             listener.onPeers(names.indices.map { Peer(names[it], addresses[it]) })
@@ -140,6 +161,7 @@ class NativeHive(config: String, listener: HiveListener) : AutoCloseable {
         @JvmStatic private external fun nativeRegisterName(handle: Long, name: String): Long
         @JvmStatic private external fun nativeSendToPeer(handle: Long, peer: String, message: String): Boolean
         @JvmStatic private external fun nativeRequestPeers(handle: Long)
+        @JvmStatic private external fun nativeRequestNames(handle: Long)
         @JvmStatic private external fun nativeIsConnected(handle: Long): Boolean
         @JvmStatic private external fun nativePeerCount(handle: Long): Int
         @JvmStatic private external fun nativePropertyId(name: String): Long

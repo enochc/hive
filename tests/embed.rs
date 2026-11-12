@@ -178,3 +178,40 @@ fn stop_abandons_a_connection_attempt() {
     // The callback, and with it the sender, is gone once stop returns.
     assert!(events.recv_timeout(LIMIT).is_err(), "an event from a hive that never connected");
 }
+
+#[test]
+fn an_embedded_client_learns_names_from_its_server() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (mut server, server_events, _messages) = plain_hive(
+        &rt,
+        "listen = \"127.0.0.1:35103\"\nname = \"Serv\"\n[Properties]\nlight = 1\nlabel = \"hi\"",
+        true,
+    );
+    let (tx, events) = channel();
+    let phone = EmbeddedHive::start("name = \"Phone\"\nconnect = \"127.0.0.1:35103\"", move |e| {
+        let _ = tx.send(e);
+    })
+    .unwrap();
+    phone.request_names();
+    let (light, label, volume) = (property_id("light"), property_id("label"), property_id("volume"));
+
+    // The names come once, whichever side of the values they land on.
+    let mut names = vec![
+        Event::PropertyNamed { id: light, name: "light".into() },
+        Event::PropertyNamed { id: label, name: "label".into() },
+    ];
+    while !names.is_empty() {
+        let found = expect(&events, "the server's names", |e| names.iter().position(|n| n == e));
+        names.remove(found);
+    }
+    // From then on its events carry them.
+    rt.block_on(server.set_property("label", Some(&"there".into())));
+    expect(&events, "a named update", |e| property(e, Some("label"), label, Some(Value::String("there".into()))));
+
+    // And the server learns what the phone calls the property it creates.
+    phone.set_property("volume", 7);
+    expect(&server_events, "the phone's name", |e| {
+        (*e == HiveEvent::PropertyNamed { id: volume, name: "volume".into() }).then_some(())
+    });
+    phone.stop();
+}

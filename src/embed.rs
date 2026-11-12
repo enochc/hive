@@ -19,6 +19,7 @@
 //! )
 //! .unwrap();
 //! hive.request_peers();
+//! hive.request_names();
 //! hive.set_property("lightValue", 42);
 //! hive.stop();
 //! ```
@@ -43,11 +44,16 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 pub enum Event {
     /// A property has a new value, or with `value: None` was deleted.
     ///
-    /// Only ids travel between hives (`property_id` of the name), so `name`
-    /// is `None` for a property this hive has never been told the name of.
-    /// Names come from the `[Properties]` table of the config passed to
-    /// `start` and from `set_property` / `register_name`.
+    /// Only ids travel with values (`property_id` of the name), so `name`
+    /// is `None` for a property this hive hasn't been told the name of. A
+    /// name can come from the `[Properties]` table of the config passed to
+    /// `start`, from `set_property` / `register_name`, or from a peer after
+    /// `request_names`, in which case an `Event::PropertyNamed` follows.
     Property { id: u64, name: Option<String>, value: Option<Value> },
+    /// The hive learned what a property is called. Events for that
+    /// property carry the name from here on; one reported earlier without
+    /// it is the same property.
+    PropertyNamed { id: u64, name: String },
     /// The peer list of the server this hive is connected to. Sent after
     /// `request_peers` and again whenever it changes; the first entry is the
     /// server itself.
@@ -112,6 +118,7 @@ impl EmbeddedHive {
             let _ = events_tx.send(match event {
                 HiveEvent::PropertyChanged { id, value } => Event::Property { id, name: None, value: Some(value) },
                 HiveEvent::PropertyDeleted { id } => Event::Property { id, name: None, value: None },
+                HiveEvent::PropertyNamed { id, name } => Event::PropertyNamed { id, name },
                 HiveEvent::Peers(peers) => Event::Peers(peers),
                 HiveEvent::Connection { connected, peers } => Event::Connection { connected, peers },
             });
@@ -138,8 +145,12 @@ impl EmbeddedHive {
             .name("hive-events".into())
             .spawn(move || {
                 for mut event in rx {
-                    if let Event::Property { id, name, .. } = &mut event {
-                        *name = known.lock().unwrap().get(id).cloned();
+                    match &mut event {
+                        Event::Property { id, name, .. } => *name = known.lock().unwrap().get(id).cloned(),
+                        Event::PropertyNamed { id, name } => {
+                            known.lock().unwrap().entry(*id).or_insert_with(|| name.clone());
+                        }
+                        _ => {}
                     }
                     on_event(event);
                 }
@@ -186,14 +197,25 @@ impl EmbeddedHive {
     }
 
     /// Tell this hive what a property is called, so its events carry the
-    /// name. Returns the property's id.
+    /// name and hives exchanging names with it learn it too. Returns the
+    /// property's id.
     pub fn register_name(&self, name: &str) -> u64 {
         let id = property_id(name);
-        let mut names = self.names.lock().unwrap();
-        if !names.contains_key(&id) {
-            names.insert(id, name.to_string());
-        }
+        self.names.lock().unwrap().entry(id).or_insert_with(|| name.to_string());
+        let mut handler = self.handler.lock().unwrap();
+        futures::executor::block_on(handler.register_name(name));
         id
+    }
+
+    /// Ask the hives this one is connected to, now or later, what their
+    /// properties are called, and tell them what ours are. Each name
+    /// arrives as an `Event::PropertyNamed`.
+    ///
+    /// Only for peers running Hive 0.3.0 or newer: older versions stop on
+    /// a message they don't know.
+    pub fn request_names(&self) {
+        let mut handler = self.handler.lock().unwrap();
+        futures::executor::block_on(handler.request_names());
     }
 
     /// Send `message` to the hive called `peer`: the server this hive is

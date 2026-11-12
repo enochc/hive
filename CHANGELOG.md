@@ -84,9 +84,9 @@ Behaviour:
 - `tests/bench.rs` (throughput and latency, ignored by default) and
   PERF_NOTES.md.
 - Embedding:
-  - `Hive::on_event` reports every property change and delete (including
-    properties the hive never declared by name), peer lists and connection
-    changes as a `HiveEvent`.
+  - `Hive::on_event` reports every property change, delete and name
+    (including properties the hive never declared), peer lists and
+    connection changes as a `HiveEvent`.
   - `Handler::request_peers` asks the server for its peer list and updates
     to it; `Handler::set_property_by_id` sets a property known only by id.
   - `hive::embed::EmbeddedHive`: a blocking facade with its own runtime,
@@ -95,6 +95,23 @@ Behaviour:
     with the `jni` feature elsewhere) and the Kotlin class that uses them,
     `bindings/kotlin/com/enochc/hive/NativeHive.kt`. These replace the
     `android.rs` stub, which did not compile.
+- Property names can be exchanged between hives again. Since values
+  started travelling with hashed ids (March 2024) a hive only knew the
+  names in its own config, so a client could not tell what the properties
+  it received were called.
+  - `Handler::request_names` asks every connected hive, now or later, for
+    the names it knows and for updates, and gives it this hive's in return.
+    Names learned arrive as `HiveEvent::PropertyNamed` and are set on the
+    `Property`.
+  - `Handler::set_property` and `send_property` tell the hive the name
+    (once per handler and property), and `Handler::register_name` does
+    only that, so names of properties created at run time are shared too.
+  - Names are only sent to hives that asked for them or sent their own,
+    because Hive before 0.3.0 panics on an unknown message type. A name
+    that doesn't hash to its id is refused and drops the peer.
+  - `Hive::get_mut_property_by_name` now gives the property it creates its
+    name. With `[MQTT]` configured such a property is published, where
+    before it was skipped as unnamed.
 - A client's `Handler::send_to_peer` to a hive it isn't connected to goes
   to its server, which routes it to the client of that name. Before, it
   failed with "No peer".
