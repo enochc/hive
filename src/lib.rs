@@ -23,6 +23,7 @@ pub mod signal;
 pub mod hive;
 pub mod peer;
 pub mod handler;
+pub mod embed;
 
 // mod backoff; // unused — property debounce is handled in Property::set_value
 
@@ -40,8 +41,8 @@ pub mod mqtt;
 #[macro_use]
 extern crate lazy_static;
 
-#[cfg(target_os = "android")]
-mod android;
+#[cfg(any(target_os = "android", feature = "jni"))]
+mod jni_api;
 
 // INIT LOGGING
 

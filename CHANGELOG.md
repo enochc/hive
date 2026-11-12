@@ -83,6 +83,21 @@ Behaviour:
   keeping only the latest value per topic.
 - `tests/bench.rs` (throughput and latency, ignored by default) and
   PERF_NOTES.md.
+- Embedding:
+  - `Hive::on_event` reports every property change and delete (including
+    properties the hive never declared by name), peer lists and connection
+    changes as a `HiveEvent`.
+  - `Handler::request_peers` asks the server for its peer list and updates
+    to it; `Handler::set_property_by_id` sets a property known only by id.
+  - `hive::embed::EmbeddedHive`: a blocking facade with its own runtime,
+    for FFI hosts and threaded Rust.
+  - JNI bindings over it (`src/jni_api.rs`, built for Android targets and
+    with the `jni` feature elsewhere) and the Kotlin class that uses them,
+    `bindings/kotlin/com/enochc/hive/NativeHive.kt`. These replace the
+    `android.rs` stub, which did not compile.
+- A client's `Handler::send_to_peer` to a hive it isn't connected to goes
+  to its server, which routes it to the client of that name. Before, it
+  failed with "No peer".
 
 ### Fixed
 

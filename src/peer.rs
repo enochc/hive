@@ -267,6 +267,12 @@ impl Peer {
         format!("{:?},{:?}", self.get_name(), self.address)
     }
     
+    /// True for a server this hive dialed, as opposed to a client that
+    /// connected to it.
+    pub(crate) fn is_upstream(&self) -> bool {
+        self.peer_type == PeerType::TcpServer
+    }
+
     pub fn is_web_socket(&self) -> bool {
         self.web_sock.is_some()
     }

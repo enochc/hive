@@ -4,7 +4,7 @@ use futures::channel::mpsc::{SendError, UnboundedSender};
 use crate::futures::SinkExt;
 #[allow(unused_imports)]
 use crate::logging::{debug, error, info};
-use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV};
+use crate::hive::{PEER_MESSAGE, PEER_MESSAGE_DIV, PEER_REQUESTS};
 use crate::peer::{Charged, Inbound, SocketEvent};
 use crate::property::{encode_property, Property, property_to_bytes, PropertyValue, PropertyType};
 use std::collections::HashMap;
@@ -68,10 +68,23 @@ impl Handler {
     ///
     /// `None` clears the property (same as `delete_property`).
     pub async fn set_property(&mut self, prop_name:&str, prop_value:Option<&PropertyValue>){
+        self.set_property_by_id(Property::hash_id(prop_name), prop_value).await;
+    }
+
+    /// `set_property` for a property known only by its id, as one that
+    /// arrived from a peer is (see `HiveEvent::PropertyChanged`).
+    pub async fn set_property_by_id(&mut self, id: u64, prop_value: Option<&PropertyValue>) {
         // Encode straight from the borrowed value: no clone of it and no
         // throwaway Property (watch channel, Arcs) per call.
-        let msg = encode_property(Property::hash_id(prop_name), prop_value.map(|v| &v.val), true);
+        let msg = encode_property(id, prop_value.map(|v| &v.val), true);
         self.send_message(msg).await;
+    }
+
+    /// Ask the servers this hive is connected to, now or later, for their
+    /// peer list. Each answers at once and again whenever the list changes;
+    /// the lists arrive as `HiveEvent::Peers` (see `Hive::on_event`).
+    pub async fn request_peers(&mut self) {
+        self.send_message(bytes::Bytes::from_static(&[PEER_REQUESTS])).await;
     }
 
     /// Hand an encoded message to the hive's event loop. Returns at once

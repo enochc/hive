@@ -396,7 +396,55 @@ Hive builds as a static library, cdylib, and standard Rust lib, designed to embe
 crate-type = ["staticlib", "cdylib", "lib"]
 ```
 
-Android JNI bindings and a C FFI entry point (`newHive`) are included for native mobile integration.
+A C FFI entry point (`newHive`) is included for native mobile integration.
+
+### Embedding (Android, JVM, threaded Rust)
+
+`hive::embed::EmbeddedHive` is a Hive for hosts that aren't async Rust. It runs its own tokio runtime, its methods are plain blocking calls safe from any thread, and everything it has to report arrives as an `Event` on one dedicated thread:
+
+```rust
+use hive::embed::{EmbeddedHive, Event};
+
+let hive = EmbeddedHive::start(
+    "name = \"Phone\"\nconnect = \"192.168.1.10:3000\"",
+    |event| match event {
+        Event::Property { id, name, value } => { /* value: None = deleted */ }
+        Event::Peers(peers) => {}
+        Event::PeerMessage(text) => {}
+        Event::Connection { connected, peers } => {}
+    },
+)?;
+hive.request_peers();
+hive.set_property("lightValue", 42);
+hive.send_to_peer("Server", "hello");
+hive.stop();
+```
+
+Hives exchange property ids (a hash of the name), never names. An embedded hive therefore reports a property it wasn't told about with `name: None`; it learns names from the `[Properties]` table of its config, from `set_property` and from `register_name`.
+
+Underneath are two hooks any Rust application can use: `Hive::on_event` (every property change and delete, peer list and connection change, as a `HiveEvent`) and `Handler::request_peers`.
+
+**Kotlin / Java.** `src/jni_api.rs` exposes `EmbeddedHive` over JNI and `bindings/kotlin/com/enochc/hive/NativeHive.kt` is the class that goes with it; copy that file into the app (or add `bindings/kotlin` as a source directory). The bindings are always part of an Android build:
+
+```bash
+cargo install cargo-ndk
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 --platform 24 \
+    -o path/to/app/src/main/jniLibs build --lib --release
+```
+
+Add `--features tls,auth` for those. On other hosts the `jni` feature builds the same bindings, which is how to load Hive into a desktop JVM (`cargo build --features jni`, then `-Djava.library.path=target/debug`).
+
+```kotlin
+val hive = NativeHive("name = \"Phone\"\nconnect = \"192.168.1.10:3000\"", object : HiveListener {
+    override fun onProperty(id: Long, name: String?, value: Any?) { /* String, Boolean, Long, Double; null = deleted */ }
+    override fun onConnection(connected: Boolean, peers: Int) {}
+})
+hive.set("lightValue", 42L)
+hive.close()
+```
+
+Listener methods run on the hive's events thread, so hand off to the main thread before touching UI.
 
 ## Architecture
 

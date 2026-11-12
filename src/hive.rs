@@ -86,6 +86,12 @@ pub struct Hive {
     peer_count: Arc<AtomicUsize>,
     advertising: Arc<AtomicBool>,
     ready: Option<Arc<tokio::sync::Notify>>,
+    /// Told about what an application embedding this hive would show, see
+    /// `on_event`.
+    observer: Option<Arc<dyn Fn(HiveEvent) + Send + Sync + 'static>>,
+    /// A local `Handler::request_peers` asked for the peer list. Kept so a
+    /// server we connect to later is asked as well.
+    want_peers: bool,
     #[cfg(feature = "mqtt")]
     mqtt_config: Option<MqttConfig>,
     #[cfg(feature = "mqtt")]
@@ -96,6 +102,44 @@ impl Debug for Hive {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Hive").field("name", &self.name).finish()
     }
+}
+
+/// What a `Hive` reports to the observer set with `Hive::on_event`: the
+/// changes an application embedding it (through FFI, say) needs to mirror
+/// its state, including properties it never declared by name.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HiveEvent {
+    /// A property got a new value, from a peer or a local `Handler`.
+    /// Properties are identified by id on the wire, `Property::hash_id` of
+    /// the name; the name itself is only known to hives that declared it.
+    PropertyChanged { id: u64, value: Value },
+    PropertyDeleted { id: u64 },
+    /// The peer list of a server this hive is connected to, sent after
+    /// `Handler::request_peers` and again whenever it changes. The first
+    /// entry is the server itself.
+    Peers(Vec<PeerInfo>),
+    /// A peer attached or went away. `peers` is how many are attached now.
+    Connection { connected: bool, peers: usize },
+}
+
+/// One entry of a server's peer list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerInfo {
+    pub name: String,
+    /// The peer's socket address as the server sees it. For the server's
+    /// own entry, what it listens on.
+    pub address: String,
+}
+
+/// Parse the body of a PEER_RESPONSE, `name|address,name|address`.
+fn parse_peers(list: &str) -> Vec<PeerInfo> {
+    list.split(',')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let (name, address) = entry.split_once('|').unwrap_or((entry, ""));
+            PeerInfo { name: name.to_string(), address: address.to_string() }
+        })
+        .collect()
 }
 
 pub(crate) const PROPERTIES: u8 = 0x10;
@@ -339,6 +383,8 @@ impl Hive {
             peer_count: Arc::new(AtomicUsize::new(0)),
             advertising: Arc::new(AtomicBool::new(false)),
             ready: None,
+            observer: None,
+            want_peers: false,
             #[cfg(feature = "mqtt")]
             mqtt_config,
             #[cfg(feature = "mqtt")]
@@ -390,6 +436,34 @@ impl Hive {
         }
 
         return hive;
+    }
+
+    /// Have `f` called for every `HiveEvent`. Set it before `go`. It runs on
+    /// the hive's event loop, so it should hand the event off (to a channel,
+    /// say) rather than do slow work. One observer per hive; a second call
+    /// replaces the first.
+    pub fn on_event(&mut self, f: impl Fn(HiveEvent) + Send + Sync + 'static) {
+        self.observer = Some(Arc::new(f));
+    }
+
+    fn emit_connection(&self) {
+        if let Some(observer) = &self.observer {
+            observer(HiveEvent::Connection {
+                connected: self.connected.load(Ordering::Relaxed),
+                peers: self.peers.len(),
+            });
+        }
+    }
+
+    /// Drop a property, telling the observer if there was one to drop.
+    fn remove_property(&mut self, id: u64) -> bool {
+        let removed = self.properties.remove(&id).is_some();
+        if removed {
+            if let Some(observer) = &self.observer {
+                observer(HiveEvent::PropertyDeleted { id });
+            }
+        }
+        removed
     }
 
     pub fn get_handler(&self) -> Handler {
@@ -450,13 +524,23 @@ impl Hive {
     /// through the PROPERTY/DELETE paths.
     fn apply_value(&mut self, id: u64, value: Option<crate::property::PropertyValue>) {
         if let Some(v) = value {
-            match self.properties.get_mut(&id) {
+            // Only an observed hive pays for a copy of the value.
+            let changed = match self.properties.get_mut(&id) {
                 Some(p) => {
-                    p.set_value(v);
+                    if p.set_value(v) && self.observer.is_some() {
+                        p.get_value()
+                    } else {
+                        None
+                    }
                 }
                 None => {
+                    let seen = self.observer.as_ref().map(|_| v.val.clone());
                     self.properties.insert(id, Property::from_id(&id, Some(v)));
+                    seen
                 }
+            };
+            if let (Some(observer), Some(value)) = (&self.observer, changed) {
+                observer(HiveEvent::PropertyChanged { id, value });
             }
         }
     }
@@ -883,6 +967,16 @@ impl Hive {
                         self.peers.push(peer);
                         self.peer_count.store(self.peers.len(), Ordering::Relaxed);
                         self.connected.store(true, Ordering::Relaxed);
+                        self.emit_connection();
+
+                        if self.want_peers && ptype == PeerType::TcpServer {
+                            let ask = Bytes::from_static(&[PEER_REQUESTS]);
+                            if let Some(server) = self.peers.last() {
+                                if let Err(e) = self.send_peer(server, &ask).await {
+                                    debug!("peer list request to {:?} failed: {:?}", server.address, e);
+                                }
+                            }
+                        }
 
                         if !is_tcp_client {
                             // I'm a server and another tcp hive client connected
@@ -1099,6 +1193,7 @@ impl Hive {
             if self.peers.is_empty() {
                 self.connected.store(false, Ordering::Relaxed);
             }
+            self.emit_connection();
             self.notify_peers_change().await;
         }
     }
@@ -1193,7 +1288,7 @@ impl Hive {
                             del.put_u8(DELETE);
                             del.put_slice(&frame[1..]);
                             self.broadcast(&del.freeze(), peer_idx).await;
-                            self.properties.remove(&prop_id);
+                            self.remove_property(prop_id);
                         }
                         Some(v) => {
                             self.broadcast(&frame, peer_idx).await;
@@ -1222,7 +1317,7 @@ impl Hive {
                     if msg.remaining() < 8 {
                         return Err(DecodeError("DELETE needs an 8 byte id".into()).into());
                     }
-                    if self.properties.remove(&msg.get_u64()).is_some() {
+                    if self.remove_property(msg.get_u64()) {
                         self.broadcast(&raw.slice(..9), peer_idx).await;
                     }
                 }
@@ -1249,6 +1344,19 @@ impl Hive {
                         info!("Message is for me: {:?}", vec[1]);
                         self.flush_peers();
                         self.message_received.emit(String::from(vec[1])).await;
+                    } else if from.is_empty()
+                        && self.get_peer_by_name(pear_name).is_none()
+                        && self.peers.iter().any(|p| p.is_upstream())
+                    {
+                        // One of our own handlers is writing to a hive we
+                        // aren't connected to directly. The server we dialed
+                        // knows every client, so it gets the message whole,
+                        // name included, and routes it. Only local messages
+                        // go this way: relaying a peer's would let hives
+                        // connected in a ring pass one around forever.
+                        for p in self.peers.iter().filter(|p| p.is_upstream()) {
+                            self.send_peer(p, &raw).await?;
+                        }
                     } else {
                         self.send_to_peer(vec[1], pear_name).await?;
                     }
@@ -1262,6 +1370,20 @@ impl Hive {
                     if let Some(idx) = peer_idx {
                         self.send_peer(&self.peers[idx], &peer_bytes.freeze()).await?;
                         self.peers[idx].update_peers = true;
+                    } else if from.is_empty() {
+                        // `Handler::request_peers`: ask the servers we are
+                        // connected to, and any we connect to later.
+                        self.want_peers = true;
+                        for p in self.peers.iter().filter(|p| p.is_upstream()) {
+                            self.send_peer(p, &raw).await?;
+                        }
+                    }
+                }
+                PEER_RESPONSE => {
+                    if let Some(observer) = &self.observer {
+                        let list = std::str::from_utf8(&msg)
+                            .map_err(|e| DecodeError(format!("peer list not UTF-8: {}", e)))?;
+                        observer(HiveEvent::Peers(parse_peers(list)));
                     }
                 }
                 // Ignore rather than drop: a newer peer may speak message
